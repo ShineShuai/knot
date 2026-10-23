@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' wss:; base-uri 'none'">
+  <meta name="color-scheme" content="light dark">
+  <title>knot network lab</title>
+  <link rel="stylesheet" href="../css/app.css">
+  <link rel="stylesheet" href="lab.css">
+</head>
+<body>
+  <main class="lab">
+    <h1>Network lab</h1>
+    <p>Checks what works from this browser on this network: STUN servers, NAT type, MQTT brokers and a real
+      WebRTC pairing with this device. Run it on each network you care about and share the report.</p>
+    <p><button id="run" class="primary">Run again</button> <a class="button" href="../index.html">Back to chat</a></p>
+    <table><thead><tr><th>Group</th><th>Check</th><th>Result</th><th>Detail</th></tr></thead><tbody id="rows"></tbody></table>
+    <h2>Report</h2>
+    <textarea id="report" class="code" rows="10" readonly></textarea>
+    <p><button id="copy">Copy report</button></p>
+  </main>
+  <script type="module" src="lab.js"></script>
+</body>
+</html>

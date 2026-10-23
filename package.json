@@ -1,0 +1,12 @@
+{
+  "name": "knot",
+  "version": "0.1.0",
+  "description": "Serverless peer-to-peer chat room: WebRTC + MQTT-over-WSS signaling + manual QR pairing. No build step, no dependencies.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node tools/serve.mjs",
+    "test": "node --test \"test/*.test.js\"",
+    "test:e2e": "node test/e2e/run.mjs"
+  }
+}

@@ -1,0 +1,7 @@
+.lab { max-width: 60rem; margin: 0 auto; padding: 1rem 1.25rem 3rem; height: auto; }
+.lab table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+.lab th, .lab td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+.lab .ok { color: var(--link); font-weight: 600; }
+.lab .fail { color: var(--danger); font-weight: 600; }
+.lab .info { color: var(--muted); }
+body { height: auto; }

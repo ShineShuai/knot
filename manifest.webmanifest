@@ -1,0 +1,9 @@
+{
+  "name": "knot - serverless chat",
+  "short_name": "knot",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#f1f3ef",
+  "theme_color": "#0b6e5c",
+  "icons": [{ "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

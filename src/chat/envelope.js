@@ -7,14 +7,34 @@
 import { fromB64u, toB64u, utf8 } from '../util/bytes.js';
 import { peerIdOf, verifySignature } from '../crypto/identity.js';
 import { MAX_FUTURE_MS } from '../util/hlc.js';
+import { LIMITS, PREVIEW_TYPES, THUMB_TYPES } from '../files/image.js';
 
 const B64U = /^[A-Za-z0-9_-]+$/;
 const signingBytes = (e) => utf8.encode(
   JSON.stringify([e.v, e.id, e.room, e.kind, e.name, e.ms, e.c, e.body, e.pub]),
 );
 
-/** Metadata for a shared file. Key order matters for the signature; build it only here. */
-export const fileBody = ({ id, name, size, mime, sha256 }) => ({ id, name, size, mime, sha256 });
+/** Metadata for a shared file. Key order matters for the signature; build it only here.
+ *  Images carry `img` = { w, h, t: inline thumbnail, tm: its mime, a?: animated,
+ *  p?: { id, size, mime, sha256 } of a separately fetched preview }. */
+export const fileBody = ({ id, name, size, mime, sha256, img }) => (
+  img ? { id, name, size, mime, sha256, img: imgBody(img) } : { id, name, size, mime, sha256 }
+);
+const imgBody = ({ w, h, t, tm, a, p }) => ({
+  w, h, t, tm,
+  ...(a ? { a: 1 } : {}),
+  ...(p ? { p: { id: p.id, size: p.size, mime: p.mime, sha256: p.sha256 } } : {}),
+});
+
+/** Where the small viewable rendition of a shared image lives ({ id, size, mime, sha256 },
+ *  fetched like a file), or null. Without a separate preview, a small original is its own. */
+export function previewRef(body) {
+  const { img } = body;
+  if (!img) return null;
+  if (img.p) return img.p;
+  const { id, size, mime, sha256 } = body;
+  return size <= LIMITS.ownPreviewMax ? { id, size, mime, sha256 } : null;
+}
 
 export async function createEnvelope(identity, hlc, roomId, kind, body, name) {
   const { ms, c } = hlc.tick();
@@ -30,6 +50,24 @@ export async function createEnvelope(identity, hlc, roomId, kind, body, name) {
     pub: toB64u(identity.pub),
   };
   return { ...env, sig: toB64u(await identity.sign(signingBytes(env))) };
+}
+
+const isB64u = (s, length) => typeof s === 'string' && s.length === length && B64U.test(s);
+
+/** Shape and size limits only; whether the thumbnail really is an image is checked
+ *  (by sniffing its bytes) when it is shown, so a bad one never hides the message. */
+function validImg(i) {
+  const dim = (n) => Number.isSafeInteger(n) && n >= 1 && n <= 65535;
+  if (!i || typeof i !== 'object' || !dim(i.w) || !dim(i.h)) return false;
+  const maxChars = Math.ceil((LIMITS.thumbMax * 4) / 3);
+  if (typeof i.t !== 'string' || !i.t || i.t.length > maxChars || !B64U.test(i.t)) return false;
+  if (!THUMB_TYPES.includes(i.tm) || (i.a !== undefined && i.a !== 1)) return false;
+  const p = i.p;
+  return p === undefined || (
+    !!p && typeof p === 'object' && isB64u(p.id, 11) && isB64u(p.sha256, 43) &&
+    Number.isSafeInteger(p.size) && p.size > 0 && p.size <= LIMITS.previewMax &&
+    PREVIEW_TYPES.includes(p.mime)
+  );
 }
 
 function wellFormed(e, roomId, { maxText, maxFileBytes, now }) {
@@ -50,7 +88,8 @@ function wellFormed(e, roomId, { maxText, maxFileBytes, now }) {
     )
       && typeof b.name === 'string' && b.name.length > 0 && b.name.length <= 255
       && isInt(b.size, maxFileBytes) && typeof b.mime === 'string' && b.mime.length <= 100
-      && typeof b.sha256 === 'string' && b.sha256.length === 43 && B64U.test(b.sha256);
+      && typeof b.sha256 === 'string' && b.sha256.length === 43 && B64U.test(b.sha256)
+      && (b.img === undefined || validImg(b.img));
   }
   return false;
 }

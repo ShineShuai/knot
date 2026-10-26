@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { authorIdOf, createEnvelope, fileBody, verifyEnvelope } from '../src/chat/envelope.js';
+import {
+  authorIdOf, createEnvelope, fileBody, previewRef, verifyEnvelope,
+} from '../src/chat/envelope.js';
 import { MessageLog } from '../src/chat/log.js';
 import { HLC } from '../src/util/hlc.js';
 import { newIdentity } from './helpers.js';
@@ -65,4 +67,36 @@ test('authorIdOf survives peer ids that contain dashes', async () => {
   const env = await text(withDash, new HLC(), 'hi');
   assert.equal(authorIdOf(env), withDash.id);
   assert.equal(await verifyEnvelope(env, room), true);
+});
+
+test('image envelopes: optional img block is signed and strictly bounded', async () => {
+  const id = await newIdentity();
+  const base = {
+    id: 'AAAAAAAAAAA', name: 'a.png', size: 9, mime: 'image/png', sha256: 'A'.repeat(43),
+  };
+  const p = { id: 'BBBBBBBBBBB', size: 5000, mime: 'image/webp', sha256: 'B'.repeat(43) };
+  const img = { w: 640, h: 480, t: 'AAAA', tm: 'image/webp', a: 1, p };
+  const ok = async (i) => verifyEnvelope(
+    await createEnvelope(id, new HLC(), room, 'file', fileBody({ ...base, img: i }), 'Ada'), room,
+  );
+  assert.equal(await ok(img), true);
+  assert.equal(await ok({ ...img, a: undefined, p: undefined }), true);
+  assert.equal(await ok({ ...img, tm: 'image/svg+xml' }), true); // tiny vector thumbnails
+  assert.equal(await ok({ ...img, tm: 'text/html' }), false);
+  assert.equal(await ok({ ...img, w: 0 }), false);
+  assert.equal(await ok({ ...img, h: 70000 }), false);
+  assert.equal(await ok({ ...img, t: 'A'.repeat(14_000) }), false); // thumbnail too big
+  assert.equal(await ok({ ...img, t: 'not base64!' }), false);
+  assert.equal(await ok({ ...img, p: { ...p, mime: 'image/svg+xml' } }), false);
+  assert.equal(await ok({ ...img, p: { ...p, size: 700_000 } }), false);
+  assert.equal(await ok({ ...img, p: { ...p, id: 'short' } }), false);
+  const e = await createEnvelope(id, new HLC(), room, 'file', fileBody({ ...base, img }), 'Ada');
+  const swapped = { ...e, body: { ...e.body, img: { ...e.body.img, t: 'BBBB' } } };
+  assert.equal(await verifyEnvelope(swapped, room), false); // the thumbnail is signed
+  assert.deepEqual(fileBody(base), { ...base }); // non-images: byte-identical to before
+  assert.equal(previewRef(fileBody(base)), null);
+  assert.deepEqual(previewRef(fileBody({ ...base, img })), p);
+  assert.equal(previewRef(fileBody({ ...base, img: { ...img, p: undefined } })).id, base.id);
+  const big = fileBody({ ...base, size: 500_000, img: { ...img, p: undefined } });
+  assert.equal(previewRef(big), null);
 });

@@ -1,11 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Room } from '../src/chat/room.js';
+import { FileTransfer } from '../src/files/transfer.js';
 import { DEFAULTS } from '../src/config.js';
 import { decodeCode } from '../src/net/handshake.js';
 import { newRoomSecret } from '../src/crypto/room-keys.js';
 import { MemoryKV } from '../src/store/kv.js';
+import { toB64u } from '../src/util/bytes.js';
 import { newIdentity } from './helpers.js';
+import { png } from './images.js';
 import { DeadLink, FakeBroker, FakeLink, until } from './fakes.js';
 
 const rooms = [];
@@ -17,6 +20,7 @@ async function makeRoom(
     linkFactory = () => new FakeLink(),
     kv = new MemoryKV(),
     identity,
+    derive,
   } = {},
 ) {
   const settings = {
@@ -27,7 +31,7 @@ async function makeRoom(
     identity: identity ?? (
       await newIdentity()
     ), secret, label: name, kv, settings, linkFactory, WS: broker?.ws(),
-    iceServers: () => [],
+    iceServers: () => [], derive,
   });
   rooms.push(room);
   return room;
@@ -169,4 +173,133 @@ test('downloading from a disconnected sender fails clearly', async () => {
   [...a.peers.values()][0].link.close();
   await until(() => p2p(b) === 0);
   await assert.rejects(b.downloadFile(env), /not connected/);
+});
+
+// ---- image previews ------------------------------------------------------------------------
+
+const THUMB = png(160, 107);
+const PREVIEW = png(1280, 853, { extra: 6000 });
+const deriveBig = async (file) => (
+  file.type.startsWith('image/')
+    ? {
+      img: { w: 3000, h: 2000, t: toB64u(THUMB), tm: 'image/png' },
+      preview: new Blob([PREVIEW], { type: 'image/png' }),
+    }
+    : null
+);
+const photo = () => new File([new Uint8Array(500_000).fill(3)], 'photo.png', { type: 'image/png' });
+const fileEnv = (room) => room.log.list().find((e) => e.kind === 'file');
+const bytesOf = async (blob) => new Uint8Array(await blob.arrayBuffer());
+
+test('image preview: thumbnail inline, preview fetched, original never', async () => {
+  const [a, b] = await pairManually({ a: { derive: deriveBig } });
+  const link = [...a.peers.values()][0].link;
+  const served = [];
+  const send = link.sendFile.bind(link);
+  link.sendFile = (data) => {
+    if (typeof data === 'string' && JSON.parse(data).t === 'meta') served.push(JSON.parse(data).id);
+    return send(data);
+  };
+  const env = await a.shareFile(photo());
+  await until(() => fileEnv(b));
+  const got = fileEnv(b);
+  assert.equal(got.body.img.t, toB64u(THUMB)); // arrived inside the message itself
+  const blob = await b.previewBlob(got);
+  assert.equal(blob.type, 'image/png');
+  assert.deepEqual(await bytesOf(blob), PREVIEW);
+  assert.deepEqual(served, [got.body.img.p.id]); // 500 KB original was not requested
+  assert.notEqual(got.body.img.p.id, env.body.id);
+  link.close(); // sender gone: the cached copy still works
+  await until(() => p2p(b) === 0);
+  assert.deepEqual(await bytesOf(await b.previewBlob(got)), PREVIEW);
+  assert.equal((await a.previewBlob(env)).size, PREVIEW.length); // sender sees its own too
+});
+
+test('image preview: a corrupted transfer is rejected and not cached', async () => {
+  const [a, b] = await pairManually({ a: { derive: deriveBig } });
+  await a.shareFile(photo());
+  await until(() => fileEnv(b));
+  const got = fileEnv(b);
+  FakeLink.corruptFiles = true;
+  try { await assert.rejects(b.previewBlob(got), /Checksum mismatch/); } finally {
+    FakeLink.corruptFiles = false;
+  }
+  assert.equal(await b.previews.blob(got.body.img.p.id), null);
+  assert.deepEqual(await bytesOf(await b.previewBlob(got)), PREVIEW); // a retry works
+});
+
+test('image preview: without any link and cache the error says so', async () => {
+  const [a, b] = await pairManually({ a: { derive: deriveBig } });
+  await a.shareFile(photo());
+  await until(() => fileEnv(b));
+  [...b.peers.values()][0].link.close();
+  await until(() => p2p(b) === 0);
+  await assert.rejects(b.previewBlob(fileEnv(b)), /not connected/);
+});
+
+test('image preview: another peer serves a cached preview when the author is away', async () => {
+  const [a, b] = await pairManually({ a: { derive: deriveBig } });
+  await a.shareFile(photo());
+  await until(() => fileEnv(b));
+  await b.previewBlob(fileEnv(b)); // b now holds the verified preview
+  const offer = decodeCode((await b.createInvite()).code);
+  const c = await makeRoom({ name: 'Cy', secret: offer.roomSecret });
+  await b.acceptAnswer(decodeCode((await c.answerOffer(offer)).code));
+  await until(() => p2p(c) === 1 && fileEnv(c));
+  [...a.peers.values()][0].link.close();
+  assert.equal(c.peerList.some((p) => p.id === a.identity.id && p.state === 'p2p'), false);
+  assert.deepEqual(await bytesOf(await c.previewBlob(fileEnv(c))), PREVIEW);
+});
+
+test('image preview: a small original is its own preview and carries no second copy', async () => {
+  const small = png(300, 200, { extra: 5000 });
+  const derive = async () => ({
+    img: { w: 300, h: 200, t: toB64u(THUMB), tm: 'image/png' },
+    preview: null,
+  });
+  const [a, b] = await pairManually({ a: { derive } });
+  await a.shareFile(new File([small], 's.png', { type: 'image/png' }));
+  await until(() => fileEnv(b));
+  const got = fileEnv(b);
+  assert.equal(got.body.img.p, undefined);
+  assert.deepEqual(await bytesOf(await b.previewBlob(got)), small);
+});
+
+test('image preview: the sender keeps its own preview across a restart', async () => {
+  const [kv, identity, secret] = [new MemoryKV(), await newIdentity(), newRoomSecret()];
+  const a = await makeRoom({ name: 'Ada', secret, kv, identity, derive: deriveBig });
+  await a.shareFile(photo());
+  a.stop();
+  const again = await makeRoom({ name: 'Ada', secret, kv, identity, derive: deriveBig });
+  assert.deepEqual(await bytesOf(await again.previewBlob(fileEnv(again))), PREVIEW);
+  await again.previews.clear();
+  await assert.rejects(again.previewBlob(fileEnv(again)), /not connected/);
+});
+
+test('files without img are unchanged and have no preview', async () => {
+  const [a, b] = await pairManually({ a: { derive: deriveBig } });
+  const note = new File(['hello'], 'note.txt', { type: 'text/plain' });
+  const env = await a.shareFile(note);
+  assert.equal(env.body.img, undefined);
+  await until(() => fileEnv(b));
+  assert.equal(await b.previewBlob(fileEnv(b)), null);
+});
+
+test('a peer cannot make us serve more than a few transfers at once', async () => {
+  const files = new FileTransfer();
+  const body = await files.share(new File([new Uint8Array(50_000)], 'x.bin'));
+  const sent = [];
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const link = {
+    sendFile: async (data) => {
+      sent.push(data);
+      if (typeof data === 'string' && JSON.parse(data).t === 'meta') await gate;
+    },
+  };
+  for (let i = 0; i < 8; i++) files.onFrame(link, JSON.stringify({ t: 'get', id: body.id }));
+  const busy = () => sent.filter((d) => typeof d === 'string' && d.includes('"busy"')).length;
+  await until(() => busy() === 2);
+  release();
+  await until(() => sent.filter((d) => typeof d === 'string' && d.includes('"end"')).length === 6);
 });

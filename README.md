@@ -52,8 +52,11 @@ if no broker is reachable; with brokers, reconnection is automatic).
       chat/log.js          ordered, de-duplicated, capped message log + sync delta
       chat/room.js         Room: ties links, brokers, log, files together
       files/transfer.js    chunked P2P file transfer with SHA-256 check
+      files/image.js       image sniffing, sender-side thumbnail/preview derivation
+      files/preview-cache.js  per-room LRU cache of previews (IndexedDB)
       qr/qr.js             QR encoder (verified against OpenCV in tests)
       ui/                  DOM helpers, i18n (en/zh/de), views, camera scanner
+      ui/image-card.js     one image in the log: thumbnail, preview, original
     lab/                   network lab page
     test/                  unit tests (+ fakes) and real-Chromium e2e
 
@@ -69,6 +72,15 @@ if no broker is reachable; with brokers, reconnection is automatic).
   so a missing mesh edge heals. The log is a FIFO of `logCap` messages.
 * **Relay fallback:** while some known room member has no direct link, text is
   also published, AES-GCM sealed, on the room's broker topic. Files never use it.
+* **Image previews:** an image is announced with a ~160 px thumbnail (<= 10 KB)
+  inside the signed envelope, so it shows at once, survives an offline sender and
+  travels with history sync. A <= 1280 px preview (<= 600 KB) is a second, content-addressed
+  "file" whose size and SHA-256 are in the envelope; it is fetched when the message
+  scrolls into view (Settings: auto / on tap / off), cached per room, and any peer that
+  has it can serve it. Originals <= 300 KB are their own preview. The full original is
+  loaded only on request. Peers sniff bytes instead of trusting mime types and check the
+  pixel count from the header before decoding. SVG is shown only through `<img>` (never as a
+  document), rejected with scripts/entities, and only when received whole (<= 2 MB).
 * **Glare:** the peer with the smaller id always makes the offer.
 * **Hardening:** CSP without inline code, all text via `textContent`, rate
   limit per link, size/shape validation of every envelope, replay protection for

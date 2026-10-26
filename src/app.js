@@ -53,6 +53,7 @@ export class AppModel extends Emitter {
     if (!room) return;
     room.stop();
     await new MessageStore(this.kv, id).clear();
+    await room.previews.clear();
     this.rooms.delete(id);
     await this.#persist();
     this.emit('rooms');

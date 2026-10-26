@@ -7,6 +7,7 @@ import { encodeQr, qrPath } from '../qr/qr.js';
 import { authorIdOf } from '../chat/envelope.js';
 import { fmtSize, h, qrSvg, safeFileName } from './dom.js';
 import { t } from './i18n.js';
+import { ImageCard } from './image-card.js';
 import { canScan, scanQr } from './scanner.js';
 
 export const mountUi = (root, model) => new Ui(root, model).start();
@@ -19,6 +20,9 @@ class Ui {
   #offStage = [];       // unsubscribers for the active room
   #watched = new Set(); // rooms whose 'peers' events refresh the rail
   #downloads = new Map(); // file id -> { status, pct, url, error }
+  #cards = new Map();   // "<room id>:<file id>" -> ImageCard (keeps its DOM across redraws)
+  #watching = new Map(); // element -> callback for when it scrolls into view
+  #seen = null;         // IntersectionObserver
   #stopScan = null;
 
   constructor(root, model) {
@@ -98,6 +102,8 @@ class Ui {
 
   #renderStage() {
     this.#offStage.splice(0).forEach((off) => off());
+    this.#seen?.disconnect();
+    this.#watching.clear();
     const room = this.#current;
     if (!room) {
       this.stage.replaceChildren(
@@ -219,7 +225,65 @@ class Ui {
       ), body);
   }
 
+  // ---- image cards ----------------------------------------------------------------------------
+
+  #imageCard(room, env) {
+    if (!env.body.img || room.settings.imagePreviews === 'off') return null;
+    const key = `${room.id}:${env.body.id}`;
+    let card = this.#cards.get(key);
+    if (!card) {
+      const host = {
+        notify: (text) => this.notify(text),
+        open: (c) => this.#lightbox(c),
+        watch: (el, fn) => this.#watch(el, fn),
+      };
+      card = ImageCard.create(room, env, host);
+      if (!card) return null;
+      this.#cards.set(key, card);
+      this.#trimCards();
+    }
+    card.mount();
+    return card;
+  }
+
+  /** Run `fn` once `el` is (nearly) on screen. */
+  #watch(el, fn) {
+    if (!globalThis.IntersectionObserver) return fn();
+    this.#seen ??= new IntersectionObserver((entries) => {
+      for (const entry of entries.filter((e) => e.isIntersecting)) {
+        this.#seen.unobserve(entry.target);
+        const run = this.#watching.get(entry.target);
+        this.#watching.delete(entry.target);
+        run?.();
+      }
+    }, { rootMargin: '200px' });
+    this.#watching.set(el, fn);
+    this.#seen.observe(el);
+  }
+
+  #trimCards(max = 200) {
+    for (const [key, card] of this.#cards) {
+      if (this.#cards.size <= max) return;
+      if (!card.el.isConnected) { card.dispose(); this.#cards.delete(key); }
+    }
+  }
+
+  #lightbox(card) {
+    const img = h('img', { class: 'lightbox-img', alt: card.name, src: card.currentUrl() });
+    img.addEventListener('error', () => { img.src = card.previewUrl ?? img.src; }, { once: true });
+    const { node, off } = card.actions();
+    const sync = card.on('change', () => {
+      const url = card.currentUrl();
+      if (img.src !== url) img.src = url;
+    });
+    this.dialog.addEventListener('close', () => { off(); sync(); }, { once: true });
+    this.#open(card.name, img, h('div', { class: 'actions' }, node));
+    this.dialog.classList.add('wide');
+  }
+
   #renderFile(room, env, redraw) {
+    const card = this.#imageCard(room, env);
+    if (card) return card.el;
     const { name, size, id } = env.body;
     const st = this.#downloads.get(id) ?? { status: 'idle' };
     const action = st.status === 'done'
@@ -266,12 +330,16 @@ class Ui {
 
   #leave(room) {
     if (!confirm(t('leaveConfirm'))) return;
+    for (const [key, card] of this.#cards) {
+      if (key.startsWith(`${room.id}:`)) { card.dispose(); this.#cards.delete(key); }
+    }
     this.model.removeRoom(room.id).then(() => this.select(null));
   }
 
   // ---- dialogs ---------------------------------------------------------------------------------
 
   #open(title, ...content) {
+    this.dialog.classList.remove('wide');
     this.dialog.replaceChildren(
       h(
         'header',
@@ -432,6 +500,10 @@ class Ui {
     const brokers = h('textarea', { class: 'code', rows: 3, value: s.brokers.join('\n') });
     const useBrokers = h('input', { type: 'checkbox', checked: s.brokersEnabled });
     const relay = h('input', { type: 'checkbox', checked: s.relayFallback });
+    const modes = { auto: 'previewAuto', tap: 'previewTap', off: 'previewOff' };
+    const previews = h('select', {}, ...Object.entries(modes).map(
+      ([value, label]) => h('option', { value, selected: value === s.imagePreviews }, t(label)),
+    ));
     const lines = (el) => el.value.split('\n').map((l) => l.trim()).filter(Boolean);
     const save = async () => {
       try {
@@ -454,6 +526,7 @@ class Ui {
             brokers: brokerList,
             brokersEnabled: useBrokers.checked,
             relayFallback: relay.checked,
+            imagePreviews: previews.value,
           },
         );
         await saveSettings(this.model.kv, s);
@@ -481,6 +554,7 @@ class Ui {
       field(t('brokerList'), brokers),
       check(t('useBrokers'), useBrokers),
       check(t('relayText'), relay),
+      field(t('imagePreviews'), previews),
       h(
         'div',
         { class: 'actions' },

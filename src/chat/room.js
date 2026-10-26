@@ -27,7 +27,9 @@ import {
 import { PeerLink } from '../net/peer-link.js';
 import { RoomChannel } from '../net/room-channel.js';
 import { FileTransfer } from '../files/transfer.js';
-import { authorIdOf, createEnvelope, verifyEnvelope } from './envelope.js';
+import { PreviewCache } from '../files/preview-cache.js';
+import { asImage } from '../files/image.js';
+import { authorIdOf, createEnvelope, previewRef, verifyEnvelope } from './envelope.js';
 import { MessageLog } from './log.js';
 import { MessageStore } from './message-store.js';
 
@@ -42,6 +44,7 @@ export class Room extends Emitter {
   members = new Map();
 
   #aes; #store; #channel = null; #timers = new Set();
+  #pulls = new Map();        // preview id -> in-flight fetch (shared by every asker)
   #pending = new Map();      // session -> { link, offer, peer|null } handshakes awaiting an answer
   #seenSessions = new Set(); // offers already answered (replay protection)
   #dialedAt = new Map();
@@ -53,7 +56,10 @@ export class Room extends Emitter {
     return room;
   }
 
-  constructor({ identity, secret, label, kv, settings, iceServers, linkFactory, WS }, keys) {
+  constructor(
+    { identity, secret, label, kv, settings, iceServers, linkFactory, WS, derive },
+    keys,
+  ) {
     super();
     this.identity = identity;
     this.secret = secret;
@@ -63,8 +69,14 @@ export class Room extends Emitter {
     this.#aes = keys.aes;
     this.hlc = new HLC();
     this.log = new MessageLog(settings.logCap);
+    this.previews = new PreviewCache(kv, this.id, settings.previewCacheBytes);
     this.files = new FileTransfer(
-      { chunkSize: settings.chunkSize, maxBytes: settings.maxFileBytes },
+      {
+        chunkSize: settings.chunkSize,
+        maxBytes: settings.maxFileBytes,
+        derive,
+        lookup: (id) => this.previews.blob(id), // serve cached previews for others
+      },
     );
     this.#store = new MessageStore(kv, this.id);
     this.iceServers = iceServers ?? (() => iceServersFrom(settings));
@@ -134,7 +146,51 @@ export class Room extends Emitter {
 
   async shareFile(file) {
     if (file.size > this.settings.maxFileBytes) throw new Error('File too large');
-    return this.#publish('file', await this.files.share(file));
+    const body = await this.files.share(file);
+    const ref = previewRef(body); // keep our own preview: it must outlive a reload
+    const own = ref && this.files.local(ref.id);
+    if (own) await this.previews.put(ref.id, own).catch(() => {});
+    return this.#publish('file', body);
+  }
+
+  /**
+   * The small viewable rendition of a shared image (its preview, or the original when it
+   * is tiny) as a typed Blob; null if the message has none. Served from memory or the
+   * cache when possible, otherwise fetched from the author or any peer that has it.
+   */
+  async previewBlob(env) {
+    const ref = previewRef(env.body);
+    if (!ref) return null;
+    let raw = this.files.local(ref.id) ?? await this.previews.blob(ref.id);
+    if (!raw) {
+      let pull = this.#pulls.get(ref.id);
+      if (!pull) {
+        pull = this.#pull(env, ref).finally(() => this.#pulls.delete(ref.id));
+        this.#pulls.set(ref.id, pull);
+      }
+      raw = await pull;
+    }
+    return asImage(raw);
+  }
+
+  /** Try the author first, then every other direct peer (previews are verifiable by hash). */
+  async #pull(env, ref) {
+    const author = authorIdOf(env);
+    const links = [...this.peers.values()]
+      .filter((p) => p.state === 'p2p' && p.link.state === 'open')
+      .sort((a, b) => (b.id === author) - (a.id === author))
+      .map((p) => p.link);
+    if (!links.length) throw new Error('The sender is not connected right now');
+    let failure;
+    for (const link of links) {
+      try {
+        const blob = await this.files.download(link, ref);
+        if (!(await asImage(blob))) throw new Error('Not a valid image');
+        await this.previews.put(ref.id, blob).catch(() => {});
+        return blob;
+      } catch (err) { failure = err; }
+    }
+    throw failure;
   }
 
   /** Fetch a shared file directly from its author. Resolves to a Blob. */

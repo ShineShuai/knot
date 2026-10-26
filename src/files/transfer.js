@@ -9,26 +9,42 @@
 //   binary <8-byte file id><chunk bytes>
 import { concat, fromB64u, randomBytes, sha256, toB64u } from '../util/bytes.js';
 import { fileBody } from '../chat/envelope.js';
+import { deriveImage } from './image.js';
 
 const ID_BYTES = 8;
 const IDLE_TIMEOUT_MS = 30000;
+const MAX_SERVES = 6; // simultaneous transfers one peer may ask of us on one link
 
 export class FileTransfer {
-  #shared = new Map();    // file id -> File we offered
-  #downloads = new Map(); // file id -> in-flight download state
-  #chunkSize; #maxBytes;
+  #shared = new Map();    // id -> Blob we offered: files, and the previews derived from them
+  #downloads = new Map(); // id -> in-flight download state
+  #serving = new WeakMap(); // link -> transfers we are serving on it right now
+  #chunkSize; #maxBytes; #derive; #lookup;
 
-  constructor({ chunkSize = 16 * 1024, maxBytes = 100 * 1024 * 1024 } = {}) {
+  /** `derive(file, bytes)` makes the thumbnail/preview of an image (null for other files);
+   *  `lookup(id)` finds a cached Blob to serve when `#shared` does not have it. */
+  constructor(
+    {
+      chunkSize = 16 * 1024,
+      maxBytes = 100 * 1024 * 1024,
+      derive = deriveImage,
+      lookup = async () => null,
+    } = {},
+  ) {
     this.#chunkSize = chunkSize;
     this.#maxBytes = maxBytes;
+    this.#derive = derive;
+    this.#lookup = lookup;
   }
 
   // ---- sharing side ------------------------------------------------------------
 
-  /** Register a file for sharing; returns the metadata to announce. */
+  /** Register a file for sharing; returns the metadata to announce. Images also get a
+   *  thumbnail (inline in the metadata) and, if big, a preview shared under its own id. */
   async share(file) {
     const id = toB64u(randomBytes(ID_BYTES));
-    const digest = await sha256(new Uint8Array(await file.arrayBuffer()));
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const digest = await sha256(bytes);
     this.#shared.set(id, file);
     return fileBody(
       {
@@ -37,23 +53,46 @@ export class FileTransfer {
         size: file.size,
         mime: file.type || 'application/octet-stream',
         sha256: toB64u(digest),
+        img: await this.#renditions(file, bytes),
       },
     );
   }
 
-  /** The File itself, if we shared it (for the sender's own "download" click). */
+  /** Thumbnail + preview of an image; the preview is content-addressed (id = hash prefix). */
+  async #renditions(file, bytes) {
+    let derived = null;
+    try { derived = await this.#derive(file, bytes); } catch { /* shared as a plain file */ }
+    if (!derived?.preview) return derived?.img ?? null;
+    const data = new Uint8Array(await derived.preview.arrayBuffer());
+    const digest = await sha256(data);
+    const id = toB64u(digest.subarray(0, ID_BYTES));
+    this.#shared.set(id, derived.preview);
+    const p = { id, size: data.length, mime: derived.preview.type, sha256: toB64u(digest) };
+    return { ...derived.img, p };
+  }
+
+  /** The Blob itself, if we shared it (for the sender's own "download" click). */
   local(id) { return this.#shared.get(id) ?? null; }
 
   async #serve(link, id) {
-    const file = this.#shared.get(id);
-    if (!file) return link.sendFile(JSON.stringify({ t: 'err', id, reason: 'unavailable' }));
-    await link.sendFile(JSON.stringify({ t: 'meta', id, size: file.size }));
-    const idBytes = fromB64u(id);
-    for (let at = 0; at < file.size; at += this.#chunkSize) {
-      const chunk = new Uint8Array(await file.slice(at, at + this.#chunkSize).arrayBuffer());
-      await link.sendFile(concat(idBytes, chunk));
+    const busy = this.#serving.get(link) ?? 0;
+    if (busy >= MAX_SERVES) {
+      return link.sendFile(JSON.stringify({ t: 'err', id, reason: 'busy' }));
     }
-    await link.sendFile(JSON.stringify({ t: 'end', id }));
+    this.#serving.set(link, busy + 1);
+    try {
+      const file = this.#shared.get(id) ?? await this.#lookup(id).catch(() => null);
+      if (!file) {
+        return await link.sendFile(JSON.stringify({ t: 'err', id, reason: 'unavailable' }));
+      }
+      await link.sendFile(JSON.stringify({ t: 'meta', id, size: file.size }));
+      const idBytes = fromB64u(id);
+      for (let at = 0; at < file.size; at += this.#chunkSize) {
+        const chunk = new Uint8Array(await file.slice(at, at + this.#chunkSize).arrayBuffer());
+        await link.sendFile(concat(idBytes, chunk));
+      }
+      await link.sendFile(JSON.stringify({ t: 'end', id }));
+    } finally { this.#serving.set(link, (this.#serving.get(link) ?? 1) - 1); }
   }
 
   // ---- downloading side ----------------------------------------------------------
@@ -121,11 +160,11 @@ export class FileTransfer {
       );
       state.started = true;
     } else if (m.t === 'err') {
-      state.fail(
-        new Error(
-          m.reason === 'unavailable' ? 'The sender no longer has this file' : 'Transfer failed',
-        ),
-      );
+      const why = {
+        unavailable: 'The sender no longer has this file',
+        busy: 'The sender is busy, try again',
+      };
+      state.fail(new Error(why[m.reason] ?? 'Transfer failed'));
     } else if (m.t === 'end') {
       this.#finish(state);
     }

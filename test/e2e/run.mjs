@@ -176,6 +176,36 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
     [b.waitForEvent('download'), b.locator('.file a', { hasText: 'Save' }).click()],
   );
   assert.equal(download.suggestedFilename(), 'note.txt');
+
+  // An image: the thumbnail comes with the message, the preview follows, the original not.
+  const noise = await a.evaluate(async () => {
+    const canvas = document.createElement('canvas');
+    [canvas.width, canvas.height] = [1200, 800];
+    const ctx = canvas.getContext('2d');
+    const rnd = () => Math.floor(Math.random() * 256);
+    for (let y = 0; y < 800; y += 2) {
+      for (let x = 0; x < 1200; x += 2) {
+        ctx.fillStyle = `rgb(${rnd()},${rnd()},${rnd()})`;
+        ctx.fillRect(x, y, 2, 2);
+      }
+    }
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 8192) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+    }
+    return btoa(binary);
+  });
+  await a.locator('input[type=file]').setInputFiles(
+    { name: 'noise.png', mimeType: 'image/png', buffer: Buffer.from(noise, 'base64') },
+  );
+  await b.locator('.imgcard').waitFor();
+  await b.waitForFunction(() => {
+    const img = document.querySelector('.imgcard img');
+    return img && !img.classList.contains('low') && img.complete && img.naturalWidth > 160;
+  });
+  assert.match(await b.locator('.imgcard .imgact button').textContent(), /Original/);
   assert.deepEqual([...a.errors, ...b.errors], []);
   await Promise.all([a, b].map((p) => p.context().close()));
 });

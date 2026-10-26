@@ -4,11 +4,12 @@ import { fromB64u, toB64u } from '../util/bytes.js';
 import { saveSettings } from '../config.js';
 import { decodeCode } from '../net/handshake.js';
 import { encodeQr, qrPath } from '../qr/qr.js';
-import { authorIdOf } from '../chat/envelope.js';
+import { authorIdOf, quoteOf } from '../chat/envelope.js';
 import { fmtSize, h, qrSvg, safeFileName } from './dom.js';
 import { t } from './i18n.js';
 import { ImageCard } from './image-card.js';
 import { MAX_AT_ONCE, clipboardFiles, dragHasFiles, droppedFiles } from './attach.js';
+import { connLine } from './conn.js';
 import { canScan, scanQr } from './scanner.js';
 
 export const mountUi = (root, model) => new Ui(root, model).start();
@@ -24,6 +25,9 @@ class Ui {
   #cards = new Map();   // "<room id>:<file id>" -> ImageCard (keeps its DOM across redraws)
   #watching = new Map(); // element -> callback for when it scrolls into view
   #seen = null;         // IntersectionObserver
+  #quote = null;        // envelope the composer is replying to
+  #drawQuote = () => {};
+  #input = null;        // the composer's textarea
   #stopScan = null;
 
   constructor(root, model) {
@@ -109,6 +113,7 @@ class Ui {
     this.#offStage.splice(0).forEach((off) => off());
     this.#seen?.disconnect();
     this.#watching.clear();
+    this.#quote = null;
     const room = this.#current;
     if (!room) {
       this.stage.replaceChildren(
@@ -116,7 +121,9 @@ class Ui {
       );
       return;
     }
-    const peers = h('ul', { class: 'peers' });
+    const peers = h('ul', { class: 'peers', title: t('connHint') });
+    const conn = h('div', { class: 'conninfo', hidden: true, role: 'status' });
+    const quoteBar = h('div', { class: 'quote-bar', hidden: true });
     const brokers = h('span', { class: 'brokers' });
     const log = h('ol', { class: 'log', 'aria-live': 'polite' });
     const input = h(
@@ -128,6 +135,7 @@ class Ui {
         'aria-label': t('typeMessage'),
       },
     );
+    this.#input = input;
     const picker = h(
       'input',
       {
@@ -154,7 +162,7 @@ class Ui {
     const drawLog = (stickToBottom = false) => {
       const nearBottom = stickToBottom || log.scrollHeight - log.scrollTop - log.clientHeight < 80;
       log.replaceChildren(
-        ...room.log.list().slice(-300).map(
+        ...room.log.timeline().slice(-300).map(
           (env) => this.#renderMessage(room, env, () => drawLog()),
         )
       );
@@ -164,11 +172,27 @@ class Ui {
       ? { connected: 0, total: room.settings.brokers.length } : null) => {
       brokers.textContent = s ? t('brokers', { n: s.connected, m: s.total }) : '';
     };
+    const drawQuote = () => {
+      const q = this.#quote;
+      quoteBar.hidden = !q;
+      quoteBar.replaceChildren(...(q ? [
+        h('span', { class: 'quote-text' }, h('b', {}, q.name), ' ', quoteOf(q).text),
+        h('button', {
+          class: 'ghost', title: t('quoteCancel'), 'aria-label': t('quoteCancel'),
+          onclick: () => this.#setQuote(null),
+        }, '×'),
+      ] : []));
+    };
+    this.#drawQuote = drawQuote;
     const send = async () => {
       const text = input.value;
       if (!text.trim()) return;
       input.value = '';
-      try { await room.sendText(text); drawLog(true); } catch (err) {
+      try {
+        await room.sendText(text, this.#quote);
+        this.#setQuote(null);
+        drawLog(true);
+      } catch (err) {
         input.value = text;
         this.notify(err.message);
       }
@@ -204,7 +228,7 @@ class Ui {
         brokers,
         h('button', { onclick: () => this.#inviteDialog(room) }, t('invite')),
         h('button', { class: 'ghost', onclick: () => this.#leave(room) }, t('leave'))),
-      peers, log,
+      peers, conn, log, quoteBar,
       h('div', { class: 'composer' }, input, picker,
         h(
           'button',
@@ -221,32 +245,108 @@ class Ui {
     this.#offStage.push(
       room.on('message', () => drawLog()),
       room.on('peers', drawPeers),
-      room.on('brokers', drawBrokers));
+      room.on('brokers', drawBrokers),
+      this.#holdToReveal(room, peers, conn));
     drawPeers(); drawBrokers(); drawLog(true);
   }
 
+  /** Hold V (or press and hold the member strip) to see how everyone is connected. */
+  #holdToReveal(room, strip, panel) {
+    let timer = null;
+    let press = null;
+    const refresh = async () => {
+      const rows = await room.connectionInfo();
+      panel.replaceChildren(...rows.map((row) => h('div', {}, connLine(row, t))));
+    };
+    const reveal = (on) => {
+      clearInterval(timer);
+      panel.hidden = !on;
+      if (on) { refresh(); timer = setInterval(refresh, 1000); }
+    };
+    const typing = (e) => /^(input|textarea|select)$/i.test(e.target.tagName)
+      || e.target.isContentEditable;
+    const down = (e) => {
+      const plain = !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey;
+      if (plain && e.key.toLowerCase() === 'v' && !typing(e)) reveal(true);
+    };
+    const up = (e) => { if (e.key.toLowerCase() === 'v') reveal(false); };
+    const off = () => reveal(false);
+    const start = () => { press = setTimeout(() => reveal(true), 450); };
+    const stop = () => { clearTimeout(press); reveal(false); };
+    document.addEventListener('keydown', down);
+    document.addEventListener('keyup', up);
+    window.addEventListener('blur', off);
+    strip.addEventListener('pointerdown', start);
+    for (const type of ['pointerup', 'pointercancel', 'pointerleave']) {
+      strip.addEventListener(type, stop);
+    }
+    return () => {
+      reveal(false);
+      clearTimeout(press);
+      document.removeEventListener('keydown', down);
+      document.removeEventListener('keyup', up);
+      window.removeEventListener('blur', off);
+    };
+  }
+
   #renderMessage(room, env, redraw) {
+    if (env.kind === 'gone') return this.#renderGone(room, env);
     const own = authorIdOf(env) === room.identity.id;
-    const body = env.kind === 'file' ? this.#renderFile(room, env, redraw) : h(
-      'p',
-      { class: 'text' },
-      env.body,
-    );
-    return h('li', { class: `msg ${own ? 'own' : 'other'}` },
-      h(
-        'div',
-        { class: 'meta' },
-        own ? t('you') : env.name,
-        ' ',
-        h('time', {}, clock(env.ms)),
-      ), body);
+    const parts = env.kind === 'file' ? [this.#renderFile(room, env, redraw)] : [
+      env.kind === 'reply' ? this.#renderQuote(room, env.body.q) : null,
+      h('p', { class: 'text' }, env.kind === 'reply' ? env.body.text : env.body),
+    ];
+    const acts = h('span', { class: 'acts' },
+      h('button', { class: 'ghost', onclick: () => this.#setQuote(env) }, t('reply')),
+      own ? h('button', { class: 'ghost', onclick: () => this.#confirmDelete(room, env) },
+        t('deleteMsg')) : null);
+    return h('li', { class: `msg ${own ? 'own' : 'other'}`, 'data-id': env.id },
+      h('div', { class: 'meta' },
+        own ? t('you') : env.name, ' ', h('time', {}, clock(env.ms)), acts),
+      ...parts);
+  }
+
+  /** What is left of a deleted message: who deleted it, in its old place. */
+  #renderGone(room, item) {
+    this.#cards.get(`${room.id}:${item.id}`)?.dispose();
+    this.#cards.delete(`${room.id}:${item.id}`);
+    const text = item.by === room.identity.id
+      ? t('youDeleted') : t('deletedBy', { name: item.name });
+    return h('li', { class: 'msg gone', 'data-id': item.id }, h('p', { class: 'text' }, text));
+  }
+
+  #renderQuote(room, q) {
+    const gone = room.log.isGone(q.id);
+    return h('blockquote', {
+      class: gone ? 'quote gone' : 'quote',
+      onclick: () => !gone && this.#jumpTo(q.id),
+    }, h('b', {}, q.name), ' ', gone ? t('quoteDeleted') : q.text);
+  }
+
+  #jumpTo(id) {
+    const el = this.stage.querySelector(`[data-id="${CSS.escape(id)}"]`);
+    if (!el) return;
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    el.classList.add('flash');
+    setTimeout(() => el.classList.remove('flash'), 1200);
+  }
+
+  #setQuote(env) {
+    this.#quote = env;
+    this.#drawQuote();
+    if (env) this.#input?.focus();
+  }
+
+  #confirmDelete(room, env) {
+    if (!confirm(t('deleteConfirm'))) return;
+    room.deleteMessage(env.id).catch((err) => this.notify(err.message));
   }
 
   // ---- image cards ----------------------------------------------------------------------------
 
   #imageCard(room, env) {
     if (!env.body.img || room.settings.imagePreviews === 'off') return null;
-    const key = `${room.id}:${env.body.id}`;
+    const key = `${room.id}:${env.id}`;
     let card = this.#cards.get(key);
     if (!card) {
       const host = {

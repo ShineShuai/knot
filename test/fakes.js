@@ -35,6 +35,8 @@ export class FakeLink extends Emitter {
   async acceptAnswer() { queueMicrotask(() => { this.#open(); this.peer?.#open(); }); }
   #open() { if (this.state === 'connecting') { this.state = 'open'; this.emit('open'); } }
 
+  async stats() { return { local: 'host', remote: 'srflx', protocol: 'udp', rtt: 12 }; }
+
   sendChat(text) {
     if (this.state !== 'open') throw new Error('link is not open');
     const p = this.peer; setTimeout(() => p.state === 'open' && p.emit('chat', text), 0);

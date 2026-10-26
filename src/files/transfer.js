@@ -71,6 +71,9 @@ export class FileTransfer {
     return { ...derived.img, p };
   }
 
+  /** Stop offering these (their message was deleted). */
+  forget(...ids) { for (const id of ids) this.#shared.delete(id); }
+
   /** The Blob itself, if we shared it (for the sender's own "download" click). */
   local(id) { return this.#shared.get(id) ?? null; }
 

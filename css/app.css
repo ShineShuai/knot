@@ -40,7 +40,7 @@ textarea.code { font: .85rem/1.35 var(--mono); word-break: break-all; }
 .stage-head h2 { margin: 0; font-size: 1.1rem; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stage-head .back { display: none; }
 .brokers { color: var(--muted); font-size: .8rem; }
-.peers { list-style: none; margin: 0; padding: 0 1rem .5rem; display: flex; flex-wrap: wrap; gap: .4rem; }
+.peers { user-select: none; -webkit-touch-callout: none; list-style: none; margin: 0; padding: 0 1rem .5rem; display: flex; flex-wrap: wrap; gap: .4rem; }
 .peer { font-size: .8rem; padding: .1rem .6rem; border-radius: 99px; border: 1.5px solid var(--line); color: var(--muted); }
 .peer.p2p { border-style: solid; border-color: var(--link); color: var(--link); }
 .peer.relay { border-style: dashed; border-color: var(--relay); color: var(--relay); }
@@ -48,7 +48,20 @@ textarea.code { font: .85rem/1.35 var(--mono); word-break: break-all; }
 .log { list-style: none; margin: 0; padding: 1rem; flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: .6rem; background: var(--surface); border-block: 1px solid var(--line); }
 .msg { max-width: min(36rem, 85%); padding: .45rem .75rem; border-radius: 10px; background: var(--paper); border: 1px solid var(--line); }
 .msg.own { align-self: flex-end; background: var(--own); border-color: transparent; }
-.meta { font-size: .75rem; color: var(--muted); }
+.meta { display: flex; align-items: baseline; gap: .4rem; font-size: .75rem; color: var(--muted); }
+.acts { margin-left: auto; display: inline-flex; gap: .1rem; opacity: 0; }
+.msg:hover .acts, .msg:focus-within .acts { opacity: 1; }
+@media (hover: none) { .acts { opacity: 1; } }
+.acts button { padding: 0 .4rem; font-size: .75rem; border-radius: 6px; }
+.quote { margin: .2rem 0 .3rem; padding: .15rem .6rem; border-left: 3px solid var(--link); border-radius: 4px; background: var(--rail); font-size: .85rem; color: var(--muted); cursor: pointer; overflow-wrap: anywhere; }
+.quote.gone { font-style: italic; cursor: default; }
+.msg.gone { align-self: center; background: transparent; border-style: dashed; color: var(--muted); font-style: italic; font-size: .85rem; }
+.msg.gone .text { margin: 0; }
+.msg.flash { outline: 2px solid var(--link); }
+.quote-bar { display: flex; align-items: center; gap: .5rem; padding: .3rem 1rem; border-top: 1px solid var(--line); background: var(--rail); font-size: .85rem; }
+.quote-bar[hidden], .conninfo[hidden] { display: none; }
+.quote-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conninfo { padding: .4rem 1rem; font: .8rem/1.5 var(--mono); background: var(--rail); border-block: 1px solid var(--line); overflow-wrap: anywhere; }
 .text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .file { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; }
 .file-name { font-weight: 600; overflow-wrap: anywhere; }

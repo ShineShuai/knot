@@ -81,6 +81,16 @@ if no broker is reachable; with brokers, reconnection is automatic).
   loaded only on request. Peers sniff bytes instead of trusting mime types and check the
   pixel count from the header before decoding. SVG is shown only through `<img>` (never as a
   document), rejected with scripts/entities, and only when received whole (<= 2 MB).
+* **Delete and quote:** a `del` envelope (signed by the author, naming one of the
+  author's own message ids) makes every peer drop that message's content from memory
+  and storage and show "<name> deleted a message" in its place; a copy that arrives
+  later is refused. A deleted file is no longer offered and its cached preview is
+  purged. It cannot take back what was already downloaded, or what a modified client
+  keeps. `reply` envelopes carry a snapshot of the quoted message (id, name, 200 chars);
+  the UI hides the snapshot once the original is deleted.
+* **Connection reveal:** hold V (or press and hold the member strip) to see per member:
+  direct / through NAT / TURN-relayed, candidate types, protocol, round-trip time and
+  how they were found (`PeerLink.stats()` from `RTCPeerConnection.getStats()`).
 * **Glare:** the peer with the smaller id always makes the offer.
 * **Hardening:** CSP without inline code, all text via `textContent`, rate
   limit per link, size/shape validation of every envelope, replay protection for

@@ -95,6 +95,26 @@ export class PeerLink extends Emitter {
     this.#files.send(data);
   }
 
+  /** How the connection is routed right now: candidate types (host, srflx, prflx,
+   *  relay), transport protocol and round-trip time; null while unknown. */
+  async stats() {
+    const byId = new Map();
+    (await this.#pc.getStats()).forEach((s) => byId.set(s.id, s));
+    const all = [...byId.values()];
+    const selected = byId.get(all.find((s) => s.type === 'transport')?.selectedCandidatePairId)
+      ?? all.find((s) => s.type === 'candidate-pair' && s.nominated && s.state === 'succeeded');
+    if (!selected) return null;
+    const local = byId.get(selected.localCandidateId);
+    const remote = byId.get(selected.remoteCandidateId);
+    const rtt = selected.currentRoundTripTime;
+    return {
+      local: local?.candidateType ?? null,
+      remote: remote?.candidateType ?? null,
+      protocol: local?.protocol ?? null,
+      rtt: typeof rtt === 'number' ? Math.round(rtt * 1000) : null,
+    };
+  }
+
   close() {
     if (this.state === 'closed') return;
     this.state = 'closed';

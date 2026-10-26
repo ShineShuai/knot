@@ -59,6 +59,17 @@ export class PreviewCache {
     });
   }
 
+  /** Forget one entry (its message was deleted). */
+  delete(id) {
+    return this.#serial(async () => {
+      const index = (await this.#load()).filter((e) => e.id !== id);
+      if (index.length === this.#index.length) return;
+      await this.#kv.delete(this.#key(id));
+      this.#index = index;
+      await this.#kv.put(this.#indexKey, index);
+    });
+  }
+
   /** Forget everything of this room (called when the user leaves it). */
   clear() {
     return this.#serial(async () => {

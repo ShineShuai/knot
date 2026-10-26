@@ -225,6 +225,24 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
   });
   await b.locator('.file', { hasText: 'drop1.txt' }).waitFor();
   await b.locator('.file', { hasText: 'drop2.txt' }).waitFor();
+
+  // Quote a message, see connection details while V is held, delete a message.
+  await b.locator('.msg', { hasText: 'hi Bob 你好' }).hover();
+  await b.locator('.msg', { hasText: 'hi Bob 你好' }).getByRole('button', { name: 'Reply' }).click();
+  await b.keyboard.type('quoted answer');
+  await b.keyboard.press('Enter');
+  await a.locator('.quote', { hasText: 'hi Bob 你好' }).waitFor();
+  await a.locator('body').click({ position: { x: 1, y: 1 } }); // leave the message box
+  await a.keyboard.down('v');
+  await a.locator('.conninfo', { hasText: /anon-\w+ · / }).waitFor();
+  await a.keyboard.up('v');
+  await a.locator('.conninfo').waitFor({ state: 'hidden' });
+  a.once('dialog', (dialog) => dialog.accept());
+  const mine = a.locator('.msg.own', { hasText: 'hi Bob 你好' });
+  await mine.hover();
+  await mine.getByRole('button', { name: 'Delete' }).click();
+  await b.locator('.msg.gone', { hasText: /anon-\w+ deleted a message/ }).waitFor();
+  await b.locator('.quote.gone', { hasText: 'Deleted message' }).waitFor();
   assert.deepEqual([...a.errors, ...b.errors], []);
   await Promise.all([a, b].map((p) => p.context().close()));
 });

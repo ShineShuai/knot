@@ -29,7 +29,9 @@ import { RoomChannel } from '../net/room-channel.js';
 import { FileTransfer } from '../files/transfer.js';
 import { PreviewCache } from '../files/preview-cache.js';
 import { asImage } from '../files/image.js';
-import { authorIdOf, createEnvelope, previewRef, verifyEnvelope } from './envelope.js';
+import {
+  authorIdOf, createEnvelope, delBody, previewRef, quoteOf, replyBody, verifyEnvelope,
+} from './envelope.js';
 import { MessageLog } from './log.js';
 import { MessageStore } from './message-store.js';
 
@@ -103,8 +105,21 @@ export class Room extends Emitter {
   }
 
   async #load() {
-    for (const env of await this.#store.loadAll()) { this.log.add(env); this.hlc.observe(env); }
-    await this.#store.remove(this.log.trim());
+    const stored = await this.#store.loadAll();
+    for (const env of stored) { this.log.add(env); this.hlc.observe(env); }
+    const trimmed = this.log.trim();
+    const deleted = stored.filter((e) => !this.log.get(e.id) && !trimmed.includes(e));
+    await this.#store.remove([...trimmed, ...deleted]); // deleted messages leave no content
+  }
+
+  /** Connection details of everyone we know, for the hold-V reveal:
+   *  { id, name, state, via, net: { local, remote, protocol, rtt } | null } */
+  async connectionInfo() {
+    return Promise.all(this.peerList.map(async ({ id, name, state, via }) => {
+      const link = this.peers.get(id)?.link;
+      const net = state === 'p2p' ? await link?.stats?.().catch(() => null) ?? null : null;
+      return { id, name, state, via, net };
+    }));
   }
 
   // ---- lifecycle -------------------------------------------------------------------
@@ -137,11 +152,22 @@ export class Room extends Emitter {
 
   // ---- sending ------------------------------------------------------------------------
 
-  async sendText(text) {
+  /** `quote`: an envelope this message answers (shown above the text, like a reply). */
+  async sendText(text, quote = null) {
     text = text.trim();
     if (!text) return null;
     if (text.length > this.settings.maxTextLength) throw new Error('Message too long');
-    return this.#publish('text', text);
+    if (!quote) return this.#publish('text', text);
+    return this.#publish('reply', replyBody(text, quoteOf(quote)));
+  }
+
+  /** Recall one of our own messages: everyone drops its content and sees who deleted it. */
+  async deleteMessage(id) {
+    if (this.log.isGone(id) || this.log.get(id)?.kind === 'del') return null;
+    if (id.split('-').slice(2).join('-') !== this.identity.id) {
+      throw new Error('You can only delete your own messages');
+    }
+    return this.#publish('del', delBody(id));
   }
 
   async shareFile(file) {
@@ -242,15 +268,25 @@ export class Room extends Emitter {
   }
 
   async #accept(env, source) {
+    const doomed = env.kind === 'del' ? this.log.get(env.body.id) : null;
     if (!this.log.add(env)) return false;
     this.hlc.observe(env);
     const removed = this.log.trim();
     await Promise.all(
-      [this.#store.save(env), this.#store.remove(removed)],
+      [this.#store.save(env), this.#store.remove(doomed ? [...removed, doomed] : removed)],
     ).catch((err) => console.error('could not save message', err));
+    if (doomed) await this.#forget(doomed);
     if (!removed.includes(env)) this.emit('message', env);
     if (source) this.#sendToPeers(env, source.id); // gossip: heals meshes with a missing link
     return true;
+  }
+
+  /** A deleted file message: stop offering it and drop every cached copy of its preview. */
+  async #forget(env) {
+    if (env.kind !== 'file') return;
+    const ids = [env.body.id, env.body.img?.p?.id].filter(Boolean);
+    this.files.forget(...ids);
+    await Promise.all(ids.map((id) => this.previews.delete(id).catch(() => {})));
   }
 
   async #onRelay(bytes) {

@@ -26,6 +26,20 @@ const imgBody = ({ w, h, t, tm, a, p }) => ({
   ...(p ? { p: { id: p.id, size: p.size, mime: p.mime, sha256: p.sha256 } } : {}),
 });
 
+/** Body of a text message that quotes another message: `q` is a snapshot of the quoted
+ *  one (id, author name, first 200 characters), so it reads right even if that one is gone. */
+export const replyBody = (text, { id, name, text: snippet }) => (
+  { text, q: { id, name, text: snippet } }
+);
+/** Body of a deletion ("recall") of the sender's own message `id`. */
+export const delBody = (id) => ({ id });
+
+export function quoteOf(env) {
+  const { body } = env;
+  const text = env.kind === 'file' ? body.name : env.kind === 'reply' ? body.text : body;
+  return { id: env.id, name: env.name, text: text.replace(/\s+/g, ' ').trim().slice(0, 200) };
+}
+
 /** Where the small viewable rendition of a shared image lives ({ id, size, mime, sha256 },
  *  fetched like a file), or null. Without a separate preview, a small original is its own. */
 export function previewRef(body) {
@@ -70,6 +84,13 @@ function validImg(i) {
   );
 }
 
+const isMessageId = (id) => typeof id === 'string' && id.length <= 64 && id.split('-').length >= 3;
+
+function validQuote(q) {
+  return !!q && typeof q === 'object' && isMessageId(q.id) && typeof q.name === 'string'
+    && q.name.length <= 64 && typeof q.text === 'string' && q.text.length <= 200;
+}
+
 function wellFormed(e, roomId, { maxText, maxFileBytes, now }) {
   const isInt = (n, max) => Number.isSafeInteger(n) && n >= 0 && n <= max;
   if (!e || typeof e !== 'object' || e.v !== 1 || e.room !== roomId) return false;
@@ -80,6 +101,15 @@ function wellFormed(e, roomId, { maxText, maxFileBytes, now }) {
   if (typeof e.sig !== 'string' || e.sig.length !== 86 || !B64U.test(e.sig)) return false;
   if (e.kind === 'text') return typeof e.body === 'string' && e.body.length > 0 &&
     e.body.length <= maxText;
+  if (e.kind === 'reply') {
+    const b = e.body;
+    return !!b && typeof b === 'object' && typeof b.text === 'string' && b.text.length > 0
+      && b.text.length <= maxText && validQuote(b.q);
+  }
+  if (e.kind === 'del') { // only the author may delete, and a deletion cannot be deleted
+    const id = e.body?.id;
+    return isMessageId(id) && id !== e.id && authorOfId(id) === authorOfId(e.id);
+  }
   if (e.kind === 'file') {
     const b = e.body;
     return !!b && typeof b === 'object' && typeof b.id === 'string' && b.id.length === 11 &&
@@ -105,4 +135,5 @@ export async function verifyEnvelope(e, roomId, limits = {}) {
 }
 
 // id = <ms36>-<counter36>-<peerId>; peer ids are base64url and may themselves contain '-'.
-export const authorIdOf = (env) => env.id.split('-').slice(2).join('-');
+const authorOfId = (id) => id.split('-').slice(2).join('-');
+export const authorIdOf = (env) => authorOfId(env.id);

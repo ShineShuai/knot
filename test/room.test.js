@@ -303,3 +303,90 @@ test('a peer cannot make us serve more than a few transfers at once', async () =
   release();
   await until(() => sent.filter((d) => typeof d === 'string' && d.includes('"end"')).length === 6);
 });
+
+// ---- delete, quote, connection info -------------------------------------------------------
+
+const timeline = (room) => room.log.timeline();
+const stored = async (kv) => (await kv.list('m:')).map(([, env]) => env);
+
+test('delete: everyone drops the content and sees who deleted it', async () => {
+  const kv = new MemoryKV();
+  const [a, b] = await pairManually({ b: { kv } });
+  const keep = await a.sendText('keep me');
+  const oops = await a.sendText('oops, wrong chat');
+  await until(() => b.log.has(oops.id));
+  await a.deleteMessage(oops.id);
+  await until(() => b.log.isGone(oops.id));
+  for (const room of [a, b]) {
+    const items = timeline(room);
+    assert.deepEqual(items.map((e) => e.kind), ['text', 'gone']);
+    assert.equal(items[0].id, keep.id);
+    assert.equal(items[1].name, 'Ada'); // shown: who deleted it
+    assert.equal(items[1].by, a.identity.id);
+  }
+  assert.equal((await stored(kv)).some((e) => e.body === 'oops, wrong chat'), false);
+  assert.equal(await a.deleteMessage(oops.id), null); // already gone: nothing to do
+});
+
+test('delete: own messages only; survives restart and reaches late joiners', async () => {
+  const [kv, identity, secret] = [new MemoryKV(), await newIdentity(), newRoomSecret()];
+  const a = await makeRoom({ name: 'Ada', secret, kv, identity });
+  const offer = decodeCode((await a.createInvite()).code);
+  const b = await makeRoom({ name: 'Bob', secret });
+  await a.acceptAnswer(decodeCode((await b.answerOffer(offer)).code));
+  await until(() => p2p(a) === 1 && p2p(b) === 1);
+  const mine = await a.sendText('secret plan');
+  await until(() => b.log.has(mine.id));
+  await assert.rejects(b.deleteMessage(mine.id), /only delete your own/);
+  await a.deleteMessage(mine.id);
+  await until(() => b.log.isGone(mine.id));
+  const again = await makeRoom({ name: 'Ada', secret, kv, identity }); // restart
+  assert.deepEqual(timeline(again).map((e) => e.kind), ['gone']);
+  const invite = decodeCode((await b.createInvite()).code);
+  const c = await makeRoom({ name: 'Cy', secret: invite.roomSecret });
+  await b.acceptAnswer(decodeCode((await c.answerOffer(invite)).code));
+  await until(() => c.log.isGone(mine.id));
+  assert.deepEqual(timeline(c).map((e) => e.kind), ['gone']);
+  assert.equal(JSON.stringify(c.log.list()).includes('secret plan'), false);
+});
+
+test('delete: a deleted image is no longer offered and its preview is purged', async () => {
+  const [a, b] = await pairManually({ a: { derive: deriveBig } });
+  const env = await a.shareFile(photo());
+  await until(() => fileEnv(b));
+  await b.previewBlob(fileEnv(b));
+  const [original, preview] = [env.body.id, env.body.img.p.id];
+  assert.ok(await b.previews.blob(preview));
+  assert.ok(a.files.local(original));
+  await a.deleteMessage(env.id);
+  await until(() => b.log.isGone(env.id));
+  assert.equal(await b.previews.blob(preview), null);
+  assert.equal(a.files.local(original), null);
+  assert.equal(a.files.local(preview), null);
+  assert.equal(await a.previews.blob(preview), null);
+});
+
+test('quote: a reply carries a snapshot of the quoted message', async () => {
+  const [a, b] = await pairManually();
+  const question = await a.sendText('Lunch   at\nnoon?');
+  await until(() => b.log.has(question.id));
+  const reply = await b.sendText('works for me', b.log.get(question.id));
+  await until(() => a.log.has(reply.id));
+  const got = a.log.get(reply.id);
+  assert.equal(got.kind, 'reply');
+  assert.equal(got.body.text, 'works for me');
+  assert.deepEqual(got.body.q, { id: question.id, name: 'Ada', text: 'Lunch at noon?' });
+  await assert.rejects(b.sendText('x'.repeat(DEFAULTS.maxTextLength + 1), question), /too long/);
+});
+
+test('connection info: how each known member is connected', async () => {
+  const [a, b] = await pairManually();
+  const [row] = await a.connectionInfo();
+  assert.equal(row.id, b.identity.id);
+  assert.equal(row.name, 'Bob');
+  assert.equal(row.state, 'p2p');
+  assert.deepEqual(row.net, { local: 'host', remote: 'srflx', protocol: 'udp', rtt: 12 });
+  [...a.peers.values()][0].link.close();
+  await until(() => p2p(a) === 0);
+  assert.deepEqual(await a.connectionInfo(), []); // nobody else known
+});

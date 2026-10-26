@@ -8,6 +8,7 @@ import { authorIdOf } from '../chat/envelope.js';
 import { fmtSize, h, qrSvg, safeFileName } from './dom.js';
 import { t } from './i18n.js';
 import { ImageCard } from './image-card.js';
+import { MAX_AT_ONCE, clipboardFiles, dragHasFiles, droppedFiles } from './attach.js';
 import { canScan, scanQr } from './scanner.js';
 
 export const mountUi = (root, model) => new Ui(root, model).start();
@@ -38,6 +39,10 @@ class Ui {
     this.shell = h('div', { class: 'shell', 'data-view': 'rooms' }, this.rail, this.stage);
     this.root.replaceChildren(this.shell, this.toast, this.dialog);
     this.model.on('rooms', () => this.#renderRail());
+    document.addEventListener('paste', (e) => this.#onPaste(e));
+    for (const type of ['dragover', 'drop']) { // a file dropped beside the chat must not open
+      window.addEventListener(type, (e) => dragHasFiles(e) && e.preventDefault());
+    }
     this.#renderRail();
     this.#renderStage();
     return this;
@@ -127,8 +132,9 @@ class Ui {
       'input',
       {
         type: 'file',
+        multiple: true,
         hidden: true,
-        onchange: () => picker.files[0] && this.#share(room, picker.files[0]).finally(
+        onchange: () => this.#shareAll(room, [...picker.files]).finally(
           () => { picker.value = ''; },
         ),
       },
@@ -174,10 +180,21 @@ class Ui {
         send();
       }
     });
-    this.stage.ondragover = (e) => e.preventDefault();
+    let depth = 0; // dragenter/dragleave also fire for every child element
+    const stopDrop = () => { depth = 0; this.stage.classList.remove('dropping'); };
+    stopDrop();
+    this.stage.dataset.drop = t('dropHere');
+    this.stage.ondragenter = (e) => {
+      if (dragHasFiles(e)) { depth++; this.stage.classList.add('dropping'); }
+    };
+    this.stage.ondragleave = (e) => { if (dragHasFiles(e) && --depth <= 0) stopDrop(); };
+    this.stage.ondragover = (e) => { if (dragHasFiles(e)) e.preventDefault(); };
     this.stage.ondrop = (e) => {
+      if (!dragHasFiles(e)) return;
       e.preventDefault();
-      if (e.dataTransfer.files[0]) this.#share(room, e.dataTransfer.files[0]);
+      stopDrop();
+      const { files, folders } = droppedFiles(e.dataTransfer);
+      this.#shareAll(room, files, folders);
     };
 
     this.stage.replaceChildren(
@@ -326,6 +343,24 @@ class Ui {
 
   async #share(room, file) {
     try { await room.shareFile(file); } catch (err) { this.notify(err.message); }
+  }
+
+  /** Share several files one after the other (picker, paste, drop). */
+  async #shareAll(room, files, folders = 0) {
+    if (folders) this.notify(t('noFolders'));
+    if (files.length > MAX_AT_ONCE) this.notify(t('tooManyFiles', { n: MAX_AT_ONCE }));
+    for (const file of files.slice(0, MAX_AT_ONCE)) await this.#share(room, file);
+  }
+
+  /** Ctrl/Cmd+V: files on the clipboard are shared; text pastes as usual. */
+  #onPaste(event) {
+    const room = this.#current;
+    const files = clipboardFiles(event.clipboardData);
+    if (!room || !files.length || this.dialog.open) return;
+    const field = event.target.closest?.('input, textarea');
+    if (field && !field.closest('.composer')) return; // other fields keep their own paste
+    event.preventDefault();
+    this.#shareAll(room, files);
   }
 
   #leave(room) {

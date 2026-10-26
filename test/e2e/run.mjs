@@ -206,6 +206,25 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
     return img && !img.classList.contains('low') && img.complete && img.naturalWidth > 160;
   });
   assert.match(await b.locator('.imgcard .imgact button').textContent(), /Original/);
+
+  // Paste a clipboard file into the composer, then drop two files on the chat.
+  await a.evaluate(() => {
+    const data = new DataTransfer();
+    data.items.add(new File(['pasted'], 'pasted.txt', { type: 'text/plain' }));
+    document.querySelector('.composer textarea').dispatchEvent(
+      new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }),
+    );
+  });
+  await b.locator('.file', { hasText: 'pasted.txt' }).waitFor();
+  await a.evaluate(() => {
+    const data = new DataTransfer();
+    for (const name of ['drop1.txt', 'drop2.txt']) data.items.add(new File([name], name));
+    document.querySelector('.stage').dispatchEvent(
+      new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true }),
+    );
+  });
+  await b.locator('.file', { hasText: 'drop1.txt' }).waitFor();
+  await b.locator('.file', { hasText: 'drop2.txt' }).waitFor();
   assert.deepEqual([...a.errors, ...b.errors], []);
   await Promise.all([a, b].map((p) => p.context().close()));
 });

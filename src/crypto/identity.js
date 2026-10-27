@@ -1,6 +1,6 @@
 // Long-lived device identity: an Ed25519 key pair kept in IndexedDB as a
 // non-extractable CryptoKey. The peer id is a short hash of the public key.
-import { toB64u, sha256 } from '../util/bytes.js';
+import { concat, fromB64u, toB64u, sha256 } from '../util/bytes.js';
 
 const ALG = 'Ed25519';
 
@@ -32,6 +32,19 @@ export async function loadIdentity(kv) {
   }
   const pub = new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey));
   return new Identity(pair.privateKey, pub, await peerIdOf(pub));
+}
+
+const PKCS8_PREFIX = Uint8Array.from(
+  [0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20],
+);
+
+/** The identity a 32-byte seed stands for. Used for recovery codes: the same seed gives the
+ *  same key on any device, so the code can be written down. */
+export async function identityFromSeed(seed) {
+  const der = concat(PKCS8_PREFIX, seed);
+  const key = await crypto.subtle.importKey('pkcs8', der, ALG, true, ['sign']);
+  const pub = fromB64u((await crypto.subtle.exportKey('jwk', key)).x);
+  return new Identity(key, pub, await peerIdOf(pub));
 }
 
 const verifyKeys = new Map();

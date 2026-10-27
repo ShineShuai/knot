@@ -181,3 +181,92 @@ test('lobby: a grant opens only for the intended joiner, from the real owner', a
     lobbyId: 'L', ownerId: owner.id, selfId: other.id, boxKey: box,
   }), null);
 });
+
+// ---- recovery code, rotation and recovery in the chain ----------------------------------------
+
+import { identityFromSeed } from '../src/crypto/identity.js';
+import { decodeRecoveryCode, encodeRecoveryCode } from '../src/chat/recovery.js';
+import { recoverBody, recoveryBody } from '../src/chat/envelope.js';
+import { sha256, toB64u } from '../src/util/bytes.js';
+
+test('identityFromSeed: the same seed is the same key anywhere', async () => {
+  const seed = randomBytes(32);
+  const [a, b] = [await identityFromSeed(seed), await identityFromSeed(seed)];
+  assert.deepEqual(a.pub, b.pub);
+  assert.equal(a.id, b.id);
+  assert.notDeepEqual((await identityFromSeed(randomBytes(32))).pub, a.pub);
+  const sig = await a.sign(utf8.encode('hello'));
+  assert.equal(sig.length, 64);
+});
+
+test('recovery code: round trip, with and without a key rotation, and typos are caught', () => {
+  const base = { secret: randomBytes(16), founder: 'AAAAAAAAAAA', seed: randomBytes(32) };
+  const plain = decodeRecoveryCode(encodeRecoveryCode(base));
+  assert.deepEqual(plain.secret, base.secret);
+  assert.deepEqual(plain.seed, base.seed);
+  assert.equal(plain.founder, base.founder);
+  assert.equal(plain.epoch, null);
+  const epoch = { n: 3, secret: randomBytes(16) };
+  const code = encodeRecoveryCode({ ...base, epoch });
+  assert.match(code, /^knot-rk1-/);
+  assert.deepEqual(decodeRecoveryCode(` ${code.slice(0, 20)}\n${code.slice(20)} `).epoch, epoch);
+  const bad = code.slice(0, -3) + (code.at(-3) === 'A' ? 'B' : 'A') + code.slice(-2);
+  assert.throws(() => decodeRecoveryCode(bad), /damaged/);
+  assert.throws(() => decodeRecoveryCode('hello'), /not a recovery code/);
+  assert.throws(() => decodeRecoveryCode('knot-rk1-AAAA'), /damaged/);
+});
+
+test('roster: the recovery key can take the room, once, and only while registered', async () => {
+  const { owner, ann, bob, roster, sign } = await cast();
+  const key = await identityFromSeed(randomBytes(32));
+  const epoch = async (n) => ({ n, commit: toB64u(await sha256(randomBytes(16))) });
+  const head = () => roster.head;
+  const recover = async (by, to, n) => sign(
+    by, 'recover', recoverBody({ to: to.id, epoch: await epoch(n) }, head()),
+  );
+  roster.apply(await sign(owner, 'admit', admitBody({ id: ann.id, name: 'Ann' }, roster.head)));
+  assert.equal(roster.recoveryKey, null);
+  const early = await recover(key, bob, 1);
+  assert.deepEqual(roster.apply(early), []); // nothing registered yet
+  await sign(ann, 'recovery', recoveryBody({ key: toB64u(key.pub) }, roster.head))
+    .then((forged) => assert.deepEqual(roster.apply(forged), [])); // only the owner registers
+  roster.apply(await sign(owner, 'recovery', recoveryBody({ key: toB64u(key.pub) }, roster.head)));
+  assert.equal(roster.recoveryKey, toB64u(key.pub));
+  const wrong = await identityFromSeed(randomBytes(32));
+  const other = await recover(wrong, bob, 1);
+  assert.deepEqual(roster.apply(other), []); // not this code's key
+  const skip = await recover(key, bob, 2);
+  assert.deepEqual(roster.apply(skip), []); // rotations count one by one
+  const take = await recover(key, bob, 1);
+  assert.deepEqual(roster.apply(take), [take]);
+  assert.equal(roster.owner, bob.id);
+  assert.equal(roster.revoked.has(owner.id), true); // the lost owner has no way back
+  assert.equal(roster.isMember(owner.id), false);
+  assert.equal(roster.epoch.n, 1);
+  assert.equal(roster.recoveryKey, null); // the code is used up
+  const again = await recover(key, ann, 2);
+  assert.deepEqual(roster.apply(again), []);
+});
+
+test('roster: removal rotates the keys; a transfer drops the old recovery code', async () => {
+  const { owner, ann, bob, roster, sign } = await cast();
+  const key = await identityFromSeed(randomBytes(32));
+  const commit = toB64u(await sha256(randomBytes(16)));
+  const head = () => roster.head;
+  const revoke = (n) => sign(
+    owner, 'revoke', revokeBody({ id: ann.id, epoch: { n, commit } }, head()),
+  );
+  for (const who of [ann, bob]) {
+    roster.apply(await sign(owner, 'admit', admitBody({ id: who.id, name: 'x' }, roster.head)));
+  }
+  roster.apply(await sign(owner, 'recovery', recoveryBody({ key: toB64u(key.pub) }, roster.head)));
+  const jump = await revoke(2);
+  assert.deepEqual(roster.apply(jump), []); // must be the next rotation
+  const rotate = await revoke(1);
+  assert.deepEqual(roster.apply(rotate), [rotate]);
+  assert.deepEqual(roster.epoch, { n: 1, commit });
+  assert.equal(roster.recoveryKey, null); // the old code names the old keys: stale
+  roster.apply(await sign(owner, 'recovery', recoveryBody({ key: toB64u(key.pub) }, roster.head)));
+  roster.apply(await sign(owner, 'transfer', transferBody({ to: bob.id }, roster.head)));
+  assert.equal(roster.recoveryKey, null);
+});

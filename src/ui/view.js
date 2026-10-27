@@ -38,6 +38,7 @@ class Ui {
   #stopScan = null;
   #joins = new Set();     // join requests still waiting for an owner's answer
   #ownerEvents = new WeakSet(); // rooms whose owner events we already listen to
+  #codes = new Set();     // rooms for which a recovery code is being made right now
 
   constructor(root, model) {
     this.root = root;
@@ -71,6 +72,7 @@ class Ui {
         const last = room.joinRequests.at(-1);
         if (last) this.notify(t('joinRequestFrom', { name: last.name, greeting: last.greeting }));
       });
+      room.on('roster', () => { if (room.isOwner) this.#ensureRecovery(room); });
       room.on('removed', () => {
         this.notify(t('removedBanner'));
         if (room === this.#current) this.#renderStage();
@@ -130,7 +132,29 @@ class Ui {
   async #createRoom() {
     const room = await this.model.createRoom(`${t('roomDefault')} ${this.model.rooms.size + 1}`);
     this.select(room);
-    this.#inviteDialog(room);
+    await this.#ensureRecovery(room, () => this.#inviteDialog(room));
+  }
+
+  /** The owner needs a recovery code: make one and show it once. `force`: replace the old. */
+  async #ensureRecovery(room, after = null, force = false) {
+    const needed = room.isOwner && (force || !room.roster.recoveryKey) && !this.#codes.has(room);
+    if (!needed) { after?.(); return; }
+    this.#codes.add(room);
+    try {
+      this.#recoveryDialog(await room.newRecoveryCode(), after);
+    } catch (err) {
+      this.notify(err.message);
+      after?.();
+    } finally { this.#codes.delete(room); }
+  }
+
+  #recoveryDialog(code, after) {
+    this.#open(t('recoveryTitle'),
+      h('p', {}, t('recoveryHelp')),
+      this.#copyField(code),
+      h('div', { class: 'actions' },
+        h('button', { class: 'primary', onclick: () => this.dialog.close() }, t('recoverySaved'))));
+    if (after) this.dialog.addEventListener('close', after, { once: true });
   }
 
   // ---- stage: active room ------------------------------------------------------------------
@@ -713,12 +737,40 @@ class Ui {
       body.replaceChildren(
         h('ul', { class: 'members-list' }, ...rows),
         ...(room.isOwner ? [h('h3', {}, t('requests')),
-          ...(asks.length ? asks : [h('p', { class: 'file-size' }, t('noRequests'))])] : []));
+          ...(asks.length ? asks : [h('p', { class: 'file-size' }, t('noRequests'))]),
+          h('h3', {}, t('recoveryTitle')),
+          h('p', { class: 'file-size' },
+            room.roster.recoveryKey ? t('recoverySet') : t('recoveryNotSet')),
+          h('button', { onclick: () => this.#ensureRecovery(room, null, true) },
+            t('newRecoveryCode'))] : []));
     };
     draw();
     const offs = ['roster', 'requests', 'peers'].map((name) => room.on(name, draw));
     this.dialog.addEventListener('close', () => offs.forEach((off) => off()), { once: true });
     this.#open(t('members'), body);
+  }
+
+  /** A recovery code was pasted: reopen the room and claim it once a member is online. */
+  async #recoverForm(result, text) {
+    const status = h('p', { class: 'sas-line' }, t('recoverWaiting'));
+    result.replaceChildren(status);
+    try {
+      const room = await this.model.recoverRoom(text, t('roomDefault'));
+      this.select(room);
+      const timer = setTimeout(() => {
+        if (room.isOwner) return;
+        status.replaceChildren(t('recoverFailed'));
+        this.notify(t('recoverFailed'));
+      }, 90000);
+      timer.unref?.();
+      const off = room.on('roster', () => {
+        if (!room.isOwner) return;
+        off();
+        clearTimeout(timer);
+        this.notify(t('recoverDone'));
+        if (this.dialog.open) this.dialog.close();
+      });
+    } catch (err) { status.replaceChildren(err.message); }
   }
 
   /** A join link was opened: write a greeting, then wait for the owner's answer. */
@@ -737,9 +789,9 @@ class Ui {
       if (!text) return this.notify(t('greetingNeeded'));
       send.disabled = true;
       greeting.disabled = true;
-      const { settings, identity } = this.model;
+      const { settings, identity, WS } = this.model;
       const ask = new JoinRequest({
-        identity, lobbySecret, ownerId, greeting: text, settings,
+        identity, lobbySecret, ownerId, greeting: text, settings, WS,
         name: settings.name || `anon-${identity.id.slice(0, 4)}`,
       });
       this.#joins.add(ask); // keeps knocking even if this dialog is closed
@@ -766,9 +818,11 @@ class Ui {
     const handle = async (text) => {
       const lobby = /#j=([A-Za-z0-9_-]{22})\.([A-Za-z0-9_-]{11})/.exec(text);
       const link = /#r=([A-Za-z0-9_-]{22})/.exec(text);
-      const code = decodeCode(text);
+      const code = text.includes('knot-rk1-') ? null : decodeCode(text);
       try {
-        if (lobby) {
+        if (text.includes('knot-rk1-')) {
+          this.#recoverForm(result, text);
+        } else if (lobby) {
           if (lobby[2] === this.model.identity.id) throw new Error(t('ownLink'));
           this.#greetingForm(result, fromB64u(lobby[1]), lobby[2]);
         } else if (link) {

@@ -17,9 +17,12 @@
 import { Emitter } from '../util/emitter.js';
 import { HLC } from '../util/hlc.js';
 import { RateLimiter } from '../util/rate.js';
-import { fromUtf8, randomBytes, toB64u, utf8 } from '../util/bytes.js';
-import { peerIdOf } from '../crypto/identity.js';
+import {
+  concat, fromB64u, fromUtf8, randomBytes, sha256, toB64u, utf8,
+} from '../util/bytes.js';
+import { identityFromSeed, peerIdOf } from '../crypto/identity.js';
 import { deriveRoomKeys } from '../crypto/room-keys.js';
+import { encodeRecoveryCode } from './recovery.js';
 import { iceServersFrom } from '../config.js';
 import {
   encodeCode,
@@ -35,7 +38,7 @@ import { PreviewCache } from '../files/preview-cache.js';
 import { asImage } from '../files/image.js';
 import {
   ADMIN_KINDS, admitBody, authorIdOf, authorOfId, createEnvelope, delBody, previewRef, quoteOf,
-  replyBody, revokeBody, transferBody, verifyEnvelope,
+  recoverBody, recoveryBody, replyBody, revokeBody, transferBody, verifyEnvelope,
 } from './envelope.js';
 import { MessageLog } from './log.js';
 import { MessageStore } from './message-store.js';
@@ -53,7 +56,9 @@ export class Room extends Emitter {
   /** peerId -> { pub, name, seen } for everyone announcing on the brokers */
   members = new Map();
 
-  #aes; #store; #channel = null; #timers = new Set();
+  #chan; #store; #kv; #channel = null; #timers = new Set();
+  #epoch = { n: 0, secret: null }; // key rotations: the channel keys depend on it
+  #recoverWith = null; #recovering = false; // a recovery code in use on this device
   #pulls = new Map();        // preview id -> in-flight fetch (shared by every asker)
   #joinRequests = new Map(); // joiner id -> request waiting for the owner's decision
   #lobby = null; #lobbyId = null;
@@ -80,8 +85,9 @@ export class Room extends Emitter {
     this.secret = secret;
     this.label = label;
     this.settings = settings; // live object: edits in Settings apply to new connections
-    this.id = keys.id;
-    this.#aes = keys.aes;
+    this.id = keys.id; // the room's identity: signatures, storage; never changes
+    this.#chan = { id: keys.id, aes: keys.aes }; // where we meet on the brokers: can rotate
+    this.#kv = kv;
     this.hlc = new HLC();
     this.log = new MessageLog(settings.logCap);
     this.previews = new PreviewCache(kv, this.id, settings.previewCacheBytes);
@@ -128,7 +134,22 @@ export class Room extends Emitter {
     await this.#store.remove([...trimmed, ...deleted]); // deleted messages leave no content
     this.roster?.load(stored);
     this.removed = !!this.roster?.revoked.has(this.identity.id);
+    const saved = await this.#kv.get(`epoch:${this.id}`);
+    if (saved?.n) {
+      this.#epoch = { n: saved.n, secret: fromB64u(saved.s) };
+      this.#chan = await deriveRoomKeys(this.#chanSecret());
+    }
   }
+
+  /** What the broker channel and lobby keys derive from: the room secret, mixed with the
+   *  latest rotation's secret once a member has been removed. */
+  #chanSecret() {
+    return this.#epoch.n ? concat(this.secret, this.#epoch.secret) : this.secret;
+  }
+
+  get epoch() { return this.#epoch.n; }
+  /** Id of the broker channel in use (changes with every rotation). */
+  get channelId() { return this.#chan.id; }
 
   get isOwner() { return !!this.roster && this.roster.owner === this.identity.id; }
   get ownerId() { return this.roster?.owner ?? null; }
@@ -147,8 +168,14 @@ export class Room extends Emitter {
 
   start() {
     if (this.removed || !this.settings.brokersEnabled || !this.settings.brokers.length) return;
+    this.#openChannel();
+    this.#every(this.settings.presenceIntervalMs, () => this.#announce());
+    this.#syncLobby().catch(() => {});
+  }
+
+  #openChannel() {
     this.#channel = new RoomChannel({
-      roomId: this.id, aes: this.#aes, selfId: this.identity.id, WS: this.WS,
+      roomId: this.#chan.id, aes: this.#chan.aes, selfId: this.identity.id, WS: this.WS,
       brokers: this.settings.brokers, topicPrefix: this.settings.topicPrefix,
     });
     this.#channel.on('presence', (p) => this.#onPresence(p));
@@ -159,8 +186,50 @@ export class Room extends Emitter {
       (s) => { this.emit('brokers', s); if (s.connected) this.#announce(); },
     );
     this.#channel.start();
-    this.#every(this.settings.presenceIntervalMs, () => this.#announce());
-    this.#syncLobby().catch(() => {});
+  }
+
+  // ---- key rotation ----------------------------------------------------------------------------
+
+  /** Switch to the keys of rotation `n`. Whoever left (or lost the secret) cannot follow:
+   *  the broker topic, presence, signalling and relay all move to a channel only members know. */
+  async #applyEpoch(n, secret) {
+    this.#epoch = { n, secret };
+    await this.#kv.put(`epoch:${this.id}`, { n, s: toB64u(secret) });
+    this.#chan = await deriveRoomKeys(this.#chanSecret());
+    this.members.clear(); // presence under the old keys means nothing now
+    if (this.#channel) { this.#channel.stop(); this.#openChannel(); }
+    if (this.#lobby) {
+      this.#lobby.stop();
+      this.#lobby = null;
+      this.#joinRequests.clear();
+      await this.#syncLobby(); // old join links stop working
+    }
+    this.#emitPeers();
+    this.emit('roster');
+  }
+
+  /** Members hand the rotation secret on over their authenticated links, never over brokers. */
+  #sendEpoch(link) {
+    if (this.#epoch.n) {
+      const { n, secret } = this.#epoch;
+      link.sendChat(JSON.stringify({ t: 'epoch', n, s: toB64u(secret) }));
+    }
+  }
+
+  #shareEpoch(exceptId) {
+    for (const p of this.peers.values()) {
+      if (p.state === 'p2p' && p.synced && p.id !== exceptId) this.#sendEpoch(p.link);
+    }
+  }
+
+  async #onEpoch(m, entry) {
+    const want = this.roster?.epoch; // what the owner announced in the chain
+    if (!want?.commit || m.n !== want.n || m.n <= this.#epoch.n || typeof m.s !== 'string') return;
+    let secret;
+    try { secret = fromB64u(m.s); } catch { return; }
+    if (toB64u(await sha256(secret)) !== want.commit) return; // not the owner's secret
+    await this.#applyEpoch(m.n, secret);
+    this.#shareEpoch(entry.id);
   }
 
   stop() {
@@ -252,9 +321,9 @@ export class Room extends Emitter {
     return this.files.download(link, env.body, onProgress);
   }
 
-  async #publish(kind, body) {
+  async #publish(kind, body, signer = this.identity) {
     if (this.removed) throw new Error('You were removed from this room');
-    const env = await createEnvelope(this.identity, this.hlc, this.id, kind, body, this.#name);
+    const env = await createEnvelope(signer, this.hlc, this.id, kind, body, this.#name);
     const kept = await this.#accept(env, null);
     if (!kept && ADMIN_KINDS.includes(kind)) throw new Error('That change could not be applied');
     this.#sendToPeers(env);
@@ -341,9 +410,11 @@ export class Room extends Emitter {
         timer.unref?.();
       }
     }
-    if (kind === 'transfer') await this.#syncLobby();
+    if (kind === 'recover' && this.roster.revoked.has(this.identity.id)) return this.#beRemoved();
+    if (kind === 'transfer' || kind === 'recover') await this.#syncLobby();
     this.#emitPeers();
     this.emit('roster');
+    await this.#tryRecover();
     return undefined;
   }
 
@@ -378,6 +449,7 @@ export class Room extends Emitter {
       return;
     }
     if (this.roster && !entry.synced) return; // not (yet) known to be a member: ignored
+    if (this.roster && m?.t === 'epoch') { await this.#onEpoch(m, entry); return; }
     if (m?.t === 'msg') await this.#ingest(m.e, entry);
     else if (m?.t === 'have' && Array.isArray(m.ids)) this.#sendGive(
       entry.link,
@@ -411,6 +483,7 @@ export class Room extends Emitter {
 
   #markSynced(entry) {
     entry.synced = true;
+    this.#sendEpoch(entry.link);
     this.#sendHave(entry.link);
     this.#emitPeers();
   }
@@ -482,7 +555,11 @@ export class Room extends Emitter {
       }
       this.#announce();
     });
-    link.on('chat', (raw) => this.#onChat(entry, raw));
+    entry.queue = Promise.resolve(); // frames of one link are handled one after the other
+    link.on('chat', (raw) => {
+      entry.queue = entry.queue.then(() => this.#onChat(entry, raw))
+        .catch((err) => console.error('chat frame failed', err));
+    });
     link.on('file', (data) => this.files.onFrame(link, data));
     link.on('close', () => {
       clearTimeout(timer);
@@ -625,7 +702,7 @@ export class Room extends Emitter {
    *  Anyone in the room may hand it out; the owner still decides about every request. */
   async joinLinkParts() {
     if (!this.roster) return null;
-    return { lobbySecret: await lobbySecretOf(this.secret), ownerId: this.roster.owner };
+    return { lobbySecret: await lobbySecretOf(this.#chanSecret()), ownerId: this.roster.owner };
   }
 
   get joinRequests() {
@@ -656,12 +733,66 @@ export class Room extends Emitter {
     );
   }
 
-  /** Owner only: remove a member. Honest peers drop their links and ignore them from now on. */
+  /** Owner only: remove a member. Honest peers drop their links and ignore them from now on,
+   *  and the room moves to new channel keys that the removed member never gets. Old recovery
+   *  codes stop working: make a new one (see newRecoveryCode). */
   async removeMember(id) {
     this.#requireOwner();
     if (id === this.identity.id) throw new Error('Transfer the room first, then leave it');
     if (!this.roster.isMember(id)) throw new Error('Not a member of this room');
-    return this.#publish('revoke', revokeBody({ id }, this.roster.head));
+    const [n, secret] = [this.#epoch.n + 1, randomBytes(16)];
+    const commit = toB64u(await sha256(secret));
+    const env = await this.#publish(
+      'revoke', revokeBody({ id, epoch: { n, commit } }, this.roster.head),
+    );
+    await this.#applyEpoch(n, secret);
+    this.#shareEpoch(id);
+    return env;
+  }
+
+  // ---- recovery: taking the room back after the owner's identity is lost -----------------------
+
+  /** Owner only: a new recovery code (and the old one stops working). Show it once, to keep
+   *  offline; it is not stored here. */
+  async newRecoveryCode() {
+    this.#requireOwner();
+    const seed = randomBytes(32);
+    const key = await identityFromSeed(seed);
+    await this.#publish('recovery', recoveryBody({ key: toB64u(key.pub) }, this.roster.head));
+    const epoch = this.#epoch.n ? this.#epoch : null;
+    return encodeRecoveryCode({
+      secret: this.secret, founder: this.roster.founder, seed, epoch,
+    });
+  }
+
+  /** On a new device with a recovery code: as soon as a member shows us the chain (and it
+   *  holds this code's key), claim the room. Needs one member online. */
+  async beginRecovery(seed) {
+    this.#recoverWith = await identityFromSeed(seed);
+    await this.#tryRecover();
+  }
+
+  get recovering() { return !!this.#recoverWith && !this.isOwner; }
+
+  async #tryRecover() {
+    const key = this.#recoverWith;
+    if (!key || this.#recovering || this.isOwner || this.removed) return;
+    if (this.roster.recoveryKey !== toB64u(key.pub)) return; // chain not seen yet, or code stale
+    this.#recovering = true;
+    try {
+      const [n, secret] = [this.#epoch.n + 1, randomBytes(16)];
+      const commit = toB64u(await sha256(secret));
+      const env = await this.#publish('recover', recoverBody(
+        { to: this.identity.id, epoch: { n, commit } }, this.roster.head,
+      ), key);
+      // Members still treat us as a stranger: only admin frames get through until they apply it.
+      const frame = JSON.stringify({ t: 'admin', es: [env] });
+      for (const p of this.peers.values()) if (p.state === 'p2p') p.link.sendChat(frame);
+      await this.#applyEpoch(n, secret);
+      this.#shareEpoch(null);
+      this.#recoverWith = null;
+      this.emit('recovered');
+    } finally { this.#recovering = false; }
   }
 
   /** Owner only: hand the room to another member. Old join links stop working. */
@@ -681,8 +812,9 @@ export class Room extends Emitter {
 
   async #grant(req) {
     const admit = this.roster.chain.findLast((e) => e.kind === 'admit' && e.body.id === req.id);
+    const epoch = this.#epoch.n ? { n: this.#epoch.n, s: toB64u(this.#epoch.secret) } : null;
     const payload = {
-      secret: this.secret, label: this.label, admit, founder: this.roster.founder,
+      secret: this.secret, label: this.label, admit, founder: this.roster.founder, epoch,
     };
     await this.#lobby?.sendSignal(req.id, await makeGrant(
       this.identity, { lobbyId: this.#lobbyId, to: req.id, boxPub: req.boxPub, payload },
@@ -701,7 +833,7 @@ export class Room extends Emitter {
       return;
     }
     if (this.#lobby) return;
-    const keys = await lobbyKeys(await lobbySecretOf(this.secret), this.identity.id);
+    const keys = await lobbyKeys(await lobbySecretOf(this.#chanSecret()), this.identity.id);
     this.#lobbyId = keys.id;
     this.#lobby = new RoomChannel({
       roomId: keys.id, aes: keys.aes, selfId: this.identity.id, WS: this.WS,

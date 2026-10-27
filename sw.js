@@ -1,6 +1,8 @@
-// Offline shell: serve same-origin files from cache first, refresh them in the background.
-// After one online visit the app opens with no network at all.
-const CACHE = 'knot-v1';
+// Offline shell: online, files always come fresh from the server (so an update shows on the
+// very next load, not the one after); offline, or when the network is slow, from the cache
+// filled by earlier visits. After one online visit the app opens with no network at all.
+const CACHE = 'knot-v2';
+const PATIENCE_MS = 4000; // a slower network than this falls back to the cached copy
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => {
@@ -15,8 +17,13 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET' || new URL(request.url).origin !== location.origin) return;
   event.respondWith((async () => {
     const cache = await caches.open(CACHE);
-    const cached = await cache.match(request);
-    const refresh = fetch(request).then((res) => { if (res.ok) cache.put(request, res.clone()); return res; });
-    return cached ?? refresh.catch(() => Response.error());
+    try {
+      const signal = AbortSignal.timeout(PATIENCE_MS);
+      const res = await fetch(request, { cache: 'no-cache', signal });
+      if (res.ok) cache.put(request, res.clone());
+      return res;
+    } catch {
+      return (await cache.match(request)) ?? Response.error();
+    }
   })());
 });

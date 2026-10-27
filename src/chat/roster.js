@@ -3,6 +3,10 @@
 //   admit    { id, name, prev }   the owner lets `id` in
 //   revoke   { id, prev }         the owner removes `id`
 //   transfer { to, prev }         the owner hands the room to member `to`
+//   recovery { key, prev }        the owner registers the public key of a recovery code
+//   recover  { to, epoch, prev }  signed by that key: `to` becomes owner, the old one is out
+// A revoke may carry `epoch` { n, commit }: from then on the room's broker channel uses
+// new keys (see Room), and `commit` is the hash of the secret only members are given.
 // `prev` is the id of the previous link ('' for the first), so the order does not depend on
 // anyone's clock: a removed owner cannot backdate, and a second envelope with an old
 // `prev` is a fork and is refused. Only the current owner's signature extends the chain.
@@ -20,6 +24,8 @@ export class Roster {
   chain = []; // applied envelopes, in order
   members = new Map(); // id -> { name } for everyone except the owner
   revoked = new Set();
+  recoveryKey = null; // base64url public key of the current recovery code, if any
+  epoch = { n: 0, commit: null }; // the latest key rotation the owner announced
   #applied = new Set();
   #waiting = new Map(); // prev id -> envelope that follows it
 
@@ -63,11 +69,15 @@ export class Roster {
   }
 
   #valid(env) {
-    if (authorIdOf(env) !== this.owner) return false;
     const { body } = env;
-    if (env.kind === 'revoke') return body.id !== this.owner;
+    const next = (e) => e.n === this.epoch.n + 1; // rotations count up one by one
+    if (env.kind === 'recover') { // signed by the recovery key, not by an identity we know
+      return this.recoveryKey !== null && env.pub === this.recoveryKey && next(body.epoch);
+    }
+    if (authorIdOf(env) !== this.owner) return false;
+    if (env.kind === 'revoke') return body.id !== this.owner && (!body.epoch || next(body.epoch));
     if (env.kind === 'transfer') return this.members.has(body.to);
-    return env.kind === 'admit';
+    return env.kind === 'admit' || env.kind === 'recovery';
   }
 
   #commit(env) {
@@ -78,10 +88,18 @@ export class Roster {
     } else if (env.kind === 'revoke') {
       this.members.delete(body.id);
       this.revoked.add(body.id);
-    } else { // transfer: the old owner stays a member
+      if (body.epoch) { this.epoch = body.epoch; this.recoveryKey = null; } // old codes are stale
+    } else if (env.kind === 'recovery') {
+      this.recoveryKey = body.key;
+    } else if (env.kind === 'recover') { // the old owner is gone (lost, or compromised)
+      this.members.delete(body.to);
+      this.revoked.add(this.owner);
+      this.revoked.delete(body.to);
+      [this.owner, this.epoch, this.recoveryKey] = [body.to, body.epoch, null];
+    } else { // transfer: the old owner stays a member, with no way back in
       this.members.delete(body.to);
       this.members.set(this.owner, { name: env.name });
-      this.owner = body.to;
+      [this.owner, this.recoveryKey] = [body.to, null];
     }
     this.chain.push(env);
     this.head = env.id;

@@ -97,9 +97,23 @@ if no broker is reachable; with brokers, reconnection is automatic).
   delete anyone's message and hand the room to a member (`transfer`; old join links then
   stop working, trust stays rooted in the creator's id). Rooms made before this update
   have no owner and stay open to anyone with the link.
-  Known gap: everyone who ever held the room secret (including a removed member) can read
-  text relayed through the brokers, and a leaked secret lets someone sit in on that relay;
-  P2P links are protected by the membership check. Rotating a relay key on removal is next.
+  **Key rotation:** removing a member also moves the room to new broker keys (topic,
+  presence, signalling, relay and join links all derive from the room secret mixed with a
+  fresh per-removal secret). The owner commits to that secret's hash in the removal
+  envelope and hands the secret to members over their authenticated P2P links; members pass
+  it on, new joiners get it in their grant. A member who is offline meanwhile gets it the
+  next time it links to any member (or the owner's pairing code); until then it cannot use
+  the brokers. A removed member keeps the old channel and learns nothing new from it.
+  **Recovery:** the owner gets a recovery code (`knot-rk1-...`: room secret, creator id, a
+  recovery key seed and the current rotation), shown once and never stored. Its public key is
+  registered in the chain. On a new device, pasting the code reopens the room; as soon as a
+  member shows the chain, the device signs a `recover` with that key and becomes owner, the
+  lost identity is removed and the keys rotate. Removing a member, a transfer or a recovery
+  makes older codes stop working, and the app makes a fresh one. The code is as sensitive as
+  a password: whoever holds it can take the room over.
+  Remaining gap: a removed member who copied the room secret can still read what members
+  say on the brokers *before* they get the new secret, and sees who is online on the old
+  channel until everyone has moved.
 * **Attachments:** pasted, dropped and picked files wait in the message box (chips with a
   preview and a remove button) and are sent, to everyone, only with Enter or Send: files
   first, then the text. The message box grows with its text up to a cap.

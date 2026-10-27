@@ -3,6 +3,7 @@
 import { Emitter } from './util/emitter.js';
 import { fromB64u, toB64u } from './util/bytes.js';
 import { deriveRoomKeys, newRoomSecret } from './crypto/room-keys.js';
+import { decodeRecoveryCode } from './chat/recovery.js';
 import { verifyHandshake } from './net/handshake.js';
 import { Room } from './chat/room.js';
 import { MessageStore } from './chat/message-store.js';
@@ -10,9 +11,10 @@ import { MessageStore } from './chat/message-store.js';
 export class AppModel extends Emitter {
   rooms = new Map(); // room id -> Room
 
-  constructor({ kv, identity, settings, iceServers }) {
+  /** `WS`, `linkFactory`: injectable network pieces (tests); the defaults are the browser's. */
+  constructor({ kv, identity, settings, iceServers, WS, linkFactory }) {
     super();
-    Object.assign(this, { kv, identity, settings });
+    Object.assign(this, { kv, identity, settings, WS, linkFactory });
     this.iceServers = iceServers;
   }
 
@@ -56,15 +58,31 @@ export class AppModel extends Emitter {
     room.stop();
     await new MessageStore(this.kv, id).clear();
     await room.previews.clear();
+    await this.kv.delete(`epoch:${id}`);
     this.rooms.delete(id);
     await this.#persist();
     this.emit('rooms');
   }
 
   /** The owner said yes: open the room, with the approval that came with the grant. */
-  async completeJoin({ secret, label, admit, founder }) {
+  async completeJoin({ secret, label, admit, founder, epoch }) {
+    if (epoch) await this.kv.put(`epoch:${(await deriveRoomKeys(secret)).id}`, epoch);
     const room = await this.addRoom(secret, label, founder);
     if (admit) await room.receiveAdmin(admit);
+    return room;
+  }
+
+  /** Take a room back with the owner's recovery code, on a device that lost everything. The
+   *  room only changes hands once a member is online to see it (see Room.beginRecovery). */
+  async recoverRoom(text, label) {
+    const code = decodeRecoveryCode(text);
+    if (code.epoch) {
+      const { n, secret } = code.epoch;
+      const { id } = await deriveRoomKeys(code.secret);
+      await this.kv.put(`epoch:${id}`, { n, s: toB64u(secret) });
+    }
+    const room = await this.addRoom(code.secret, label, code.founder);
+    await room.beginRecovery(code.seed);
     return room;
   }
 
@@ -76,6 +94,8 @@ export class AppModel extends Emitter {
       owner,
       kv: this.kv,
       settings: this.settings,
+      WS: this.WS,
+      linkFactory: this.linkFactory,
       iceServers: () => this.iceServers(),
     };
   }

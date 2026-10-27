@@ -37,10 +37,21 @@ export const delBody = (id) => ({ id });
 
 /** Owner-signed membership changes, forming a chain through `prev` (see roster.js). They
  *  are never trimmed from the log: membership must outlive the chat history. */
-export const ADMIN_KINDS = Object.freeze(['admit', 'revoke', 'transfer']);
+export const ADMIN_KINDS = Object.freeze(
+  ['admit', 'revoke', 'transfer', 'recovery', 'recover'],
+);
 export const admitBody = ({ id, name }, prev) => ({ id, name, prev });
-export const revokeBody = ({ id }, prev) => ({ id, prev });
+/** `epoch` { n, commit }: the channel keys rotate; `commit` is the hash of the new secret. */
+export const revokeBody = ({ id, epoch }, prev) => (
+  epoch ? { id, epoch: { n: epoch.n, commit: epoch.commit }, prev } : { id, prev }
+);
 export const transferBody = ({ to }, prev) => ({ to, prev });
+/** Registers the public key of the owner's recovery code. */
+export const recoveryBody = ({ key }, prev) => ({ key, prev });
+/** Signed by the recovery key: `to` becomes the owner, the old owner is removed. */
+export const recoverBody = ({ to, epoch }, prev) => (
+  { to, epoch: { n: epoch.n, commit: epoch.commit }, prev }
+);
 
 export function quoteOf(env) {
   const { body } = env;
@@ -122,9 +133,14 @@ function wellFormed(e, roomId, { maxText, maxFileBytes, now }) {
     const b = e.body;
     const prev = typeof b?.prev === 'string' && (b.prev === '' || isMessageId(b.prev));
     const peer = (id) => isB64u(id, 11);
+    const epoch = (x) => !!x && Number.isSafeInteger(x.n) && x.n >= 1 && x.n <= 1e6
+      && isB64u(x.commit, 43);
     if (!prev) return false;
     if (e.kind === 'admit') return peer(b.id) && typeof b.name === 'string' && b.name.length <= 32;
-    return peer(e.kind === 'revoke' ? b.id : b.to);
+    if (e.kind === 'revoke') return peer(b.id) && (b.epoch === undefined || epoch(b.epoch));
+    if (e.kind === 'recovery') return isB64u(b.key, 43);
+    if (e.kind === 'recover') return peer(b.to) && epoch(b.epoch);
+    return peer(b.to);
   }
   if (e.kind === 'file') {
     const b = e.body;

@@ -6,7 +6,7 @@ import { newBoxKey } from '../crypto/box.js';
 import { RoomChannel } from '../net/room-channel.js';
 import { lobbyKeys, makeRequest, readDecision } from './lobby.js';
 
-const RESEND_MS = 20000; // the owner may not be online yet: keep knocking
+const RESEND_MS = [1500, 4000, 20000]; // owner offline or still subscribing: keep knocking
 const GIVE_UP_MS = 30 * 60 * 1000;
 
 export class JoinRequest extends Emitter {
@@ -32,14 +32,21 @@ export class JoinRequest extends Emitter {
     this.#channel.on('status', (s) => { if (s.connected) this.#send(); });
     this.#until = Date.now() + GIVE_UP_MS;
     this.#channel.start();
-    this.#timer = setInterval(() => this.#send(), RESEND_MS);
-    this.#timer.unref?.();
+    this.#knock(0);
     return undefined;
   }
 
   stop() {
-    clearInterval(this.#timer);
+    clearTimeout(this.#timer);
     this.#channel?.stop();
+  }
+
+  #knock(n) {
+    this.#timer = setTimeout(() => {
+      this.#send();
+      this.#knock(Math.min(n + 1, RESEND_MS.length - 1));
+    }, RESEND_MS[n]);
+    this.#timer.unref?.();
   }
 
   #set(status) { this.status = status; this.emit('status', status); }

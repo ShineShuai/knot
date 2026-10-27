@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Room } from '../src/chat/room.js';
 import { JoinRequest } from '../src/chat/join.js';
 import { lobbySecretOf } from '../src/chat/lobby.js';
+import { decodeRecoveryCode } from '../src/chat/recovery.js';
 import { FileTransfer } from '../src/files/transfer.js';
 import { DEFAULTS } from '../src/config.js';
 import { decodeCode } from '../src/net/handshake.js';
@@ -596,4 +597,116 @@ test('owner: membership envelopes are never trimmed from the log', async () => {
   assert.equal(a.log.list().filter((e) => e.kind === 'admit').length, 1);
   assert.equal(a.log.list().length <= 6, true);
   assert.equal(b.roster.isMember(b.identity.id) || b.roster.owner === a.identity.id, true);
+});
+
+// ---- history after joining, key rotation, recovery ----------------------------------------------
+
+/** Join through the lobby: greeting, owner approval, then open the room as AppModel does. */
+async function joinViaLobby(owner, name, broker, extra = {}) {
+  const identity = await newIdentity();
+  const settings = {
+    ...DEFAULTS, brokersEnabled: true, brokers: ['wss://fake'], presenceIntervalMs: 60,
+  };
+  const { lobbySecret, ownerId } = await owner.joinLinkParts();
+  const ask = new JoinRequest({
+    identity, lobbySecret, ownerId, name, greeting: `hi from ${name}`, settings, WS: broker.ws(),
+  });
+  const approved = new Promise((resolve) => ask.on('approved', resolve));
+  await ask.start();
+  await until(() => owner.joinRequests.some((r) => r.id === identity.id), 4000);
+  await owner.approveJoin(identity.id);
+  const grant = await approved;
+  ask.stop();
+  const kv = new MemoryKV();
+  if (grant.epoch) await kv.put(`epoch:${owner.id}`, grant.epoch);
+  const room = await makeRoom({
+    name, secret: grant.secret, owner: grant.founder, identity, broker, kv, extra,
+  });
+  await room.receiveAdmin(grant.admit);
+  room.start();
+  return room;
+}
+const linkedTo = (room, other) => room.peerList.some(
+  (p) => p.id === other.identity.id && p.state === 'p2p',
+);
+
+test('owner: a new member gets the history from before they joined', async () => {
+  const a = await ownedRoom();
+  await a.sendText('before you came');
+  await a.sendText('and this too');
+  const b = await joinByCode(a, 'Bob');
+  await until(() => texts(b).includes('before you came') && texts(b).includes('and this too'));
+});
+
+test('rotation: removing a member moves the others to keys the removed one lacks', async () => {
+  const a = await ownedRoom();
+  const [ckv, cid] = [new MemoryKV(), await newIdentity()];
+  const b = await joinByCode(a, 'Bob');
+  const c = await joinByCode(a, 'Cy', { kv: ckv, identity: cid });
+  await until(() => c.roster.isMember(b.identity.id));
+  const before = a.channelId;
+  assert.equal(c.channelId, before);
+  await a.removeMember(b.identity.id);
+  await until(() => a.epoch === 1 && c.epoch === 1);
+  assert.notEqual(a.channelId, before);
+  assert.equal(c.channelId, a.channelId); // the members meet on the new channel...
+  assert.equal(b.epoch, 0); // ...the removed one does not know it
+  assert.equal(b.channelId, before);
+  const again = await makeRoom({
+    name: 'Cy', secret: a.secret, owner: a.roster.founder, kv: ckv, identity: cid,
+  });
+  assert.equal(again.epoch, 1); // survives a restart
+  assert.equal(again.channelId, a.channelId);
+  assert.equal(a.roster.recoveryKey, null); // an old recovery code names the old keys
+});
+
+test('rotation: a later join lands on the new channel, the removed one stays out', async () => {
+  const broker = new FakeBroker();
+  const a = await ownedRoom({ broker });
+  a.start();
+  const g1 = await joinViaLobby(a, 'One', broker);
+  const g2 = await joinViaLobby(a, 'Two', broker);
+  await until(() => linkedTo(a, g1) && linkedTo(a, g2) && linkedTo(g2, g1), 6000);
+  const oldLink = a.joinLinkParts();
+  await a.removeMember(g1.identity.id);
+  await until(() => g2.epoch === 1, 4000);
+  const g3 = await joinViaLobby(a, 'Three', broker);
+  assert.equal(g3.epoch, 1); // the grant carries the rotation
+  await until(() => linkedTo(a, g3) && linkedTo(g2, g3), 6000);
+  assert.equal(linkedTo(g1, g3) || linkedTo(g1, a), false);
+  assert.notEqual(g1.channelId, a.channelId);
+  assert.notDeepEqual((await a.joinLinkParts()).lobbySecret, (await oldLink).lobbySecret);
+  await a.sendText('after the rotation');
+  const heard = (room) => texts(room).includes('after the rotation');
+  await until(() => heard(g3) && heard(g2));
+  assert.equal(texts(g1).includes('after the rotation'), false);
+});
+
+test('recovery: the owner\'s code takes the room back after the owner is lost', async () => {
+  const broker = new FakeBroker();
+  const extra = { adminTimeoutMs: 4000 };
+  const a = await ownedRoom({ broker, extra });
+  a.start();
+  const b = await joinViaLobby(a, 'Bob', broker, extra);
+  await until(() => linkedTo(a, b) && linkedTo(b, a), 6000);
+  const code = decodeRecoveryCode(await a.newRecoveryCode());
+  await until(() => b.roster.recoveryKey !== null);
+  a.stop(); // the owner's device is gone for good
+  await until(() => b.peerList.every((p) => p.state !== 'p2p'));
+  const n = await makeRoom({
+    name: 'Ada again', secret: code.secret, owner: code.founder, broker, extra,
+  });
+  n.start();
+  await n.beginRecovery(code.seed);
+  await until(() => n.isOwner && b.roster.owner === n.identity.id, 8000);
+  assert.equal(b.roster.revoked.has(a.identity.id), true);
+  assert.equal(b.roster.recoveryKey, null); // the code is used up
+  await until(() => b.epoch === 1 && n.epoch === 1, 4000); // and the room is re-keyed
+  assert.equal(b.channelId, n.channelId);
+  await n.sendText('I am back');
+  await until(() => texts(b).includes('I am back'));
+  assert.ok(await n.newRecoveryCode()); // the new owner can issue a code of their own
+  await assert.rejects(n.transferOwnership(n.identity.id), /current member/);
+  n.stop();
+  b.stop();
 });

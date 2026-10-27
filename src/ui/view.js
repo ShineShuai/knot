@@ -8,7 +8,9 @@ import { authorIdOf, quoteOf } from '../chat/envelope.js';
 import { fmtSize, h, qrSvg, safeFileName } from './dom.js';
 import { t } from './i18n.js';
 import { ImageCard } from './image-card.js';
-import { MAX_AT_ONCE, clipboardFiles, dragHasFiles, droppedFiles } from './attach.js';
+import {
+  MAX_AT_ONCE, clipboardFiles, dragHasFiles, droppedFiles, stageFiles,
+} from './attach.js';
 import { connLine } from './conn.js';
 import { canScan, scanQr } from './scanner.js';
 
@@ -28,6 +30,9 @@ class Ui {
   #quote = null;        // envelope the composer is replying to
   #drawQuote = () => {};
   #input = null;        // the composer's textarea
+  #staged = new Map();  // room id -> files waiting in the message box to be sent
+  #chipUrls = new Map(); // staged File -> object URL of its little preview
+  #drawStaged = () => {};
   #stopScan = null;
 
   constructor(root, model) {
@@ -124,6 +129,7 @@ class Ui {
     const peers = h('ul', { class: 'peers', title: t('connHint') });
     const conn = h('div', { class: 'conninfo', hidden: true, role: 'status' });
     const quoteBar = h('div', { class: 'quote-bar', hidden: true });
+    const chips = h('div', { class: 'attachments', hidden: true });
     const brokers = h('span', { class: 'brokers' });
     const log = h('ol', { class: 'log', 'aria-live': 'polite' });
     const input = h(
@@ -136,15 +142,28 @@ class Ui {
       },
     );
     this.#input = input;
+    /** Run `change`, and keep the newest messages in view if that is where we were. */
+    const keepBottom = (change) => {
+      const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+      change();
+      if (stick) log.scrollTop = log.scrollHeight;
+    };
+    /** Grow the message box with its text; CSS caps it so the chat above stays visible. */
+    const fit = () => keepBottom(() => {
+      input.style.height = 'auto';
+      input.style.height = `${input.scrollHeight + input.offsetHeight - input.clientHeight}px`;
+    });
+    input.addEventListener('input', fit);
     const picker = h(
       'input',
       {
         type: 'file',
         multiple: true,
         hidden: true,
-        onchange: () => this.#shareAll(room, [...picker.files]).finally(
-          () => { picker.value = ''; },
-        ),
+        onchange: () => {
+          this.#stage(room, [...picker.files]);
+          picker.value = '';
+        },
       },
     );
 
@@ -172,7 +191,12 @@ class Ui {
       ? { connected: 0, total: room.settings.brokers.length } : null) => {
       brokers.textContent = s ? t('brokers', { n: s.connected, m: s.total }) : '';
     };
-    const drawQuote = () => {
+    this.#drawStaged = () => keepBottom(() => {
+      const files = this.#staged.get(room.id) ?? [];
+      chips.hidden = !files.length;
+      chips.replaceChildren(...files.map((file) => this.#chip(room, file)));
+    });
+    const drawQuote = () => keepBottom(() => {
       const q = this.#quote;
       quoteBar.hidden = !q;
       quoteBar.replaceChildren(...(q ? [
@@ -182,19 +206,33 @@ class Ui {
           onclick: () => this.#setQuote(null),
         }, '×'),
       ] : []));
-    };
+    });
     this.#drawQuote = drawQuote;
+    const sendButton = h('button', { class: 'primary', onclick: () => send() }, t('send'));
+    let sending = false;
     const send = async () => {
       const text = input.value;
-      if (!text.trim()) return;
+      const files = [...(this.#staged.get(room.id) ?? [])];
+      if ((!text.trim() && !files.length) || sending) return;
+      sending = true;
+      sendButton.disabled = true;
       input.value = '';
+      fit();
       try {
-        await room.sendText(text, this.#quote);
+        for (const file of files) { // nothing leaves the message box before this point
+          await room.shareFile(file);
+          this.#unstage(room, file);
+        }
+        if (text.trim()) await room.sendText(text, this.#quote);
         this.#setQuote(null);
         drawLog(true);
       } catch (err) {
         input.value = text;
+        fit();
         this.notify(err.message);
+      } finally {
+        sending = false;
+        sendButton.disabled = false;
       }
     };
     input.addEventListener('keydown', (e) => {
@@ -218,7 +256,7 @@ class Ui {
       e.preventDefault();
       stopDrop();
       const { files, folders } = droppedFiles(e.dataTransfer);
-      this.#shareAll(room, files, folders);
+      this.#stage(room, files, folders);
     };
 
     this.stage.replaceChildren(
@@ -228,7 +266,7 @@ class Ui {
         brokers,
         h('button', { onclick: () => this.#inviteDialog(room) }, t('invite')),
         h('button', { class: 'ghost', onclick: () => this.#leave(room) }, t('leave'))),
-      peers, conn, log, quoteBar,
+      peers, conn, log, quoteBar, chips,
       h('div', { class: 'composer' }, input, picker,
         h(
           'button',
@@ -240,7 +278,7 @@ class Ui {
           },
           '+',
         ),
-        h('button', { class: 'primary', onclick: send }, t('send'))));
+        sendButton));
 
     this.#offStage.push(
       room.on('message', () => drawLog()),
@@ -248,6 +286,7 @@ class Ui {
       room.on('brokers', drawBrokers),
       this.#holdToReveal(room, peers, conn));
     drawPeers(); drawBrokers(); drawLog(true);
+    this.#drawStaged();
   }
 
   /** Hold V (or press and hold the member strip) to see how everyone is connected. */
@@ -441,18 +480,44 @@ class Ui {
     if (btn) btn.textContent = t('receiving', { pct: this.#downloads.get(id).pct });
   }
 
-  async #share(room, file) {
-    try { await room.shareFile(file); } catch (err) { this.notify(err.message); }
-  }
-
-  /** Share several files one after the other (picker, paste, drop). */
-  async #shareAll(room, files, folders = 0) {
+  /** Put files into the message box (picker, paste, drop). They are only sent, to everyone
+   *  in the room, when the user presses Enter or Send. */
+  #stage(room, files, folders = 0) {
     if (folders) this.notify(t('noFolders'));
-    if (files.length > MAX_AT_ONCE) this.notify(t('tooManyFiles', { n: MAX_AT_ONCE }));
-    for (const file of files.slice(0, MAX_AT_ONCE)) await this.#share(room, file);
+    const { list, tooBig, tooMany } = stageFiles(
+      this.#staged.get(room.id) ?? [], files, { maxBytes: room.settings.maxFileBytes },
+    );
+    if (tooBig.length) {
+      const [file] = tooBig;
+      this.notify(t('fileTooBig', { name: file.name, max: fmtSize(room.settings.maxFileBytes) }));
+    } else if (tooMany) this.notify(t('tooManyFiles', { n: MAX_AT_ONCE }));
+    this.#staged.set(room.id, list);
+    if (room === this.#current) { this.#drawStaged(); this.#input?.focus(); }
   }
 
-  /** Ctrl/Cmd+V: files on the clipboard are shared; text pastes as usual. */
+  #unstage(room, file) {
+    this.#staged.set(room.id, (this.#staged.get(room.id) ?? []).filter((f) => f !== file));
+    const url = this.#chipUrls.get(file);
+    if (url) URL.revokeObjectURL(url);
+    this.#chipUrls.delete(file);
+    if (room === this.#current) this.#drawStaged();
+  }
+
+  #chip(room, file) {
+    const small = file.type.startsWith('image/') && file.size <= 15 * 1024 * 1024;
+    if (small && !this.#chipUrls.has(file)) this.#chipUrls.set(file, URL.createObjectURL(file));
+    return h('div', { class: 'chip' },
+      small ? h('img', { class: 'chip-img', alt: '', src: this.#chipUrls.get(file) })
+        : h('span', { class: 'chip-blank' }),
+      h('span', { class: 'chip-name', title: file.name }, file.name),
+      h('span', { class: 'file-size' }, fmtSize(file.size)),
+      h('button', {
+        class: 'ghost', title: t('removeAttachment'), 'aria-label': t('removeAttachment'),
+        onclick: () => this.#unstage(room, file),
+      }, '×'));
+  }
+
+  /** Ctrl/Cmd+V: files on the clipboard are staged; text pastes as usual. */
   #onPaste(event) {
     const room = this.#current;
     const files = clipboardFiles(event.clipboardData);
@@ -460,7 +525,7 @@ class Ui {
     const field = event.target.closest?.('input, textarea');
     if (field && !field.closest('.composer')) return; // other fields keep their own paste
     event.preventDefault();
-    this.#shareAll(room, files);
+    this.#stage(room, files);
   }
 
   #leave(room) {
@@ -468,6 +533,8 @@ class Ui {
     for (const [key, card] of this.#cards) {
       if (key.startsWith(`${room.id}:`)) { card.dispose(); this.#cards.delete(key); }
     }
+    for (const file of this.#staged.get(room.id) ?? []) this.#unstage(room, file);
+    this.#staged.delete(room.id);
     this.model.removeRoom(room.id).then(() => this.select(null));
   }
 

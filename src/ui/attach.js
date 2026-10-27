@@ -1,6 +1,6 @@
 // Getting files into the chat besides the "+" button: paste (screenshots, "copy image",
 // files copied in Finder/Explorer) and drag & drop. Pure helpers, no DOM access.
-export const MAX_AT_ONCE = 10; // a burst of more would trip the receivers' rate limit
+export const MAX_AT_ONCE = 10; // attachments per message; more would trip receivers' rate limit
 
 const EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' };
 const GENERIC = /^image\.\w+$/i; // what browsers call a pasted screenshot
@@ -44,3 +44,16 @@ export function droppedFiles(data) {
 }
 
 export const dragHasFiles = (event) => [...(event.dataTransfer?.types ?? [])].includes('Files');
+
+/** Add `incoming` files to the staged ones: what fits, plus what was refused and why. */
+export function stageFiles(staged, incoming, { max = MAX_AT_ONCE, maxBytes = Infinity } = {}) {
+  const list = [...staged];
+  const tooBig = [];
+  let tooMany = false;
+  for (const file of incoming) {
+    if (file.size > maxBytes) tooBig.push(file);
+    else if (list.length >= max) tooMany = true;
+    else list.push(file);
+  }
+  return { list, tooBig, tooMany };
+}

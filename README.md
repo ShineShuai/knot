@@ -11,6 +11,10 @@ signaling brokers are blocked (manual QR / text pairing).
     npm test                         # unit tests (Node 22+)
     PLAYWRIGHT_MODULE=/path/to/node_modules/playwright npm run test:e2e
 
+CI (`.github/workflows/ci.yml`): unit tests and the headless-Chromium tests run on every
+push and pull request. Only a push to `main` whose unit and browser tests both pass is
+published to GitHub Pages (one-time: Settings > Pages > Source: GitHub Actions).
+
 Any static host works for deployment (HTTPS required outside localhost). Host it
 on two or three origins and also hand out the folder as a ZIP: after one visit
 the service worker serves the app offline. Nothing is loaded from a CDN.
@@ -81,6 +85,9 @@ if no broker is reachable; with brokers, reconnection is automatic).
   loaded only on request. Peers sniff bytes instead of trusting mime types and check the
   pixel count from the header before decoding. SVG is shown only through `<img>` (never as a
   document), rejected with scripts/entities, and only when received whole (<= 2 MB).
+* **Attachments:** pasted, dropped and picked files wait in the message box (chips with a
+  preview and a remove button) and are sent, to everyone, only with Enter or Send: files
+  first, then the text. The message box grows with its text up to a cap.
 * **Delete and quote:** a `del` envelope (signed by the author, naming one of the
   author's own message ids) makes every peer drop that message's content from memory
   and storage and show "<name> deleted a message" in its place; a copy that arrives

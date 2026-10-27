@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clipboardFiles, droppedFiles, nameClipboardFile } from '../src/ui/attach.js';
+import {
+  clipboardFiles, droppedFiles, nameClipboardFile, stageFiles,
+} from '../src/ui/attach.js';
 
 const clip = (files, types, plain = '') => (
   { files, types, getData: (type) => (type === 'text/plain' ? plain : '') }
@@ -47,4 +49,18 @@ test('droppedFiles skips folders and reports them', () => {
   assert.deepEqual(got, { files: [file], folders: 1 });
   const old = droppedFiles({ files: [file] }); // no items API
   assert.deepEqual(old, { files: [file], folders: 0 });
+});
+
+test('stageFiles keeps what fits and reports what was refused', () => {
+  const f = (name, size) => ({ name, size });
+  const [a, b, c, big] = [f('a', 1), f('b', 2), f('c', 3), f('big', 99)];
+  const first = stageFiles([], [a, b], { max: 3, maxBytes: 10 });
+  assert.deepEqual(first, { list: [a, b], tooBig: [], tooMany: false });
+  const more = stageFiles([a, b], [c, big, f('d', 1)], { max: 3, maxBytes: 10 });
+  assert.deepEqual(more.list, [a, b, c]);
+  assert.deepEqual(more.tooBig, [big]);
+  assert.equal(more.tooMany, true);
+  const staged = [a];
+  stageFiles(staged, [b], { max: 3 });
+  assert.deepEqual(staged, [a]); // the input is not modified
 });

@@ -170,6 +170,9 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
   await a.locator('input[type=file]').setInputFiles(
     { name: 'note.txt', mimeType: 'text/plain', buffer: Buffer.from('file over p2p') },
   );
+  await a.locator('.chip', { hasText: 'note.txt' }).waitFor(); // staged, not yet sent
+  assert.equal(await b.locator('.file', { hasText: 'note.txt' }).count(), 0);
+  await a.getByRole('button', { name: 'Send' }).click();
   await b.locator('.file', { hasText: 'note.txt' }).waitFor();
   await b.locator('.file button').click();
   const [download] = await Promise.all(
@@ -200,6 +203,7 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
   await a.locator('input[type=file]').setInputFiles(
     { name: 'noise.png', mimeType: 'image/png', buffer: Buffer.from(noise, 'base64') },
   );
+  await a.getByRole('button', { name: 'Send' }).click();
   await b.locator('.imgcard').waitFor();
   await b.waitForFunction(() => {
     const img = document.querySelector('.imgcard img');
@@ -215,6 +219,9 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
       new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }),
     );
   });
+  await a.locator('.chip', { hasText: 'pasted.txt' }).waitFor(); // staged in the message box
+  assert.equal(await b.locator('.file', { hasText: 'pasted.txt' }).count(), 0);
+  await a.keyboard.press('Enter'); // the box has focus after a paste
   await b.locator('.file', { hasText: 'pasted.txt' }).waitFor();
   await a.evaluate(() => {
     const data = new DataTransfer();
@@ -223,12 +230,21 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
       new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true }),
     );
   });
-  await b.locator('.file', { hasText: 'drop1.txt' }).waitFor();
+  await a.locator('.chip').nth(1).waitFor();
+  await a.locator('.chip', { hasText: 'drop1.txt' }).getByRole('button').click(); // remove one
+  await a.getByRole('button', { name: 'Send' }).click();
   await b.locator('.file', { hasText: 'drop2.txt' }).waitFor();
+  assert.equal(await b.locator('.file', { hasText: 'drop1.txt' }).count(), 0);
+  // The message box grows with its text, but stays capped.
+  await a.locator('.composer textarea').fill(Array(30).fill('line').join('\n'));
+  const box = await a.locator('.composer textarea').evaluate((el) => el.offsetHeight);
+  assert.ok(box > 40 && box < 300, `textarea height ${box}`);
+  await a.locator('.composer textarea').fill('');
 
   // Quote a message, see connection details while V is held, delete a message.
-  await b.locator('.msg', { hasText: 'hi Bob 你好' }).hover();
-  await b.locator('.msg', { hasText: 'hi Bob 你好' }).getByRole('button', { name: 'Reply' }).click();
+  const hello = b.locator('.msg', { hasText: 'hi Bob 你好' });
+  await hello.hover();
+  await hello.getByRole('button', { name: 'Reply' }).click();
   await b.keyboard.type('quoted answer');
   await b.keyboard.press('Enter');
   await a.locator('.quote', { hasText: 'hi Bob 你好' }).waitFor();

@@ -114,6 +114,15 @@ if no broker is reachable; with brokers, reconnection is automatic).
   Remaining gap: a removed member who copied the room secret can still read what members
   say on the brokers *before* they get the new secret, and sees who is online on the old
   channel until everyone has moved.
+* **Old and new side by side:** rooms made before the owner update stay open rooms (no
+  owner controls, `#r=` links); new rooms are owned (`#j=` links). They are independent, also
+  after a reload. An owned room is open to new clients only: an older client has no way in,
+  and in an open room it just does not see replies, deletions or membership messages. The
+  owner id is also kept under its own key (`owner:<room>`) so an older version, or another
+  tab, rewriting the room list cannot turn an owned room into an open one; the room list is
+  merged on save, so tabs do not drop each other's rooms. If an owned room was already
+  saved without its owner, the creating device recognises its own signature on the chain
+  and takes it back; other members cannot, and rejoin through the owner.
 * **Attachments:** pasted, dropped and picked files wait in the message box (chips with a
   preview and a remove button) and are sent, to everyone, only with Enter or Send: files
   first, then the text. The message box grows with its text up to a cap.

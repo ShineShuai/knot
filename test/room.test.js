@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Room } from '../src/chat/room.js';
 import { JoinRequest } from '../src/chat/join.js';
+import { createEnvelope } from '../src/chat/envelope.js';
+import { HLC } from '../src/util/hlc.js';
 import { lobbySecretOf } from '../src/chat/lobby.js';
 import { decodeRecoveryCode } from '../src/chat/recovery.js';
 import { FileTransfer } from '../src/files/transfer.js';
@@ -709,4 +711,33 @@ test('recovery: the owner\'s code takes the room back after the owner is lost', 
   await assert.rejects(n.transferOwnership(n.identity.id), /current member/);
   n.stop();
   b.stop();
+});
+
+// ---- older and newer versions side by side -------------------------------------------------
+
+test('open rooms ignore membership envelopes; no one can turn them into owned rooms', async () => {
+  const [a, b] = await pairManually();
+  const mallory = await newIdentity();
+  const fake = await createEnvelope(
+    mallory, new HLC(), a.id, 'admit', { id: mallory.id, name: 'Mallory', prev: '' }, 'Mallory',
+  );
+  assert.equal(await a.receiveAdmin(fake), false);
+  assert.equal(a.roster, null);
+  assert.equal(a.log.has(fake.id), false);
+  assert.equal(b.roster, null);
+});
+
+test('an owned room saved without its owner by an older version is still ours', async () => {
+  const [kv, identity, secret] = [new MemoryKV(), await newIdentity(), newRoomSecret()];
+  const owner = await makeRoom({ name: 'Ada', secret, kv, identity, owner: identity.id });
+  await joinByCode(owner, 'Bob'); // the owner's first membership envelope is now stored
+  owner.stop();
+  const forgotten = await makeRoom({ name: 'Ada', secret, kv, identity }); // no owner given
+  assert.equal(forgotten.isOwner, true);
+  assert.equal(forgotten.roster.founder, identity.id);
+  assert.equal(forgotten.roster.members.size, 1);
+  const stranger = await makeRoom(
+    { name: 'Eve', secret, kv: new MemoryKV(), identity: await newIdentity() },
+  );
+  assert.equal(stranger.roster, null); // nobody else's room is turned into an owned one
 });

@@ -124,7 +124,7 @@ await check('UI: create room, send message, persists after reload', async () => 
   await page.locator('dialog').waitFor();
   assert.match(
     await page.locator('dialog .copy-field textarea').first().inputValue(),
-    /#r=[A-Za-z0-9_-]{22}$/,
+    /#j=[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{11}$/, // an owned room is joined through its owner
   );
   await page.keyboard.press('Escape');
   await page.getByPlaceholder('Write a message').fill('first words');
@@ -265,7 +265,7 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
 
   // The creator owns the room: the member list says so, and offers owner actions.
   await a.getByRole('button', { name: 'Members' }).click();
-  await a.locator('.member', { hasText: 'owner' }).waitFor();
+  await a.locator('.member .badge', { hasText: 'owner' }).waitFor();
   await a.locator('.member').nth(1).getByRole('button', { name: 'Remove' }).waitFor();
   await a.keyboard.press('Escape');
   await b.getByRole('button', { name: 'Members' }).click();

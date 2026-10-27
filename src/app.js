@@ -10,6 +10,7 @@ import { MessageStore } from './chat/message-store.js';
 
 export class AppModel extends Emitter {
   rooms = new Map(); // room id -> Room
+  #removed = new Set(); // ids of rooms left in this tab (so saving does not bring them back)
 
   /** `WS`, `linkFactory`: injectable network pieces (tests); the defaults are the browser's. */
   constructor({ kv, identity, settings, iceServers, WS, linkFactory }) {
@@ -24,6 +25,7 @@ export class AppModel extends Emitter {
       saved.label,
       saved.owner ?? null,
     );
+    if (this.rooms.size) await this.#persist(); // writes back what an older version dropped
     this.emit('rooms');
   }
 
@@ -59,6 +61,8 @@ export class AppModel extends Emitter {
     await new MessageStore(this.kv, id).clear();
     await room.previews.clear();
     await this.kv.delete(`epoch:${id}`);
+    await this.kv.delete(`owner:${id}`);
+    this.#removed.add(id);
     this.rooms.delete(id);
     await this.#persist();
     this.emit('rooms');
@@ -101,6 +105,12 @@ export class AppModel extends Emitter {
   }
 
   async #open(secret, label, owner = null) {
+    // The owner is also kept under a key of its own: an older version of the app, perhaps in
+    // another tab, rewrites the room list without it, and the room would silently turn into
+    // an open one.
+    const { id } = await deriveRoomKeys(secret);
+    owner ??= (await this.kv.get(`owner:${id}`)) ?? null;
+    if (owner) await this.kv.put(`owner:${id}`, owner);
     const room = await Room.open(this.#options(secret, label, owner));
     if (this.rooms.has(room.id)) return this.rooms.get(room.id);
     room.start();
@@ -108,12 +118,16 @@ export class AppModel extends Emitter {
     return room;
   }
 
-  #persist() {
-    return this.kv.put(
-      'rooms',
-      [...this.rooms.values()].map((r) => (
-        { secret: toB64u(r.secret), label: r.label, owner: r.roster?.founder ?? null }
-      )),
-    );
+  /** Save the room list, keeping rooms another tab added meanwhile. */
+  async #persist() {
+    const mine = [...this.rooms.values()].map((r) => (
+      { secret: toB64u(r.secret), label: r.label, owner: r.roster?.founder ?? null }
+    ));
+    const others = [];
+    for (const entry of (await this.kv.get('rooms')) ?? []) {
+      const { id } = await deriveRoomKeys(fromB64u(entry.secret));
+      if (!this.rooms.has(id) && !this.#removed.has(id)) others.push(entry);
+    }
+    await this.kv.put('rooms', [...mine, ...others]);
   }
 }

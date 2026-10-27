@@ -132,6 +132,11 @@ export class Room extends Emitter {
     const trimmed = this.log.trim();
     const deleted = stored.filter((e) => !this.log.get(e.id) && !trimmed.includes(e));
     await this.#store.remove([...trimmed, ...deleted]); // deleted messages leave no content
+    // An older version of the app may have saved this room without its owner. If our own
+    // signature starts its membership chain, the room is ours: nobody can fake that.
+    const ours = (e) => ADMIN_KINDS.includes(e.kind) && e.body.prev === ''
+      && authorIdOf(e) === this.identity.id;
+    if (!this.roster && stored.some(ours)) this.roster = new Roster(this.identity.id);
     this.roster?.load(stored);
     this.removed = !!this.roster?.revoked.has(this.identity.id);
     const saved = await this.#kv.get(`epoch:${this.id}`);
@@ -368,7 +373,8 @@ export class Room extends Emitter {
     const author = authorIdOf(env);
     const owner = this.roster?.owner;
     if (env.kind === 'del' && authorOfId(env.body.id) !== author && author !== owner) return false;
-    return !this.roster || ADMIN_KINDS.includes(env.kind) || this.roster.isMember(author);
+    if (!this.roster) return !ADMIN_KINDS.includes(env.kind); // open rooms have no admin
+    return ADMIN_KINDS.includes(env.kind) || this.roster.isMember(author);
   }
 
   async #accept(env, source) {

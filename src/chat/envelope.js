@@ -31,8 +31,16 @@ const imgBody = ({ w, h, t, tm, a, p }) => ({
 export const replyBody = (text, { id, name, text: snippet }) => (
   { text, q: { id, name, text: snippet } }
 );
-/** Body of a deletion ("recall") of the sender's own message `id`. */
+/** Body of a deletion ("recall") of message `id` (its author, or the room owner, may do it;
+ *  the room enforces who, see Room). */
 export const delBody = (id) => ({ id });
+
+/** Owner-signed membership changes, forming a chain through `prev` (see roster.js). They
+ *  are never trimmed from the log: membership must outlive the chat history. */
+export const ADMIN_KINDS = Object.freeze(['admit', 'revoke', 'transfer']);
+export const admitBody = ({ id, name }, prev) => ({ id, name, prev });
+export const revokeBody = ({ id }, prev) => ({ id, prev });
+export const transferBody = ({ to }, prev) => ({ to, prev });
 
 export function quoteOf(env) {
   const { body } = env;
@@ -106,9 +114,17 @@ function wellFormed(e, roomId, { maxText, maxFileBytes, now }) {
     return !!b && typeof b === 'object' && typeof b.text === 'string' && b.text.length > 0
       && b.text.length <= maxText && validQuote(b.q);
   }
-  if (e.kind === 'del') { // only the author may delete, and a deletion cannot be deleted
+  if (e.kind === 'del') { // who may delete what is decided by the room (author or owner)
     const id = e.body?.id;
-    return isMessageId(id) && id !== e.id && authorOfId(id) === authorOfId(e.id);
+    return isMessageId(id) && id !== e.id;
+  }
+  if (ADMIN_KINDS.includes(e.kind)) {
+    const b = e.body;
+    const prev = typeof b?.prev === 'string' && (b.prev === '' || isMessageId(b.prev));
+    const peer = (id) => isB64u(id, 11);
+    if (!prev) return false;
+    if (e.kind === 'admit') return peer(b.id) && typeof b.name === 'string' && b.name.length <= 32;
+    return peer(e.kind === 'revoke' ? b.id : b.to);
   }
   if (e.kind === 'file') {
     const b = e.body;
@@ -135,5 +151,5 @@ export async function verifyEnvelope(e, roomId, limits = {}) {
 }
 
 // id = <ms36>-<counter36>-<peerId>; peer ids are base64url and may themselves contain '-'.
-const authorOfId = (id) => id.split('-').slice(2).join('-');
+export const authorOfId = (id) => id.split('-').slice(2).join('-');
 export const authorIdOf = (env) => authorOfId(env.id);

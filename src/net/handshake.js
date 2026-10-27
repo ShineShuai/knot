@@ -71,11 +71,12 @@ function packBody(h) {
   if (sdp.fingerprint.length !== 32) throw new Error('fingerprint must be SHA-256');
   const w = new ByteWriter()
     .u8(VERSION)
-    .u8((h.kind === 'answer' ? 1 : 0) | (h.roomSecret ? 2 : 0))
+    .u8((h.kind === 'answer' ? 1 : 0) | (h.roomSecret ? 2 : 0) | (h.founder ? 4 : 0))
     .raw(h.pub)
     .raw(h.session)
     .u32(Math.floor(h.ts / 1000));
   if (h.roomSecret) w.raw(h.roomSecret);
+  if (h.founder) w.str(h.founder);
   w.str(h.name.slice(0, 32)).str(sdp.ufrag).str(sdp.pwd).str(sdp.mid)
     .raw(sdp.fingerprint).u16(sdp.sctpPort).u32(sdp.maxMessage);
   const candidates = sdp.candidates
@@ -103,6 +104,8 @@ export function unpackHandshake(wire) {
     ts: r.u32() * 1000,
   };
   h.roomSecret = flags & 2 ? r.raw(16).slice() : null;
+  // Rooms with an owner: the id of whoever created it (the root of trust for membership).
+  h.founder = flags & 4 ? r.str() : null;
   h.name = r.str();
   const sdp = {
     ufrag: r.str(),
@@ -128,7 +131,7 @@ export function unpackHandshake(wire) {
 
 // ---- signing & codes ---------------------------------------------------------
 
-/** fields: { kind, session, ts, name, roomSecret|null, sdp } */
+/** fields: { kind, session, ts, name, roomSecret|null, founder?, sdp } */
 export async function signHandshake(identity, fields) {
   const h = { ...fields, pub: identity.pub };
   const body = packBody(h);

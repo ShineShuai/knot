@@ -1,7 +1,7 @@
 // Ordered, de-duplicated message log with a FIFO cap, plus the set arithmetic
 // used by history sync ("what do you have?" / "here is what you lack").
 import { compareStamps } from '../util/hlc.js';
-import { authorIdOf } from './envelope.js';
+import { ADMIN_KINDS, authorIdOf } from './envelope.js';
 
 const byStamp = (a, b) => compareStamps(a, b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const stampOfId = (id) => parseInt(String(id).split('-')[0], 36) || 0;
@@ -33,7 +33,7 @@ export class MessageLog {
   trim() {
     const excess = this.#byId.size - this.#cap;
     if (excess <= 0) return [];
-    const removed = this.list().slice(0, excess);
+    const removed = this.list().filter((e) => !ADMIN_KINDS.includes(e.kind)).slice(0, excess);
     for (const e of removed) {
       this.#byId.delete(e.id);
       if (e.kind === 'del') this.#gone.delete(e.body.id);

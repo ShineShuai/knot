@@ -33,12 +33,12 @@ test('reply: quote snapshot is signed and bounded', async () => {
   assert.equal(quoteOf(file).text, 'a.pdf');
 });
 
-test('del: only the author can delete, never itself', async () => {
+test('del: well-formed for any author, never itself (the room decides who may)', async () => {
   const [ada, bob] = [await newIdentity(), await newIdentity()];
   const hlc = new HLC(); // one clock: ids must differ
   const msg = await make(ada, 'text', 'oops', hlc);
   assert.equal(await ok(await make(ada, 'del', delBody(msg.id), hlc)), true);
-  assert.equal(await ok(await make(bob, 'del', delBody(msg.id), hlc)), false); // not his message
+  assert.equal(await ok(await make(bob, 'del', delBody(msg.id), hlc)), true); // room rules apply
   assert.equal(await ok(await make(ada, 'del', delBody('nonsense'), hlc)), false);
   const del = await make(ada, 'del', delBody(msg.id), hlc);
   assert.equal(await ok({ ...del, body: delBody(del.id) }), false); // itself

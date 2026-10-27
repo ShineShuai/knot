@@ -31,6 +31,7 @@ export const DEFAULTS = Object.freeze({
   syncWindow: 300,
   chunkSize: 16 * 1024,
   maxFileBytes: 100 * 1024 * 1024,
+  adminTimeoutMs: 15000, // a peer not shown to be a member by then is dropped
   imagePreviews: 'auto', // auto: thumbnail + preview when visible | tap: preview on tap | off
   previewCacheBytes: 64 * 1024 * 1024, // per room, on this device
   messagesPerSecond: 20,

@@ -12,6 +12,8 @@ import {
   MAX_AT_ONCE, clipboardFiles, dragHasFiles, droppedFiles, stageFiles,
 } from './attach.js';
 import { connLine } from './conn.js';
+import { JoinRequest } from '../chat/join.js';
+import { MAX_GREETING } from '../chat/lobby.js';
 import { canScan, scanQr } from './scanner.js';
 
 export const mountUi = (root, model) => new Ui(root, model).start();
@@ -34,6 +36,8 @@ class Ui {
   #chipUrls = new Map(); // staged File -> object URL of its little preview
   #drawStaged = () => {};
   #stopScan = null;
+  #joins = new Set();     // join requests still waiting for an owner's answer
+  #ownerEvents = new WeakSet(); // rooms whose owner events we already listen to
 
   constructor(root, model) {
     this.root = root;
@@ -47,7 +51,8 @@ class Ui {
     this.dialog = h('dialog', { onclose: () => this.#stopScan?.() });
     this.shell = h('div', { class: 'shell', 'data-view': 'rooms' }, this.rail, this.stage);
     this.root.replaceChildren(this.shell, this.toast, this.dialog);
-    this.model.on('rooms', () => this.#renderRail());
+    this.model.on('rooms', () => { this.#renderRail(); this.#watchRooms(); });
+    this.#watchRooms();
     document.addEventListener('paste', (e) => this.#onPaste(e));
     for (const type of ['dragover', 'drop']) { // a file dropped beside the chat must not open
       window.addEventListener(type, (e) => dragHasFiles(e) && e.preventDefault());
@@ -55,6 +60,22 @@ class Ui {
     this.#renderRail();
     this.#renderStage();
     return this;
+  }
+
+  /** Owner events that matter wherever the user currently is. */
+  #watchRooms() {
+    for (const room of this.model.rooms.values()) {
+      if (this.#ownerEvents.has(room)) continue;
+      this.#ownerEvents.add(room);
+      room.on('requests', () => {
+        const last = room.joinRequests.at(-1);
+        if (last) this.notify(t('joinRequestFrom', { name: last.name, greeting: last.greeting }));
+      });
+      room.on('removed', () => {
+        this.notify(t('removedBanner'));
+        if (room === this.#current) this.#renderStage();
+      });
+    }
   }
 
   select(room) {
@@ -259,11 +280,27 @@ class Ui {
       this.#stage(room, files, folders);
     };
 
+    if (room.removed) {
+      input.disabled = true;
+      input.placeholder = t('removedBanner');
+      sendButton.disabled = true;
+    }
+    const membersBtn = room.roster
+      ? h('button', { onclick: () => this.#membersDialog(room) }) : null;
+    const drawMembersBtn = () => {
+      if (!membersBtn) return;
+      const open = room.isOwner ? room.joinRequests.length : 0;
+      membersBtn.textContent = open ? `${t('members')} (${open})` : t('members');
+    };
+    drawMembersBtn();
+    this.#offStage.push(room.on('requests', drawMembersBtn), room.on('roster', drawMembersBtn));
+
     this.stage.replaceChildren(
       h('header', { class: 'stage-head' },
         h('button', { class: 'ghost back', onclick: () => this.select(null) }, t('rooms')),
         h('h2', {}, room.label || t('roomDefault')),
         brokers,
+        membersBtn,
         h('button', { onclick: () => this.#inviteDialog(room) }, t('invite')),
         h('button', { class: 'ghost', onclick: () => this.#leave(room) }, t('leave'))),
       peers, conn, log, quoteBar, chips,
@@ -337,8 +374,9 @@ class Ui {
     ];
     const acts = h('span', { class: 'acts' },
       h('button', { class: 'ghost', onclick: () => this.#setQuote(env) }, t('reply')),
-      own ? h('button', { class: 'ghost', onclick: () => this.#confirmDelete(room, env) },
-        t('deleteMsg')) : null);
+      own || room.isOwner
+        ? h('button', { class: 'ghost', onclick: () => this.#confirmDelete(room, env) },
+          t('deleteMsg')) : null);
     return h('li', { class: `msg ${own ? 'own' : 'other'}`, 'data-id': env.id },
       h('div', { class: 'meta' },
         own ? t('you') : env.name, ' ', h('time', {}, clock(env.ms)), acts),
@@ -631,24 +669,109 @@ class Ui {
       },
     }, t('createCode'));
     pair.append(make);
+    const link = h('div');
+    const owned = !!room.roster;
+    (owned ? room.joinLinkParts().then(
+      ({ lobbySecret, ownerId }) => `${location.origin}${location.pathname}#j=${
+        toB64u(lobbySecret)}.${ownerId}`,
+    ) : Promise.resolve(roomLink(room))).then((url) => link.replaceChildren(this.#copyField(url)));
+    const help = !owned ? 'linkHelp' : room.isOwner ? 'joinLinkHelpOwner' : 'joinLinkHelp';
     this.#open(t('invite'),
-      h(
-        'section',
-        {},
-        h('h3', {}, t('linkTitle')),
-        h('p', {}, t('linkHelp')),
-        this.#copyField(roomLink(room)),
-      ),
-      h('section', {}, h('h3', {}, t('pairTitle')), h('p', {}, t('pairHelp')), pair));
+      h('section', {}, h('h3', {}, t(owned ? 'joinLinkTitle' : 'linkTitle')),
+        h('p', {}, t(help)), link),
+      !owned || room.isOwner
+        ? h('section', {}, h('h3', {}, t('pairTitle')), h('p', {}, t('pairHelp')), pair)
+        : null);
+  }
+
+  /** Members, and for the owner: join requests, removal and handing the room over. */
+  #membersDialog(room) {
+    const body = h('div', { class: 'members' });
+    const run = (job) => job.catch((err) => this.notify(err.message));
+    const draw = () => {
+      const states = { p2p: 'direct', relay: 'relay', seen: 'seen', connecting: 'connecting' };
+      const rows = room.membersView().map((m) => h('li', { class: 'member' },
+        h('span', { class: 'member-name' }, m.name,
+          m.owner ? h('span', { class: 'badge' }, t('ownerBadge')) : null),
+        h('span', { class: 'file-size' }, m.self ? t('you') : t(states[m.state] ?? 'offlineState')),
+        room.isOwner && !m.self ? h('span', { class: 'imgact' },
+          h('button', {
+            onclick: () => confirm(t('removeConfirm', { name: m.name }))
+              && run(room.removeMember(m.id)),
+          }, t('removeMember')),
+          h('button', {
+            onclick: () => confirm(t('transferConfirm', { name: m.name }))
+              && run(room.transferOwnership(m.id)),
+          }, t('makeOwner'))) : null));
+      const asks = room.joinRequests.map((r) => h('div', { class: 'request' },
+        h('b', {}, r.name), ' ', h('span', { class: 'file-size' }, r.id),
+        h('p', { class: 'text' }, r.greeting),
+        h('div', { class: 'actions' },
+          h('button', { class: 'primary', onclick: () => run(room.approveJoin(r.id)) },
+            t('approve')),
+          h('button', { onclick: () => run(room.declineJoin(r.id)) }, t('decline')))));
+      body.replaceChildren(
+        h('ul', { class: 'members-list' }, ...rows),
+        ...(room.isOwner ? [h('h3', {}, t('requests')),
+          ...(asks.length ? asks : [h('p', { class: 'file-size' }, t('noRequests'))])] : []));
+    };
+    draw();
+    const offs = ['roster', 'requests', 'peers'].map((name) => room.on(name, draw));
+    this.dialog.addEventListener('close', () => offs.forEach((off) => off()), { once: true });
+    this.#open(t('members'), body);
+  }
+
+  /** A join link was opened: write a greeting, then wait for the owner's answer. */
+  #greetingForm(result, lobbySecret, ownerId) {
+    const greeting = h('textarea', {
+      rows: 3, maxLength: MAX_GREETING, placeholder: t('greetingPlaceholder'),
+    });
+    const status = h('p', { class: 'sas-line' });
+    const texts = {
+      connecting: 'joinConnecting', waiting: 'joinWaiting', declined: 'joinDeclined',
+      offline: 'joinOffline', timeout: 'joinTimeout', approved: 'joinApproved',
+    };
+    const send = h('button', { class: 'primary' }, t('sendRequest'));
+    send.onclick = async () => {
+      const text = greeting.value.trim();
+      if (!text) return this.notify(t('greetingNeeded'));
+      send.disabled = true;
+      greeting.disabled = true;
+      const { settings, identity } = this.model;
+      const ask = new JoinRequest({
+        identity, lobbySecret, ownerId, greeting: text, settings,
+        name: settings.name || `anon-${identity.id.slice(0, 4)}`,
+      });
+      this.#joins.add(ask); // keeps knocking even if this dialog is closed
+      ask.on('status', (s) => {
+        status.replaceChildren(t(texts[s]));
+        if (s === 'declined' || s === 'timeout') this.notify(t(texts[s]));
+        if (s !== 'connecting' && s !== 'waiting') this.#joins.delete(ask);
+      });
+      ask.on('approved', async (grant) => {
+        try {
+          const room = await this.model.completeJoin(grant);
+          if (this.dialog.open) this.dialog.close();
+          this.select(room);
+        } catch (err) { this.notify(err.message); }
+      });
+      try { await ask.start(); } catch (err) { this.notify(err.message); }
+      return undefined;
+    };
+    result.replaceChildren(h('p', {}, t('greetingHelp')), greeting, send, status);
   }
 
   #joinDialog(prefill = '') {
     const result = h('div', { class: 'pair' });
     const handle = async (text) => {
+      const lobby = /#j=([A-Za-z0-9_-]{22})\.([A-Za-z0-9_-]{11})/.exec(text);
       const link = /#r=([A-Za-z0-9_-]{22})/.exec(text);
       const code = decodeCode(text);
       try {
-        if (link) {
+        if (lobby) {
+          if (lobby[2] === this.model.identity.id) throw new Error(t('ownLink'));
+          this.#greetingForm(result, fromB64u(lobby[1]), lobby[2]);
+        } else if (link) {
           const room = await this.model.addRoom(fromB64u(link[1]), t('roomDefault'));
           this.dialog.close(); this.select(room);
         } else if (code?.kind === 'offer') {

@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Room } from '../src/chat/room.js';
+import { JoinRequest } from '../src/chat/join.js';
+import { lobbySecretOf } from '../src/chat/lobby.js';
 import { FileTransfer } from '../src/files/transfer.js';
 import { DEFAULTS } from '../src/config.js';
 import { decodeCode } from '../src/net/handshake.js';
@@ -21,16 +23,19 @@ async function makeRoom(
     kv = new MemoryKV(),
     identity,
     derive,
+    owner = null,
+    extra = {},
   } = {},
 ) {
   const settings = {
     ...DEFAULTS, name, presenceIntervalMs: 60, connectTimeoutMs: 2000, gatherTimeoutMs: 10,
-    brokersEnabled: !!broker, brokers: broker ? ['wss://fake'] : [],
+    brokersEnabled: !!broker, brokers: broker ? ['wss://fake'] : [], adminTimeoutMs: 400,
+    ...extra,
   };
   const room = await Room.open({
     identity: identity ?? (
       await newIdentity()
-    ), secret, label: name, kv, settings, linkFactory, WS: broker?.ws(),
+    ), secret, label: name, owner, kv, settings, linkFactory, WS: broker?.ws(),
     iceServers: () => [], derive,
   });
   rooms.push(room);
@@ -389,4 +394,206 @@ test('connection info: how each known member is connected', async () => {
   [...a.peers.values()][0].link.close();
   await until(() => p2p(a) === 0);
   assert.deepEqual(await a.connectionInfo(), []); // nobody else known
+});
+
+// ---- owner: admission, removal, transfer -------------------------------------------------
+
+/** A room whose owner is its creator. */
+async function ownedRoom(opts = {}) {
+  const identity = await newIdentity();
+  return makeRoom({ name: 'Ada', ...opts, identity, owner: identity.id });
+}
+
+/** Bring `name` in by the owner's pairing code, as AppModel.joinOffer does. */
+async function joinByCode(owner, name, opts = {}) {
+  const offer = decodeCode((await owner.createInvite()).code);
+  const guest = await makeRoom({ name, secret: offer.roomSecret, owner: offer.founder, ...opts });
+  await owner.acceptAnswer(decodeCode((await guest.answerOffer(offer)).code));
+  const linked = (r, other) => (
+    r.peerList.some((p) => p.id === other.identity.id && p.state === 'p2p')
+  );
+  const me = guest.identity.id;
+  const admitted = () => guest.roster.chain.some((e) => e.kind === 'admit' && e.body.id === me);
+  await until(() => linked(owner, guest) && linked(guest, owner) && admitted());
+  return guest;
+}
+const kinds = (room) => room.log.timeline().map((e) => e.kind);
+
+test('owner: pairing by code admits the guest, and then chat flows', async () => {
+  const a = await ownedRoom();
+  const b = await joinByCode(a, 'Bob');
+  assert.equal(b.ownerId, a.identity.id);
+  assert.equal(a.roster.isMember(b.identity.id), true);
+  await a.sendText('welcome');
+  await b.sendText('thanks');
+  await until(() => texts(a).includes('thanks') && texts(b).includes('welcome'));
+  await assert.rejects(b.createInvite(), /Only the room owner/);
+});
+
+test('owner: a latecomer learns the whole membership chain', async () => {
+  const a = await ownedRoom();
+  const b = await joinByCode(a, 'Bob');
+  const c = await joinByCode(a, 'Cy');
+  assert.equal(c.roster.isMember(b.identity.id), true);
+  assert.equal(c.roster.chain.length, 2);
+  await until(() => b.roster.isMember(c.identity.id));
+});
+
+test('owner: a secret holder who was never admitted gets nothing and is dropped', async () => {
+  const broker = new FakeBroker();
+  const a = await ownedRoom({ broker, extra: { relayFallback: false } });
+  const eve = await makeRoom({
+    name: 'Eve', secret: a.secret, owner: a.ownerId, broker, extra: { relayFallback: false },
+  });
+  [a, eve].forEach((r) => r.start());
+  await until(() => p2p(a) === 1);
+  await a.sendText('members only');
+  await eve.sendText('let me in');
+  await until(() => p2p(a) === 0, 3000); // not admitted within adminTimeoutMs: dropped
+  assert.equal(texts(eve).includes('members only'), false);
+  assert.equal(texts(a).includes('let me in'), false);
+});
+
+test('owner: join request with a greeting, approved, then the guest is in', async () => {
+  const broker = new FakeBroker();
+  const a = await ownedRoom({ broker });
+  a.start();
+  const guestId = await newIdentity();
+  const settings = {
+    ...DEFAULTS, brokersEnabled: true, brokers: ['wss://fake'], presenceIntervalMs: 60,
+  };
+  const { lobbySecret, ownerId } = await a.joinLinkParts();
+  assert.notDeepEqual(lobbySecret, a.secret);
+  const ask = new JoinRequest({
+    identity: guestId, lobbySecret, ownerId, name: 'Bob', greeting: 'Hi, Bob from the club',
+    settings, WS: broker.ws(),
+  });
+  const approved = new Promise((resolve) => ask.on('approved', resolve));
+  await ask.start();
+  await until(() => a.joinRequests.length === 1);
+  assert.deepEqual(
+    [a.joinRequests[0].name, a.joinRequests[0].greeting, a.joinRequests[0].id],
+    ['Bob', 'Hi, Bob from the club', guestId.id],
+  );
+  assert.equal(a.roster.isMember(guestId.id), false); // nothing until the owner says yes
+  await a.approveJoin(guestId.id);
+  const grant = await approved;
+  assert.deepEqual(grant.secret, a.secret);
+  const b = await makeRoom({
+    name: 'Bob', secret: grant.secret, owner: grant.founder, identity: guestId, broker,
+  });
+  await b.receiveAdmin(grant.admit);
+  b.start();
+  await until(() => p2p(a) === 1 && p2p(b) === 1, 5000);
+  await a.sendText('welcome Bob');
+  await b.sendText('hello all');
+  await until(() => texts(a).includes('hello all') && texts(b).includes('welcome Bob'));
+  assert.equal(a.joinRequests.length, 0);
+  ask.stop();
+});
+
+test('owner: a declined join request never receives the room secret', async () => {
+  const broker = new FakeBroker();
+  const a = await ownedRoom({ broker });
+  a.start();
+  const guestId = await newIdentity();
+  const settings = { ...DEFAULTS, brokersEnabled: true, brokers: ['wss://fake'] };
+  const { lobbySecret, ownerId } = await a.joinLinkParts();
+  const ask = new JoinRequest({
+    identity: guestId, lobbySecret, ownerId, name: 'Eve', greeting: 'let me in', settings,
+    WS: broker.ws(),
+  });
+  let approved = false;
+  ask.on('approved', () => { approved = true; });
+  await ask.start();
+  await until(() => a.joinRequests.length === 1);
+  await a.declineJoin(guestId.id);
+  await until(() => ask.status === 'declined');
+  assert.equal(approved, false);
+  assert.equal(a.roster.isMember(guestId.id), false);
+  await assert.rejects(a.approveJoin(guestId.id), /no longer open/);
+  ask.stop();
+});
+
+test('owner: a link with a different owner id reaches nobody', async () => {
+  const broker = new FakeBroker();
+  const a = await ownedRoom({ broker });
+  a.start();
+  const guestId = await newIdentity();
+  const settings = { ...DEFAULTS, brokersEnabled: true, brokers: ['wss://fake'] };
+  const { lobbySecret } = await a.joinLinkParts();
+  const ask = new JoinRequest({
+    identity: guestId, lobbySecret, ownerId: guestId.id, name: 'Mallory', greeting: 'hi',
+    settings, WS: broker.ws(),
+  });
+  await ask.start();
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(a.joinRequests.length, 0);
+  ask.stop();
+});
+
+test('owner: removing a member drops them, tells them, and keeps them out', async () => {
+  const a = await ownedRoom();
+  const b = await joinByCode(a, 'Bob');
+  const c = await joinByCode(a, 'Cy');
+  await until(() => c.roster.isMember(b.identity.id));
+  const removed = new Promise((resolve) => b.on('removed', resolve));
+  await a.removeMember(b.identity.id);
+  await removed;
+  assert.equal(b.removed, true);
+  await assert.rejects(b.sendText('still here?'), /removed/);
+  await until(() => c.roster.revoked.has(b.identity.id) && p2p(a) === 1 && p2p(c) === 1);
+  assert.equal(a.peerList.some((p) => p.id === b.identity.id), false);
+  assert.deepEqual(a.membersView().map((m) => m.name).sort(), ['Ada', 'Cy']);
+  await assert.rejects(c.removeMember(a.identity.id), /Only the room owner/);
+  await assert.rejects(a.removeMember(a.identity.id), /Transfer the room first/);
+});
+
+test('owner: the owner can delete anyone\'s message, a member only their own', async () => {
+  const a = await ownedRoom();
+  const b = await joinByCode(a, 'Bob');
+  const mine = await a.sendText('from the owner');
+  const theirs = await b.sendText('from Bob');
+  await until(() => b.log.has(mine.id) && a.log.has(theirs.id));
+  await assert.rejects(b.deleteMessage(mine.id), /only delete your own/);
+  await a.deleteMessage(theirs.id);
+  await until(() => b.log.isGone(theirs.id));
+  for (const room of [a, b]) {
+    const stub = room.log.timeline().find((e) => e.kind === 'gone');
+    assert.equal(stub.name, 'Ada'); // the tombstone says who deleted it
+    assert.equal(stub.by, a.identity.id);
+  }
+  assert.equal(texts(a).includes('from Bob'), false);
+});
+
+test('owner: transferring ownership moves every power, and survives a restart', async () => {
+  const kv = new MemoryKV();
+  const identity = await newIdentity();
+  const a = await makeRoom({ name: 'Ada', kv, identity, owner: identity.id });
+  const b = await joinByCode(a, 'Bob');
+  await assert.rejects(a.transferOwnership(identity.id), /current member/);
+  await a.transferOwnership(b.identity.id);
+  await until(() => b.isOwner && !a.isOwner);
+  assert.equal(a.roster.owner, b.identity.id);
+  await assert.rejects(a.createInvite(), /Only the room owner/);
+  await assert.rejects(a.removeMember(b.identity.id), /Only the room owner/);
+  const c = await joinByCode(b, 'Cy'); // the new owner admits
+  assert.equal(c.ownerId, b.identity.id);
+  assert.equal(c.roster.founder, a.identity.id); // trust still roots in the room's creator
+  await until(() => a.roster.isMember(c.identity.id));
+  const again = await makeRoom({
+    name: 'Ada', kv, identity, secret: a.secret, owner: identity.id,
+  });
+  assert.equal(again.roster.owner, b.identity.id); // replayed from the stored chain
+  assert.equal(again.roster.isMember(c.identity.id), true);
+});
+
+test('owner: membership envelopes are never trimmed from the log', async () => {
+  const a = await ownedRoom({ extra: { logCap: 5 } });
+  const b = await joinByCode(a, 'Bob', { extra: { logCap: 5 } });
+  for (let i = 0; i < 20; i++) await a.sendText(`m${i}`);
+  assert.ok(kinds(a).includes('text'));
+  assert.equal(a.log.list().filter((e) => e.kind === 'admit').length, 1);
+  assert.equal(a.log.list().length <= 6, true);
+  assert.equal(b.roster.isMember(b.identity.id) || b.roster.owner === a.identity.id, true);
 });

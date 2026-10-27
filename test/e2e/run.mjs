@@ -259,6 +259,15 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
   await mine.getByRole('button', { name: 'Delete' }).click();
   await b.locator('.msg.gone', { hasText: /anon-\w+ deleted a message/ }).waitFor();
   await b.locator('.quote.gone', { hasText: 'Deleted message' }).waitFor();
+
+  // The creator owns the room: the member list says so, and offers owner actions.
+  await a.getByRole('button', { name: 'Members' }).click();
+  await a.locator('.member', { hasText: 'owner' }).waitFor();
+  await a.locator('.member').nth(1).getByRole('button', { name: 'Remove' }).waitFor();
+  await a.keyboard.press('Escape');
+  await b.getByRole('button', { name: 'Members' }).click();
+  assert.equal(await b.getByRole('button', { name: 'Remove' }).count(), 0); // only the owner
+  await b.keyboard.press('Escape');
   assert.deepEqual([...a.errors, ...b.errors], []);
   await Promise.all([a, b].map((p) => p.context().close()));
 });

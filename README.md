@@ -85,6 +85,21 @@ if no broker is reachable; with brokers, reconnection is automatic).
   loaded only on request. Peers sniff bytes instead of trusting mime types and check the
   pixel count from the header before decoding. SVG is shown only through `<img>` (never as a
   document), rejected with scripts/entities, and only when received whole (<= 2 MB).
+* **Owner and membership:** a room made now has an owner (its creator) who admits everyone.
+  Members are a chain of owner-signed envelopes (`admit`, `revoke`, `transfer`, each naming
+  the previous one in `prev`, so clocks do not matter and a removed owner cannot backdate).
+  A link carries only a *lobby* secret (derived one-way from the room secret, bound to the
+  owner's id): it reaches the owner, it cannot read the room. The joiner sends a signed
+  greeting plus a one-time X25519 key; the owner answers with the room secret sealed to
+  that key and signed. Pairing by an owner-made code counts as approval. Peers talk chat
+  only with identities in the chain (others are dropped after `adminTimeoutMs`), the
+  chain is never trimmed, and a removed identity is refused at once. The owner can also
+  delete anyone's message and hand the room to a member (`transfer`; old join links then
+  stop working, trust stays rooted in the creator's id). Rooms made before this update
+  have no owner and stay open to anyone with the link.
+  Known gap: everyone who ever held the room secret (including a removed member) can read
+  text relayed through the brokers, and a leaked secret lets someone sit in on that relay;
+  P2P links are protected by the membership check. Rotating a relay key on removal is next.
 * **Attachments:** pasted, dropped and picked files wait in the message box (chips with a
   preview and a remove button) and are sent, to everyone, only with Enter or Send: files
   first, then the text. The message box grows with its text up to a cap.

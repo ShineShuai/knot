@@ -9,7 +9,11 @@
 //   * automatic: peers with the room secret find each other through brokers
 //   * manual:    createInvite() / answerOffer() / acceptAnswer() exchange codes
 //
-// Events: 'message'(envelope), 'peers'(list), 'brokers'({connected,total})
+// Rooms with an owner (the creator) let in only those the owner admits: see roster.js and
+// lobby.js. Rooms without one stay open to anyone holding the secret.
+//
+// Events: 'message'(envelope), 'peers'(list), 'brokers'({connected,total}),
+//         'roster'(), 'requests'() (owner: join requests changed), 'removed'()
 import { Emitter } from '../util/emitter.js';
 import { HLC } from '../util/hlc.js';
 import { RateLimiter } from '../util/rate.js';
@@ -30,14 +34,18 @@ import { FileTransfer } from '../files/transfer.js';
 import { PreviewCache } from '../files/preview-cache.js';
 import { asImage } from '../files/image.js';
 import {
-  authorIdOf, createEnvelope, delBody, previewRef, quoteOf, replyBody, verifyEnvelope,
+  ADMIN_KINDS, admitBody, authorIdOf, authorOfId, createEnvelope, delBody, previewRef, quoteOf,
+  replyBody, revokeBody, transferBody, verifyEnvelope,
 } from './envelope.js';
 import { MessageLog } from './log.js';
 import { MessageStore } from './message-store.js';
+import { Roster } from './roster.js';
+import { lobbyKeys, lobbySecretOf, makeDeny, makeGrant, readRequest } from './lobby.js';
 
 const SEEN_SESSIONS_LIMIT = 200;
 const MAX_FRAME_BYTES = 48 * 1024; // keep chat frames well under every browser's SCTP limit
 const REDIAL_MS = 10000;
+const MAX_JOIN_REQUESTS = 50;
 
 export class Room extends Emitter {
   /** peerId -> { id, pub, name, link, via:'broker'|'manual', state:'connecting'|'p2p', sas } */
@@ -47,6 +55,8 @@ export class Room extends Emitter {
 
   #aes; #store; #channel = null; #timers = new Set();
   #pulls = new Map();        // preview id -> in-flight fetch (shared by every asker)
+  #joinRequests = new Map(); // joiner id -> request waiting for the owner's decision
+  #lobby = null; #lobbyId = null;
   #pending = new Map();      // session -> { link, offer, peer|null } handshakes awaiting an answer
   #seenSessions = new Set(); // offers already answered (replay protection)
   #dialedAt = new Map();
@@ -59,11 +69,14 @@ export class Room extends Emitter {
   }
 
   constructor(
-    { identity, secret, label, kv, settings, iceServers, linkFactory, WS, derive },
+    { identity, secret, label, owner = null, kv, settings, iceServers, linkFactory, WS, derive },
     keys,
   ) {
     super();
     this.identity = identity;
+    /** Membership, when the room has an owner (null: anyone with the secret may join). */
+    this.roster = owner ? new Roster(owner) : null;
+    this.removed = false; // the owner removed us
     this.secret = secret;
     this.label = label;
     this.settings = settings; // live object: edits in Settings apply to new connections
@@ -93,13 +106,16 @@ export class Room extends Emitter {
     const viaRelay = (id) => !!this.#channel && this.settings.relayFallback && this.#isFresh(
       this.members.get(id) ?? { seen: 0 },
     );
+    const owner = (id) => id === this.roster?.owner;
     const rows = [...this.peers.values()].map(({ id, name, state, via, sas }) => ({
-      id, name, via, sas, state: state === 'p2p' || !viaRelay(id) ? state : 'relay',
+      id, name, via, sas, owner: owner(id),
+      state: state === 'p2p' || !viaRelay(id) ? state : 'relay',
     }));
     for (const [id, m] of this.members) {
-      if (!this.peers.has(id) && this.#isFresh(m)) rows.push(
-        { id, name: m.name, state: viaRelay(id) ? 'relay' : 'seen', via: 'broker', sas: null },
-      );
+      if (!this.peers.has(id) && this.#isFresh(m)) rows.push({
+        id, name: m.name, state: viaRelay(id) ? 'relay' : 'seen', via: 'broker', sas: null,
+        owner: owner(id),
+      });
     }
     return rows;
   }
@@ -110,7 +126,12 @@ export class Room extends Emitter {
     const trimmed = this.log.trim();
     const deleted = stored.filter((e) => !this.log.get(e.id) && !trimmed.includes(e));
     await this.#store.remove([...trimmed, ...deleted]); // deleted messages leave no content
+    this.roster?.load(stored);
+    this.removed = !!this.roster?.revoked.has(this.identity.id);
   }
+
+  get isOwner() { return !!this.roster && this.roster.owner === this.identity.id; }
+  get ownerId() { return this.roster?.owner ?? null; }
 
   /** Connection details of everyone we know, for the hold-V reveal:
    *  { id, name, state, via, net: { local, remote, protocol, rtt } | null } */
@@ -125,7 +146,7 @@ export class Room extends Emitter {
   // ---- lifecycle -------------------------------------------------------------------
 
   start() {
-    if (!this.settings.brokersEnabled || !this.settings.brokers.length) return;
+    if (this.removed || !this.settings.brokersEnabled || !this.settings.brokers.length) return;
     this.#channel = new RoomChannel({
       roomId: this.id, aes: this.#aes, selfId: this.identity.id, WS: this.WS,
       brokers: this.settings.brokers, topicPrefix: this.settings.topicPrefix,
@@ -139,11 +160,13 @@ export class Room extends Emitter {
     );
     this.#channel.start();
     this.#every(this.settings.presenceIntervalMs, () => this.#announce());
+    this.#syncLobby().catch(() => {});
   }
 
   stop() {
     for (const t of this.#timers) { clearInterval(t); clearTimeout(t); }
     this.#channel?.stop();
+    this.#lobby?.stop();
     for (const { link } of this.#pending.values()) link.close();
     for (const { link } of this.peers.values()) link.close();
   }
@@ -161,10 +184,11 @@ export class Room extends Emitter {
     return this.#publish('reply', replyBody(text, quoteOf(quote)));
   }
 
-  /** Recall one of our own messages: everyone drops its content and sees who deleted it. */
+  /** Recall a message: everyone drops its content and sees who deleted it. Its author may,
+   *  and so may the room owner. */
   async deleteMessage(id) {
     if (this.log.isGone(id) || this.log.get(id)?.kind === 'del') return null;
-    if (id.split('-').slice(2).join('-') !== this.identity.id) {
+    if (authorOfId(id) !== this.identity.id && !this.isOwner) {
       throw new Error('You can only delete your own messages');
     }
     return this.#publish('del', delBody(id));
@@ -229,8 +253,10 @@ export class Room extends Emitter {
   }
 
   async #publish(kind, body) {
+    if (this.removed) throw new Error('You were removed from this room');
     const env = await createEnvelope(this.identity, this.hlc, this.id, kind, body, this.#name);
-    await this.#accept(env, null);
+    const kept = await this.#accept(env, null);
+    if (!kept && ADMIN_KINDS.includes(kind)) throw new Error('That change could not be applied');
     this.#sendToPeers(env);
     if (this.#needsRelay()) this.#channel.sendRelay(utf8.encode(JSON.stringify(env)));
     return env;
@@ -239,7 +265,7 @@ export class Room extends Emitter {
   #sendToPeers(env, exceptId = null) {
     const frame = JSON.stringify({ t: 'msg', e: env });
     for (const p of this.peers.values()) {
-      if (p.state === 'p2p' && p.id !== exceptId) {
+      if (p.state === 'p2p' && p.synced && p.id !== exceptId) {
         try { p.link.sendChat(frame); } catch { /* link dying */ }
       }
     }
@@ -264,10 +290,29 @@ export class Room extends Emitter {
       maxFileBytes: this.settings.maxFileBytes,
     };
     if (!(await verifyEnvelope(env, this.id, limits))) return false;
+    if (!this.#permits(env)) return false;
     return this.#accept(env, source);
   }
 
+  /** Who may post what. Admin envelopes are checked by the roster itself. */
+  #permits(env) {
+    const author = authorIdOf(env);
+    const owner = this.roster?.owner;
+    if (env.kind === 'del' && authorOfId(env.body.id) !== author && author !== owner) return false;
+    return !this.roster || ADMIN_KINDS.includes(env.kind) || this.roster.isMember(author);
+  }
+
   async #accept(env, source) {
+    const batch = this.roster && ADMIN_KINDS.includes(env.kind) ? this.roster.apply(env) : [env];
+    let kept = false;
+    for (const e of batch) {
+      const done = await this.#keep(e, source);
+      if (e === env) kept = done;
+    }
+    return kept;
+  }
+
+  async #keep(env, source) {
     const doomed = env.kind === 'del' ? this.log.get(env.body.id) : null;
     if (!this.log.add(env)) return false;
     this.hlc.observe(env);
@@ -276,9 +321,37 @@ export class Room extends Emitter {
       [this.#store.save(env), this.#store.remove(doomed ? [...removed, doomed] : removed)],
     ).catch((err) => console.error('could not save message', err));
     if (doomed) await this.#forget(doomed);
-    if (!removed.includes(env)) this.emit('message', env);
+    if (ADMIN_KINDS.includes(env.kind)) await this.#onAdmin(env);
+    else if (!removed.includes(env)) this.emit('message', env);
     if (source) this.#sendToPeers(env, source.id); // gossip: heals meshes with a missing link
     return true;
+  }
+
+  /** A membership change took effect. */
+  async #onAdmin(env) {
+    const { kind, body } = env;
+    if (kind === 'revoke') {
+      if (body.id === this.identity.id) return this.#beRemoved();
+      this.members.delete(body.id);
+      this.#joinRequests.delete(body.id);
+      const peer = this.peers.get(body.id);
+      if (peer) { // tell them first, so their app can say so, then drop the link
+        try { peer.link.sendChat(JSON.stringify({ t: 'admin', es: [env] })); } catch { /* gone */ }
+        const timer = setTimeout(() => peer.link.close(), 300);
+        timer.unref?.();
+      }
+    }
+    if (kind === 'transfer') await this.#syncLobby();
+    this.#emitPeers();
+    this.emit('roster');
+    return undefined;
+  }
+
+  #beRemoved() {
+    this.removed = true;
+    this.stop();
+    this.emit('removed');
+    this.emit('roster');
   }
 
   /** A deleted file message: stop offering it and drop every cached copy of its preview. */
@@ -299,6 +372,12 @@ export class Room extends Emitter {
     if (!entry.limiter.allow()) return;
     let m;
     try { m = JSON.parse(raw); } catch { return; }
+    if (this.roster && m?.t === 'admin' && Array.isArray(m.es)) {
+      for (const e of m.es.slice(0, 100)) await this.#ingest(e, null);
+      if (!entry.synced && this.roster.isMember(entry.id)) this.#markSynced(entry);
+      return;
+    }
+    if (this.roster && !entry.synced) return; // not (yet) known to be a member: ignored
     if (m?.t === 'msg') await this.#ingest(m.e, entry);
     else if (m?.t === 'have' && Array.isArray(m.ids)) this.#sendGive(
       entry.link,
@@ -313,6 +392,28 @@ export class Room extends Emitter {
   }
 
   // ---- history sync (on every new link) -------------------------------------------------------
+
+  /** Membership comes first: both sides send their admin chain, and only talk chat once the
+   *  other side is a known member. */
+  #sendAdmin(link) {
+    const envs = this.roster.envs();
+    let [from, size] = [0, 0];
+    for (let at = 0; at < envs.length; at++) {
+      const n = JSON.stringify(envs[at]).length;
+      if (size + n > MAX_FRAME_BYTES && at > from) {
+        link.sendChat(JSON.stringify({ t: 'admin', es: envs.slice(from, at) }));
+        [from, size] = [at, 0];
+      }
+      size += n;
+    }
+    if (from < envs.length) link.sendChat(JSON.stringify({ t: 'admin', es: envs.slice(from) }));
+  }
+
+  #markSynced(entry) {
+    entry.synced = true;
+    this.#sendHave(entry.link);
+    this.#emitPeers();
+  }
 
   #sendHave(link) {
     const window = this.settings.syncWindow;
@@ -361,6 +462,7 @@ export class Room extends Emitter {
       link,
       via,
       state: 'connecting',
+      synced: false,
       sas: null,
       limiter: new RateLimiter(this.settings.messagesPerSecond),
     };
@@ -372,7 +474,12 @@ export class Room extends Emitter {
       clearTimeout(timer);
       entry.state = 'p2p';
       this.#emitPeers();
-      this.#sendHave(link);
+      if (!this.roster) { entry.synced = true; this.#sendHave(link); } else {
+        this.#sendAdmin(link);
+        if (this.roster.isMember(peer.id)) this.#markSynced(entry);
+        const wait = setTimeout(() => !entry.synced && link.close(), this.settings.adminTimeoutMs);
+        wait.unref?.();
+      }
       this.#announce();
     });
     link.on('chat', (raw) => this.#onChat(entry, raw));
@@ -400,12 +507,13 @@ export class Room extends Emitter {
     this.#timers.add(timer);
   }
 
-  async #newOffer({ roomSecret }) {
+  async #newOffer({ roomSecret, founder = null }) {
     const link = this.#newLink();
     try {
       const sdp = await link.createOffer();
       const offer = await signHandshake(this.identity, {
-        kind: 'offer', session: randomBytes(8), ts: Date.now(), name: this.#name, roomSecret, sdp,
+        kind: 'offer', session: randomBytes(8), ts: Date.now(), name: this.#name, roomSecret,
+        founder, sdp,
       });
       return { link, offer };
     } catch (err) { link.close(); throw err; }
@@ -415,6 +523,7 @@ export class Room extends Emitter {
   async #answer(offer, via) {
     const peer = { id: await peerIdOf(offer.pub), pub: offer.pub, name: offer.name };
     if (peer.id === this.identity.id) throw new Error('That code was made by this device');
+    if (this.roster?.revoked.has(peer.id)) throw new Error('This person was removed from the room');
     const session = toB64u(offer.session);
     if (this.#seenSessions.has(session)) throw new Error('This code was already used');
     this.#seenSessions.add(session);
@@ -453,6 +562,8 @@ export class Room extends Emitter {
     if (entry?.link !== pending.link) { pending.link.close(); return false; }
     entry.sas = await shortAuthString(pending.offer.sdp.fingerprint, answer.sdp.fingerprint);
     this.#emitPeers();
+    // Pairing by a code the owner made is the owner's approval; a broker dial is not.
+    if (this.isOwner && !pending.peer) await this.#admit(id, answer.name).catch(() => {});
     await pending.link.acceptAnswer(answer.sdp);
     return true;
   }
@@ -462,7 +573,12 @@ export class Room extends Emitter {
 
   /** Step 1 (inviter): returns a code to hand to the other person. */
   async createInvite() {
-    const { link, offer } = await this.#newOffer({ roomSecret: this.secret });
+    if (this.roster && !this.isOwner) {
+      throw new Error('Only the room owner can create pairing codes');
+    }
+    const { link, offer } = await this.#newOffer(
+      { roomSecret: this.secret, founder: this.roster?.founder ?? null },
+    );
     this.#watchPending(offer, link, null, this.settings.inviteTtlMs);
     return { code: encodeCode(offer), session: toB64u(offer.session) };
   }
@@ -482,12 +598,137 @@ export class Room extends Emitter {
     );
   }
 
+  // ---- owner: members and join requests ------------------------------------------------------
+
+  #requireOwner() { if (!this.isOwner) throw new Error('Only the room owner can do this'); }
+
+  /** Everyone in the room (owner first), for the members list. */
+  membersView() {
+    if (!this.roster) return [];
+    const live = new Map(this.peerList.map((p) => [p.id, p.state]));
+    return [this.roster.owner, ...this.roster.members.keys()].map((id) => ({
+      id, name: this.#nameOf(id), owner: id === this.roster.owner, self: id === this.identity.id,
+      state: id === this.identity.id ? 'self' : live.get(id) ?? 'offline',
+    }));
+  }
+
+  #nameOf(id) {
+    if (id === this.identity.id) return this.#name;
+    const seen = this.peers.get(id)?.name ?? this.members.get(id)?.name
+      ?? this.roster?.members.get(id)?.name;
+    if (seen) return seen;
+    const env = this.log.list().findLast((e) => authorIdOf(e) === id);
+    return env?.name ?? id.slice(0, 4);
+  }
+
+  /** What a join link needs: the lobby secret (cannot read the room) and the owner's id.
+   *  Anyone in the room may hand it out; the owner still decides about every request. */
+  async joinLinkParts() {
+    if (!this.roster) return null;
+    return { lobbySecret: await lobbySecretOf(this.secret), ownerId: this.roster.owner };
+  }
+
+  get joinRequests() {
+    return [...this.#joinRequests.values()].map(({ id, name, greeting, ts }) => (
+      { id, name, greeting, ts }
+    ));
+  }
+
+  /** Owner only: let a requester in. They get the room secret, sealed to them alone. */
+  async approveJoin(id) {
+    this.#requireOwner();
+    const req = this.#joinRequests.get(id);
+    if (!req) throw new Error('This request is no longer open');
+    await this.#admit(req.id, req.name);
+    await this.#grant(req);
+    this.#joinRequests.delete(id);
+    this.emit('requests');
+  }
+
+  async declineJoin(id) {
+    this.#requireOwner();
+    const req = this.#joinRequests.get(id);
+    if (!req) return;
+    this.#joinRequests.delete(id);
+    this.emit('requests');
+    await this.#lobby?.sendSignal(
+      req.id, await makeDeny(this.identity, { lobbyId: this.#lobbyId, to: req.id }),
+    );
+  }
+
+  /** Owner only: remove a member. Honest peers drop their links and ignore them from now on. */
+  async removeMember(id) {
+    this.#requireOwner();
+    if (id === this.identity.id) throw new Error('Transfer the room first, then leave it');
+    if (!this.roster.isMember(id)) throw new Error('Not a member of this room');
+    return this.#publish('revoke', revokeBody({ id }, this.roster.head));
+  }
+
+  /** Owner only: hand the room to another member. Old join links stop working. */
+  async transferOwnership(id) {
+    this.#requireOwner();
+    if (!this.roster.members.has(id)) throw new Error('Pick a current member');
+    return this.#publish('transfer', transferBody({ to: id }, this.roster.head));
+  }
+
+  /** Feed an owner-signed envelope (the approval that came with the grant). */
+  receiveAdmin(env) { return this.#ingest(env, null); }
+
+  #admit(id, name) {
+    if (this.roster.isMember(id)) return null;
+    return this.#publish('admit', admitBody({ id, name }, this.roster.head));
+  }
+
+  async #grant(req) {
+    const admit = this.roster.chain.findLast((e) => e.kind === 'admit' && e.body.id === req.id);
+    const payload = {
+      secret: this.secret, label: this.label, admit, founder: this.roster.founder,
+    };
+    await this.#lobby?.sendSignal(req.id, await makeGrant(
+      this.identity, { lobbyId: this.#lobbyId, to: req.id, boxPub: req.boxPub, payload },
+    ));
+  }
+
+  /** The owner listens in the lobby; nobody else does. Follows ownership changes. */
+  async #syncLobby() {
+    const { settings } = this;
+    const want = this.isOwner && !this.removed && settings.brokersEnabled
+      && settings.brokers.length > 0;
+    if (!want) {
+      this.#lobby?.stop();
+      this.#lobby = null;
+      this.#joinRequests.clear();
+      return;
+    }
+    if (this.#lobby) return;
+    const keys = await lobbyKeys(await lobbySecretOf(this.secret), this.identity.id);
+    this.#lobbyId = keys.id;
+    this.#lobby = new RoomChannel({
+      roomId: keys.id, aes: keys.aes, selfId: this.identity.id, WS: this.WS,
+      brokers: settings.brokers, topicPrefix: settings.topicPrefix,
+    });
+    this.#lobby.on('signal', (bytes) => this.#onJoinRequest(bytes));
+    this.#lobby.start();
+  }
+
+  async #onJoinRequest(bytes) {
+    const req = await readRequest(bytes, this.#lobbyId);
+    if (!req || !this.isOwner || req.id === this.identity.id) return;
+    if (this.roster.revoked.has(req.id)) return;
+    if (this.roster.isMember(req.id)) return void this.#grant(req).catch(() => {}); // knocked twice
+    const isNew = !this.#joinRequests.has(req.id);
+    if (isNew && this.#joinRequests.size >= MAX_JOIN_REQUESTS) return;
+    this.#joinRequests.set(req.id, req);
+    if (isNew) this.emit('requests');
+  }
+
   // ---- automatic pairing through brokers
   // --------------------------------------------------------------------
 
   #announce() { this.#channel?.announce({ pub: this.identity.pub, name: this.#name }); }
 
   async #onPresence({ id, pub, name }) {
+    if (this.roster?.revoked.has(id)) return;
     const isNew = !this.members.has(id);
     this.members.set(id, { pub, name, seen: Date.now() });
     if (isNew) { this.#emitPeers(); this.#announceSoon(); }

@@ -185,10 +185,11 @@ if no broker is reachable; with brokers, reconnection is automatic).
   current text or file name contains every word (case and accents ignored); it covers what
   this device holds (the log, up to `logCap`). Export (⤓) saves that same history as readable
   text or as the signed envelopes (JSON, verifiable); shared files are not included.
-* **Updates:** the deploy writes `build.json` ({"build": "<commit>"}). The page reads it at
-  start and now and then (at most once a minute, also when you return to the tab); when it
-  differs, a bar offers "Reload" (and asks first during a call). A static page cannot update
-  itself. Without `build.json` (local development) nothing happens.
+* **Updates:** the deploy stamps the commit into `index.html` (`<meta name="build">`) and writes
+  `build.json` ({"build": "<commit>"}). The page compares the two every 15 minutes and when you
+  return to the tab (at most once a minute); when they differ, a bar offers "Reload" (and asks
+  first during a call). A static page cannot update itself. Without the stamp (local
+  development, tests) nothing happens, not even a request.
 * **Delete and quote:** a `del` envelope (signed by the author, naming one of the
   author's own message ids) makes every peer drop that message's content from memory
   and storage and show "<name> deleted a message" in its place; a copy that arrives

@@ -20,7 +20,9 @@ async function boot() {
     { kv, identity, settings, iceServers: () => iceServersFrom(settings, rankedStun) },
   );
   await model.load();
-  const updates = new UpdateWatcher();
+  const updates = new UpdateWatcher({
+    running: document.querySelector('meta[name="build"]')?.content,
+  });
   const ui = mountUi(root, model, { updates });
   updates.start();
 

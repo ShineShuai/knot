@@ -397,7 +397,8 @@ export class Room extends Emitter {
     ).catch((err) => console.error('could not save message', err));
     if (doomed) await this.#forget(doomed);
     if (ADMIN_KINDS.includes(env.kind)) await this.#onAdmin(env);
-    else if (!removed.includes(env)) this.emit('message', env);
+    // Membership changes are shown in the conversation too ("Bob joined"): redraw for them.
+    if (env.kind !== 'recovery' && !removed.includes(env)) this.emit('message', env);
     if (source) this.#sendToPeers(env, source.id); // gossip: heals meshes with a missing link
     return true;
   }
@@ -695,10 +696,13 @@ export class Room extends Emitter {
     }));
   }
 
+  /** A readable name for someone in this room, even after they left. */
+  nameOf(id) { return this.#nameOf(id); }
+
   #nameOf(id) {
     if (id === this.identity.id) return this.#name;
     const seen = this.peers.get(id)?.name ?? this.members.get(id)?.name
-      ?? this.roster?.members.get(id)?.name;
+      ?? this.roster?.names.get(id);
     if (seen) return seen;
     const env = this.log.list().findLast((e) => authorIdOf(e) === id);
     return env?.name ?? id.slice(0, 4);

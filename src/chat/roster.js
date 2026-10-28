@@ -23,6 +23,7 @@ export class Roster {
   head = '';
   chain = []; // applied envelopes, in order
   members = new Map(); // id -> { name } for everyone except the owner
+  names = new Map(); // id -> the name they were admitted under (kept after removal)
   revoked = new Set();
   recoveryKey = null; // base64url public key of the current recovery code, if any
   epoch = { n: 0, commit: null }; // the latest key rotation the owner announced
@@ -84,6 +85,7 @@ export class Roster {
     const { body } = env;
     if (env.kind === 'admit') {
       if (body.id !== this.owner) this.members.set(body.id, { name: body.name });
+      this.names.set(body.id, body.name);
       this.revoked.delete(body.id);
     } else if (env.kind === 'revoke') {
       this.members.delete(body.id);

@@ -120,6 +120,7 @@ await check('UI: create room, send message, persists after reload', async () => 
   const page = await newPage();
   await page.goto(`${base}/index.html`);
   await page.getByRole('button', { name: 'New room' }).click();
+  await page.getByRole('button', { name: 'Create room' }).click(); // nothing exists before this
   await page.getByRole('button', { name: 'I saved it' }).click(); // the recovery code comes first
   await page.locator('dialog').waitFor();
   assert.match(
@@ -143,6 +144,7 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
   const [a, b] = [await newPage(), await newPage()];
   await Promise.all([a, b].map((p) => p.goto(`${base}/index.html`)));
   await a.getByRole('button', { name: 'New room' }).click();
+  await a.getByRole('button', { name: 'Create room' }).click();
   assert.match(await a.locator('dialog textarea').inputValue(), /^knot-rk1-/);
   await a.getByRole('button', { name: 'I saved it' }).click();
   await a.getByRole('button', { name: 'Create pairing code' }).click();

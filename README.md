@@ -123,6 +123,12 @@ if no broker is reachable; with brokers, reconnection is automatic).
   merged on save, so tabs do not drop each other's rooms. If an owned room was already
   saved without its owner, the creating device recognises its own signature on the chain
   and takes it back; other members cannot, and rejoin through the owner.
+* **Room names:** "New room" opens a dialog (name, Create or Cancel): nothing exists until
+  Create is pressed, and a double click makes one room. The default name is the first free
+  "Room N". The ✎ button renames a room; names are local to each device. The room list is
+  saved one write at a time, so rooms created together are all kept.
+* **Membership notices:** admissions, removals, hand-overs and recoveries appear in the
+  conversation as one quiet line ("Bob joined"); recovery keys never do.
 * **Attachments:** pasted, dropped and picked files wait in the message box (chips with a
   preview and a remove button) and are sent, to everyone, only with Enter or Send: files
   first, then the text. The message box grows with its text up to a cap.

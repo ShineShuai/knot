@@ -45,9 +45,11 @@ export class MessageLog {
   list() { return [...this.#byId.values()].sort(byStamp); }
 
   /** What to show, oldest first: messages, and in place of each deleted one a stub
-   *  { id, kind: 'gone', ms, c, by, name, at } saying who deleted it (and when). */
+   *  { id, kind: 'gone', ms, c, by, name, at } saying who deleted it (and when). Membership
+   *  envelopes are included: the UI shows them as short notices ("Bob joined"). */
   timeline() {
-    const items = [...this.#byId.values()].filter((e) => e.kind !== 'del');
+    const hidden = ['del', 'recovery']; // deletions show as stubs; recovery keys never show
+    const items = [...this.#byId.values()].filter((e) => !hidden.includes(e.kind));
     for (const [id, del] of this.#gone) {
       const [ms, c] = id.split('-').map((part) => parseInt(part, 36) || 0);
       items.push({ id, kind: 'gone', ms, c, by: authorIdOf(del), name: del.name, at: del.ms });

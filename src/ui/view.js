@@ -4,7 +4,8 @@ import { fromB64u, toB64u } from '../util/bytes.js';
 import { saveSettings } from '../config.js';
 import { decodeCode } from '../net/handshake.js';
 import { encodeQr, qrPath } from '../qr/qr.js';
-import { authorIdOf, quoteOf } from '../chat/envelope.js';
+import { ADMIN_KINDS, authorIdOf, quoteOf } from '../chat/envelope.js';
+import { nextRoomName } from '../app.js';
 import { fmtSize, h, qrSvg, safeFileName } from './dom.js';
 import { t } from './i18n.js';
 import { ImageCard } from './image-card.js';
@@ -124,13 +125,59 @@ class Ui {
       ),
       h('ul', { class: 'rooms' }, items),
       h('footer', {},
-        h('button', { class: 'primary', onclick: () => this.#createRoom() }, t('newRoom')),
+        h('button', { class: 'primary', onclick: () => this.#newRoomDialog() }, t('newRoom')),
         h('button', { onclick: () => this.#joinDialog() }, t('joinRoom'))),
     );
   }
 
-  async #createRoom() {
-    const room = await this.model.createRoom(`${t('roomDefault')} ${this.model.rooms.size + 1}`);
+  /** Nothing is created until the button is pressed: Cancel or Close leave things as they were. */
+  #newRoomDialog() {
+    this.#nameDialog({
+      title: t('newRoom'), button: t('createRoom'), value: this.#freeRoomName(),
+      onSave: (name) => this.#createRoom(name),
+    });
+  }
+
+  #freeRoomName() {
+    return nextRoomName([...this.model.rooms.values()].map((r) => r.label), t('roomDefault'));
+  }
+
+  #renameDialog(room) {
+    this.#nameDialog({
+      title: t('renameRoom'), button: t('save'), value: room.label || this.#freeRoomName(),
+      onSave: async (name) => {
+        await this.model.renameRoom(room.id, name);
+        this.dialog.close();
+        if (room === this.#current) this.#renderStage();
+      },
+    });
+  }
+
+  /** A one-field dialog: a name, then the action button. Enter works like the button. */
+  #nameDialog({ title, value, button, onSave }) {
+    const input = h('input', { type: 'text', maxLength: 40, value });
+    const save = h('button', { class: 'primary' }, button);
+    const go = async () => {
+      if (save.disabled) return; // a double click must not do it twice
+      save.disabled = true;
+      try { await onSave(input.value); } catch (err) {
+        this.notify(err.message);
+        save.disabled = false;
+      }
+    };
+    save.onclick = go;
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) go(); });
+    this.#open(title,
+      h('label', { class: 'field' }, t('roomName'), input),
+      h('div', { class: 'actions' }, save,
+        h('button', { onclick: () => this.dialog.close() }, t('cancel'))));
+    input.focus?.();
+    input.select?.();
+  }
+
+  async #createRoom(name) {
+    const label = name.trim().slice(0, 40) || this.#freeRoomName();
+    const room = await this.model.createRoom(label);
     this.select(room);
     await this.#ensureRecovery(room, () => this.#inviteDialog(room));
   }
@@ -323,6 +370,10 @@ class Ui {
       h('header', { class: 'stage-head' },
         h('button', { class: 'ghost back', onclick: () => this.select(null) }, t('rooms')),
         h('h2', {}, room.label || t('roomDefault')),
+        h('button', {
+          class: 'ghost', title: t('renameRoom'), 'aria-label': t('renameRoom'),
+          onclick: () => this.#renameDialog(room),
+        }, '✎'),
         brokers,
         membersBtn,
         h('button', { onclick: () => this.#inviteDialog(room) }, t('invite')),
@@ -391,6 +442,7 @@ class Ui {
 
   #renderMessage(room, env, redraw) {
     if (env.kind === 'gone') return this.#renderGone(room, env);
+    if (ADMIN_KINDS.includes(env.kind)) return this.#renderNotice(room, env);
     const own = authorIdOf(env) === room.identity.id;
     const parts = env.kind === 'file' ? [this.#renderFile(room, env, redraw)] : [
       env.kind === 'reply' ? this.#renderQuote(room, env.body.q) : null,
@@ -405,6 +457,19 @@ class Ui {
       h('div', { class: 'meta' },
         own ? t('you') : env.name, ' ', h('time', {}, clock(env.ms)), acts),
       ...parts);
+  }
+
+  /** Membership changes, as one quiet line in the conversation. */
+  #renderNotice(room, env) {
+    const { body } = env;
+    const lines = {
+      admit: () => t('sysJoined', { name: body.name }),
+      revoke: () => t('sysRemoved', { name: room.nameOf(body.id), by: env.name }),
+      transfer: () => t('sysOwner', { name: room.nameOf(body.to) }),
+      recover: () => t('sysRecovered', { name: env.name }),
+    };
+    return h('li', { class: 'msg gone', 'data-id': env.id },
+      h('p', { class: 'text' }, lines[env.kind]()));
   }
 
   /** What is left of a deleted message: who deleted it, in its old place. */

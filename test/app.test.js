@@ -2,7 +2,7 @@
 // an older version of the app (or a second tab) writing to the same store.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AppModel } from '../src/app.js';
+import { AppModel, nextRoomName } from '../src/app.js';
 import { DEFAULTS } from '../src/config.js';
 import { MemoryKV } from '../src/store/kv.js';
 import { newRoomSecret } from '../src/crypto/room-keys.js';
@@ -65,4 +65,31 @@ test('app: leaving a room forgets its owner and its keys', async () => {
   assert.equal(await kv.get(`owner:${room.id}`), undefined);
   assert.equal(await kv.get(`epoch:${room.id}`), undefined);
   assert.equal((await kv.get('rooms')).length, 0);
+});
+
+test('app: rooms created at the same moment are both kept', async () => {
+  const [kv, identity] = [new MemoryKV(), await newIdentity()];
+  const model = await open(kv, identity);
+  await Promise.all([model.createRoom('A'), model.createRoom('B'), model.createRoom('C')]);
+  assert.deepEqual([...(await open(kv, identity)).rooms.values()].map((r) => r.label).sort(),
+    ['A', 'B', 'C']);
+});
+
+test('app: renaming is saved, trimmed, capped, and empty names are ignored', async () => {
+  const [kv, identity] = [new MemoryKV(), await newIdentity()];
+  const model = await open(kv, identity);
+  const room = await model.createRoom('First');
+  await model.renameRoom(room.id, '  Second  ');
+  assert.equal(byLabel(await open(kv, identity), 'Second').id, room.id);
+  await model.renameRoom(room.id, '   ');
+  assert.equal(room.label, 'Second');
+  await model.renameRoom(room.id, 'x'.repeat(100));
+  assert.equal(room.label.length, 40);
+});
+
+test('app: default names are the first free one, even after leaving rooms', () => {
+  assert.equal(nextRoomName([], 'Room'), 'Room 1');
+  assert.equal(nextRoomName(['Room 1', 'Room 2'], 'Room'), 'Room 3');
+  assert.equal(nextRoomName(['Room 2'], 'Room'), 'Room 1');
+  assert.equal(nextRoomName(['Room 1', 'Chat', 'Room 3'], 'Room'), 'Room 2');
 });

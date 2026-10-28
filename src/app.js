@@ -8,9 +8,16 @@ import { verifyHandshake } from './net/handshake.js';
 import { Room } from './chat/room.js';
 import { MessageStore } from './chat/message-store.js';
 
+/** "Room 1", "Room 2", ...: the first one not taken, so two rooms never get the same name. */
+export function nextRoomName(labels, base) {
+  const used = new Set(labels);
+  for (let n = 1; ; n++) if (!used.has(`${base} ${n}`)) return `${base} ${n}`;
+}
+
 export class AppModel extends Emitter {
   rooms = new Map(); // room id -> Room
   #removed = new Set(); // ids of rooms left in this tab (so saving does not bring them back)
+  #saving = Promise.resolve();
 
   /** `WS`, `linkFactory`: injectable network pieces (tests); the defaults are the browser's. */
   constructor({ kv, identity, settings, iceServers, WS, linkFactory }) {
@@ -118,8 +125,25 @@ export class AppModel extends Emitter {
     return room;
   }
 
+  /** The name is only ours (each member names rooms on their own device). */
+  async renameRoom(id, label) {
+    const room = this.rooms.get(id);
+    const next = String(label ?? '').trim().slice(0, 40);
+    if (!room || !next) return;
+    room.label = next;
+    await this.#persist();
+    this.emit('rooms');
+  }
+
+  /** One save at a time: two rooms created together must both end up in the list. */
+  #persist() {
+    const run = this.#saving.then(() => this.#writeRooms());
+    this.#saving = run.catch(() => {});
+    return run;
+  }
+
   /** Save the room list, keeping rooms another tab added meanwhile. */
-  async #persist() {
+  async #writeRooms() {
     const mine = [...this.rooms.values()].map((r) => (
       { secret: toB64u(r.secret), label: r.label, owner: r.roster?.founder ?? null }
     ));

@@ -13,6 +13,8 @@ const browser = await chromium.launch({
     '--no-sandbox',
     '--allow-loopback-in-peer-connection',
     '--disable-features=WebRtcHideLocalIpsWithMdns',
+    '--use-fake-device-for-media-stream', // a test-pattern camera and a beeping microphone
+    '--use-fake-ui-for-media-stream', // and no permission prompt
   ],
 });
 const failures = [];
@@ -273,6 +275,95 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
   await b.getByRole('button', { name: 'Members' }).click();
   assert.equal(await b.getByRole('button', { name: 'Remove' }).count(), 0); // only the owner
   await b.keyboard.press('Escape');
+  assert.deepEqual([...a.errors, ...b.errors], []);
+  await Promise.all([a, b].map((p) => p.context().close()));
+});
+
+// ---- 3b. Audio/video call over real WebRTC (fake camera and microphone) ---------------------
+/** Two blank pages, each with a Room in `window.room`, paired by code over real WebRTC. */
+async function pairedRooms() {
+  const [a, b] = [await newPage(), await newPage()];
+  await Promise.all([a, b].map((p) => p.goto(`${base}/test/e2e/blank.html`)));
+  const open = async ({ name, secretB64 }) => {
+    const { Room } = await import('/src/chat/room.js');
+    const { DEFAULTS } = await import('/src/config.js');
+    const { MemoryKV } = await import('/src/store/kv.js');
+    const { loadIdentity } = await import('/src/crypto/identity.js');
+    const { newRoomSecret } = await import('/src/crypto/room-keys.js');
+    const { fromB64u } = await import('/src/util/bytes.js');
+    const kv = new MemoryKV();
+    window.room = await Room.open({
+      identity: await loadIdentity(kv), label: name, kv, iceServers: () => [],
+      secret: secretB64 ? fromB64u(secretB64) : newRoomSecret(),
+      settings: { ...DEFAULTS, name, brokersEnabled: false, gatherTimeoutMs: 1500 },
+    });
+  };
+  await a.evaluate(open, { name: 'Ada' });
+  const code = await a.evaluate(async () => (await window.room.createInvite()).code);
+  const secretB64 = await b.evaluate(async (c) => {
+    const { decodeCode } = await import('/src/net/handshake.js');
+    const { toB64u } = await import('/src/util/bytes.js');
+    return toB64u(decodeCode(c).roomSecret);
+  }, code);
+  await b.evaluate(open, { name: 'Bob', secretB64 });
+  const reply = await b.evaluate(async (c) => {
+    const { decodeCode } = await import('/src/net/handshake.js');
+    return window.room.answerOffer(decodeCode(c));
+  }, code);
+  await a.evaluate(async (c) => {
+    const { decodeCode } = await import('/src/net/handshake.js');
+    await window.room.acceptAnswer(decodeCode(c));
+  }, reply.code);
+  for (const p of [a, b]) await p.waitForFunction(
+    () => window.room.peerList.some((x) => x.state === 'p2p'), null, { timeout: 15000 },
+  );
+  return [a, b];
+}
+
+await check('audio/video call: media flows both ways, mute and camera, leave', async () => {
+  const [a, b] = await pairedRooms();
+  const joined = await Promise.all(
+    [a, b].map((p) => p.evaluate(() => window.room.call.join({ video: true }))),
+  );
+  assert.deepEqual(joined, [{ audio: true, video: true }, { audio: true, video: true }]);
+  // Play the other side's stream in a <video>: decoded frames prove media really arrives.
+  const framesDecoded = (p) => p.evaluate(async () => {
+    if (!window.probe) {
+      const [{ stream }] = window.room.call.participants;
+      window.probe = Object.assign(document.createElement('video'), { muted: true });
+      window.probe.srcObject = stream;
+      document.body.append(window.probe);
+      await window.probe.play();
+    }
+    return window.probe.getVideoPlaybackQuality().totalVideoFrames;
+  });
+  for (const p of [a, b]) {
+    await p.waitForFunction(
+      () => window.room.call.participants[0]?.state === 'connected', null, { timeout: 20000 },
+    );
+    const first = await framesDecoded(p);
+    await p.waitForFunction(
+      (n) => window.probe.getVideoPlaybackQuality().totalVideoFrames > n + 5, first,
+      { timeout: 15000 },
+    );
+    assert.equal(
+      await p.evaluate(() => window.room.call.participants[0].stream.getAudioTracks().length),
+      1,
+    );
+  }
+  await a.evaluate(() => window.room.call.setAudio(false));
+  await b.waitForFunction(() => [...window.room.call.members.values()][0].a === false);
+  await a.evaluate(() => window.room.call.setVideo(false));
+  await b.waitForFunction(() => [...window.room.call.members.values()][0].v === false);
+  await a.evaluate(() => window.room.call.setVideo(true)); // new camera capture, same connection
+  await b.waitForFunction(() => [...window.room.call.members.values()][0].v === true);
+  const before = await framesDecoded(b);
+  await b.waitForFunction(
+    (n) => window.probe.getVideoPlaybackQuality().totalVideoFrames > n + 5, before,
+    { timeout: 15000 },
+  );
+  await a.evaluate(() => window.room.call.leave());
+  await b.waitForFunction(() => window.room.call.participants.length === 0);
   assert.deepEqual([...a.errors, ...b.errors], []);
   await Promise.all([a, b].map((p) => p.context().close()));
 });

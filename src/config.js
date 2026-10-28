@@ -35,6 +35,8 @@ export const DEFAULTS = Object.freeze({
   imagePreviews: 'auto', // auto: thumbnail + preview when visible | tap: preview on tap | off
   previewCacheBytes: 64 * 1024 * 1024, // per room, on this device
   messagesPerSecond: 20,
+  callMaxParticipants: 6, // a mesh: every extra person adds a stream to send and to receive
+  callRetryMs: 1000, // first pause before a dropped call connection is offered again
 });
 
 export async function loadSettings(kv) {

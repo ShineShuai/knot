@@ -9,7 +9,7 @@ signaling brokers are blocked (manual QR / text pairing).
 
     node tools/serve.mjs 8080        # then open http://localhost:8080
     npm test                         # unit tests (Node 22+)
-    PLAYWRIGHT_MODULE=/path/to/node_modules/playwright npm run test:e2e
+    PLAYWRIGHT_MODULE=/path/to/node_modules/playwright npm run test:e2e   # fake camera + mic
 
 CI (`.github/workflows/ci.yml`): unit tests and the headless-Chromium tests run on every
 push and pull request. Only a push to `main` whose unit and browser tests both pass is
@@ -52,15 +52,20 @@ if no broker is reachable; with brokers, reconnection is automatic).
       net/mqtt.js          minimal MQTT 3.1.1 client over WebSocket
       net/room-channel.js  presence, signaling, text relay over brokers (sealed)
       net/ice-probe.js     STUN ranking, NAT type probe
+      net/ice-gather.js    wait for ICE candidates (shared by data and call connections)
       chat/envelope.js     signed chat message format + verification
       chat/log.js          ordered, de-duplicated, capped message log + sync delta
       chat/room.js         Room: ties links, brokers, log, files together
       files/transfer.js    chunked P2P file transfer with SHA-256 check
       files/image.js       image sniffing, sender-side thumbnail/preview derivation
       files/preview-cache.js  per-room LRU cache of previews (IndexedDB)
+      call/call.js         CallManager: mesh call of one room, presence + signaling frames
+      call/call-link.js    one audio+video RTCPeerConnection to one participant
+      call/media.js        microphone / camera access (swappable in tests)
       qr/qr.js             QR encoder (verified against OpenCV in tests)
       ui/                  DOM helpers, i18n (en/zh/de), views, camera scanner
       ui/image-card.js     one image in the log: thumbnail, preview, original
+      ui/call-view.js      the call window: tiles, microphone / camera / leave
     lab/                   network lab page
     test/                  unit tests (+ fakes) and real-Chromium e2e
 
@@ -132,6 +137,21 @@ if no broker is reachable; with brokers, reconnection is automatic).
 * **Attachments:** pasted, dropped and picked files wait in the message box (chips with a
   preview and a remove button) and are sent, to everyone, only with Enter or Send: files
   first, then the text. The message box grows with its text up to a cap.
+* **Calls:** audio and video for up to `callMaxParticipants` (6) people, in a mesh: everyone
+  in the call holds one media connection to everyone else, so there is no media server (and
+  no per-person cost beyond bandwidth: video bitrate per stream shrinks as people join).
+  Who is in the call, and the SDP of each media connection, travel as `{t:'call'}` frames
+  over the room's authenticated direct chat links, never over the brokers and never in the
+  message log. Only members (peers the room has accepted) can send them, and each media
+  connection's DTLS fingerprint rides inside that authenticated channel, so a call is tied
+  to a known identity. Each pair has one connection with two fixed transceivers (audio,
+  video); the peer with the smaller id always offers. Muting is `track.enabled`, the camera
+  is `replaceTrack` (off stops the capture, so the light goes out): neither renegotiates.
+  A connection that dies is offered again with growing pauses. Camera and microphone are
+  asked for only when you join (or turn the camera on); a refused device still lets you
+  listen. One call at a time per device; it keeps running while you read another room
+  ("minimize"). Needs HTTPS or localhost. Without a TURN server (Settings) two people
+  behind strict NATs cannot connect, same as chat.
 * **Delete and quote:** a `del` envelope (signed by the author, naming one of the
   author's own message ids) makes every peer drop that message's content from memory
   and storage and show "<name> deleted a message" in its place; a copy that arrives

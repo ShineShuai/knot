@@ -16,6 +16,7 @@ import { connLine } from './conn.js';
 import { JoinRequest } from '../chat/join.js';
 import { MAX_GREETING } from '../chat/lobby.js';
 import { canScan, scanQr } from './scanner.js';
+import { CallPanel } from './call-view.js';
 
 export const mountUi = (root, model) => new Ui(root, model).start();
 
@@ -52,7 +53,8 @@ class Ui {
     this.toast = h('div', { class: 'toast', role: 'status' });
     this.dialog = h('dialog', { onclose: () => this.#stopScan?.() });
     this.shell = h('div', { class: 'shell', 'data-view': 'rooms' }, this.rail, this.stage);
-    this.root.replaceChildren(this.shell, this.toast, this.dialog);
+    this.callPanel = new CallPanel({ notify: (text) => this.notify(text) });
+    this.root.replaceChildren(this.shell, this.callPanel.element, this.toast, this.dialog);
     this.model.on('rooms', () => { this.#renderRail(); this.#watchRooms(); });
     this.#watchRooms();
     document.addEventListener('paste', (e) => this.#onPaste(e));
@@ -74,6 +76,7 @@ class Ui {
         if (last) this.notify(t('joinRequestFrom', { name: last.name, greeting: last.greeting }));
       });
       room.on('roster', () => { if (room.isOwner) this.#ensureRecovery(room); });
+      room.call.on('change', () => this.callPanel.sync(room));
       room.on('removed', () => {
         this.notify(t('removedBanner'));
         if (room === this.#current) this.#renderStage();
@@ -223,6 +226,8 @@ class Ui {
     const quoteBar = h('div', { class: 'quote-bar', hidden: true });
     const chips = h('div', { class: 'attachments', hidden: true });
     const brokers = h('span', { class: 'brokers' });
+    const callButtons = h('span', { class: 'call-buttons' });
+    const callBanner = h('div', { class: 'call-banner', hidden: true, role: 'status' });
     const log = h('ol', { class: 'log', 'aria-live': 'polite' });
     const input = h(
       'textarea',
@@ -300,6 +305,23 @@ class Ui {
       ] : []));
     });
     this.#drawQuote = drawQuote;
+    const drawCall = () => {
+      const { call } = room;
+      const canStart = call.supported && !call.joined && !room.removed;
+      callButtons.replaceChildren(...(canStart ? [
+        this.#iconButton('📞', t('callAudio'), () => this.#startCall(room, false)),
+        this.#iconButton('🎥', t('callVideo'), () => this.#startCall(room, true)),
+      ] : []));
+      const others = call.joined ? [] : [...call.members.keys()].map((id) => room.nameOf(id));
+      callBanner.hidden = !others.length;
+      callBanner.replaceChildren(...(others.length ? [
+        h('span', { class: 'call-names' }, t('callInCall', { names: others.join(', ') })),
+        canStart ? h('button', {
+          class: 'primary', onclick: () => this.#startCall(room, false),
+        }, t('callJoin')) : null,
+      ] : []));
+    };
+    this.#offStage.push(room.call.on('change', drawCall));
     const sendButton = h('button', { class: 'primary', onclick: () => send() }, t('send'));
     let sending = false;
     const send = async () => {
@@ -375,10 +397,11 @@ class Ui {
           onclick: () => this.#renameDialog(room),
         }, '✎'),
         brokers,
+        callButtons,
         membersBtn,
         h('button', { onclick: () => this.#inviteDialog(room) }, t('invite')),
         h('button', { class: 'ghost', onclick: () => this.#leave(room) }, t('leave'))),
-      peers, conn, log, quoteBar, chips,
+      callBanner, peers, conn, log, quoteBar, chips,
       h('div', { class: 'composer' }, input, picker,
         h(
           'button',
@@ -397,8 +420,22 @@ class Ui {
       room.on('peers', drawPeers),
       room.on('brokers', drawBrokers),
       this.#holdToReveal(room, peers, conn));
-    drawPeers(); drawBrokers(); drawLog(true);
+    drawPeers(); drawBrokers(); drawLog(true); drawCall();
     this.#drawStaged();
+  }
+
+  #iconButton(glyph, label, onclick) {
+    return h('button', { class: 'ghost icon', title: label, 'aria-label': label, onclick }, glyph);
+  }
+
+  /** One call at a time: starting one here ends the call in any other room. */
+  async #startCall(room, video) {
+    try {
+      for (const other of this.model.rooms.values()) if (other !== room) other.call.leave();
+      const got = await room.call.join({ video });
+      if (!got.audio) this.notify(t('callNoMic'));
+      else if (video && !got.video) this.notify(t('callNoCam'));
+    } catch (err) { this.notify(err.message); }
   }
 
   /** Hold V (or press and hold the member strip) to see how everyone is connected. */

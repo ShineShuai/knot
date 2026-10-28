@@ -1,7 +1,8 @@
 // A chat envelope is one signed, self-contained message. It can travel over any
 // path (P2P link, broker relay, history sync) and be verified by anyone in the room.
 //
-//   { v, id, room, kind:'text'|'file', name, ms, c, body, pub, sig }
+//   { v, id, room, kind:'text'|'reply'|'file'|'del'|'edit'|'react'|<admin kinds>, name, ms, c,
+//     body, pub, sig }
 //
 // id = "<ms36>-<counter36>-<authorPeerId>", so the id itself pins author and stamp.
 import { fromB64u, toB64u, utf8 } from '../util/bytes.js';
@@ -34,6 +35,17 @@ export const replyBody = (text, { id, name, text: snippet }) => (
 /** Body of a deletion ("recall") of message `id` (its author, or the room owner, may do it;
  *  the room enforces who, see Room). */
 export const delBody = (id) => ({ id });
+/** Body of an edit: the new text of message `id`. Only its author may edit it; the latest edit
+ *  wins. The original stays in the log (use delete to remove content). */
+export const editBody = (id, text) => ({ id, text });
+/** Body of a reaction: `emoji` on message `id` is switched `on` or off by the author. For one
+ *  author, message and emoji only the latest such envelope counts. */
+export const reactBody = (id, emoji, on) => ({ id, emoji, on });
+
+// One pictograph, optionally with skin tone, variation selector or joined (ZWJ) pictographs.
+const EMOJI =
+  /^\p{Extended_Pictographic}(?:\uFE0F|[\u{1F3FB}-\u{1F3FF}]|\u200D\p{Extended_Pictographic})*$/u;
+export const isEmoji = (s) => typeof s === 'string' && s.length <= 16 && EMOJI.test(s);
 
 /** Owner-signed membership changes, forming a chain through `prev` (see roster.js). They
  *  are never trimmed from the log: membership must outlive the chat history. */
@@ -53,9 +65,10 @@ export const recoverBody = ({ to, epoch }, prev) => (
   { to, epoch: { n: epoch.n, commit: epoch.commit }, prev }
 );
 
-export function quoteOf(env) {
+/** What a quote of `env` shows. `shown`: the text to use (the latest edit), if not the original. */
+export function quoteOf(env, shown = null) {
   const { body } = env;
-  const text = env.kind === 'file' ? body.name : env.kind === 'reply' ? body.text : body;
+  const text = shown ?? (env.kind === 'file' ? body.name : env.kind === 'reply' ? body.text : body);
   return { id: env.id, name: env.name, text: text.replace(/\s+/g, ' ').trim().slice(0, 200) };
 }
 
@@ -128,6 +141,16 @@ function wellFormed(e, roomId, { maxText, maxFileBytes, now }) {
   if (e.kind === 'del') { // who may delete what is decided by the room (author or owner)
     const id = e.body?.id;
     return isMessageId(id) && id !== e.id;
+  }
+  if (e.kind === 'edit') {
+    const b = e.body;
+    return !!b && typeof b === 'object' && isMessageId(b.id) && b.id !== e.id
+      && typeof b.text === 'string' && b.text.length > 0 && b.text.length <= maxText;
+  }
+  if (e.kind === 'react') {
+    const b = e.body;
+    return !!b && typeof b === 'object' && isMessageId(b.id) && b.id !== e.id
+      && isEmoji(b.emoji) && typeof b.on === 'boolean';
   }
   if (ADMIN_KINDS.includes(e.kind)) {
     const b = e.body;

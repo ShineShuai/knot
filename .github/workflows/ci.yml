@@ -66,6 +66,10 @@ jobs:
         run: |
           mkdir _site
           cp -r index.html sw.js manifest.webmanifest css icons lab src _site/
+          # Lets open pages notice a newer deploy: the build id goes into the page and build.json.
+          sed -i "s|<meta name=\"build\" content=\"\">|<meta name=\"build\" content=\"$GITHUB_SHA\">|" _site/index.html
+          grep -q "content=\"$GITHUB_SHA\"" _site/index.html
+          printf '{"build":"%s"}\n' "$GITHUB_SHA" > _site/build.json
           touch _site/.nojekyll
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

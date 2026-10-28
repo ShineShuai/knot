@@ -70,6 +70,7 @@ export class AppModel extends Emitter {
     await room.previews.clear();
     await this.kv.delete(`epoch:${id}`);
     await this.kv.delete(`owner:${id}`);
+    await this.kv.delete(`read:${id}`);
     this.#removed.add(id);
     this.rooms.delete(id);
     await this.#persist();

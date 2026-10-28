@@ -23,6 +23,7 @@ export const DEFAULTS = Object.freeze({
   ],
   brokersEnabled: true,
   relayFallback: true, // send text through brokers if some member has no P2P link
+  notifications: false, // browser notifications for messages in rooms that are not on screen
   gatherTimeoutMs: 3000,
   connectTimeoutMs: 20000,
   inviteTtlMs: 10 * 60 * 1000,

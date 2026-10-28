@@ -12,6 +12,20 @@ self.addEventListener('activate', (event) => {
   })());
 });
 
+// A clicked notification brings the app (and the room it is about) to the front.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const room = event.notification.data?.room;
+  event.waitUntil((async () => {
+    const windows = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const open = windows[0];
+    if (!open) return clients.openWindow('./');
+    await open.focus();
+    open.postMessage({ knot: 'open-room', room });
+    return undefined;
+  })());
+});
+
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (request.method !== 'GET' || new URL(request.url).origin !== location.origin) return;

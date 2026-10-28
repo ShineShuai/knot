@@ -3,13 +3,14 @@
 import { compareStamps } from '../util/hlc.js';
 import { ADMIN_KINDS, authorIdOf } from './envelope.js';
 
-const byStamp = (a, b) => compareStamps(a, b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+export const byStamp = (a, b) => compareStamps(a, b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const stampOfId = (id) => parseInt(String(id).split('-')[0], 36) || 0;
 
 export class MessageLog {
   #byId = new Map();
   #gone = new Map(); // id of a deleted message -> the 'del' envelope that removed it
   #cap;
+  #overlay = null;   // edits and reactions, rebuilt after any change
 
   constructor(cap = 1000) { this.#cap = cap; }
 
@@ -26,7 +27,18 @@ export class MessageLog {
       this.#gone.set(env.body.id, env);
     }
     this.#byId.set(env.id, env);
+    this.#overlay = null;
     return true;
+  }
+
+  /** Every envelope that passes `test`, in no particular order. */
+  where(test) { return [...this.#byId.values()].filter(test); }
+
+  /** Remove envelopes that something newer replaced (older edits, reactions) or that
+   *  belong to a deleted message. They are not remembered: nothing needs them. */
+  drop(envs) {
+    for (const e of envs) this.#byId.delete(e.id);
+    this.#overlay = null;
   }
 
   /** Drop the oldest messages beyond the cap; returns the removed envelopes. */
@@ -38,6 +50,7 @@ export class MessageLog {
       this.#byId.delete(e.id);
       if (e.kind === 'del') this.#gone.delete(e.body.id);
     }
+    if (removed.length) this.#overlay = null;
     return removed;
   }
 
@@ -48,7 +61,8 @@ export class MessageLog {
    *  { id, kind: 'gone', ms, c, by, name, at } saying who deleted it (and when). Membership
    *  envelopes are included: the UI shows them as short notices ("Bob joined"). */
   timeline() {
-    const hidden = ['del', 'recovery']; // deletions show as stubs; recovery keys never show
+    // deletions show as stubs; recovery keys never show; edits and reactions decorate others
+    const hidden = ['del', 'recovery', 'edit', 'react'];
     const items = [...this.#byId.values()].filter((e) => !hidden.includes(e.kind));
     for (const [id, del] of this.#gone) {
       const [ms, c] = id.split('-').map((part) => parseInt(part, 36) || 0);
@@ -56,6 +70,34 @@ export class MessageLog {
     }
     return items.sort(byStamp);
   }
+
+  /** What edits and reactions say about messages: { edits: message id -> its latest 'edit'
+   *  envelope, reactions: message id -> Map(emoji -> author ids, oldest reaction first) }.
+   *  Rebuilt only after the log changed. */
+  overlay() {
+    if (this.#overlay) return this.#overlay;
+    const edits = new Map();
+    const reactions = new Map();
+    for (const e of this.list()) {
+      if (e.kind === 'edit') edits.set(e.body.id, e); // oldest first, so the latest stays
+      else if (e.kind === 'react' && e.body.on) {
+        const byEmoji = reactions.get(e.body.id) ?? new Map();
+        byEmoji.set(e.body.emoji, [...(byEmoji.get(e.body.emoji) ?? []), authorIdOf(e)]);
+        reactions.set(e.body.id, byEmoji);
+      }
+    }
+    this.#overlay = { edits, reactions };
+    return this.#overlay;
+  }
+
+  /** The text to show for a 'text' or 'reply' message, with its latest edit applied. */
+  textOf(env) {
+    const edit = this.overlay().edits.get(env.id);
+    if (edit) return edit.body.text;
+    return env.kind === 'reply' ? env.body.text : env.body;
+  }
+
+  isEdited(env) { return this.overlay().edits.has(env.id); }
 
   recentIds(n) { return this.list().slice(-n).map((e) => e.id); }
 

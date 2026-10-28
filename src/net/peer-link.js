@@ -5,6 +5,7 @@
 //     complete SdpInfo objects (see sdp.js)
 // Events: 'open', 'close', 'chat'(string), 'file'(string | ArrayBuffer)
 import { Emitter } from '../util/emitter.js';
+import { gathered } from './ice-gather.js';
 import { buildSdp, parseSdp } from './sdp.js';
 
 const BUFFER_HIGH = 4 * 1024 * 1024;
@@ -53,23 +54,8 @@ export class PeerLink extends Emitter {
   }
 
   async #localInfo() {
-    await this.#gathered();
+    await gathered(this.#pc, this.#gatherMs);
     return parseSdp(this.#pc.localDescription.sdp);
-  }
-
-  #gathered() {
-    const pc = this.#pc;
-    return new Promise((resolve) => {
-      if (pc.iceGatheringState === 'complete') return resolve();
-      const done = () => {
-        clearTimeout(timer);
-        pc.removeEventListener('icegatheringstatechange', check);
-        resolve();
-      };
-      const check = () => pc.iceGatheringState === 'complete' && done();
-      const timer = setTimeout(done, this.#gatherMs);
-      pc.addEventListener('icegatheringstatechange', check);
-    });
   }
 
   // ---- data --------------------------------------------------------------------

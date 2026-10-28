@@ -19,10 +19,11 @@ export class AppModel extends Emitter {
   #removed = new Set(); // ids of rooms left in this tab (so saving does not bring them back)
   #saving = Promise.resolve();
 
-  /** `WS`, `linkFactory`: injectable network pieces (tests); the defaults are the browser's. */
-  constructor({ kv, identity, settings, iceServers, WS, linkFactory }) {
+  /** `WS`, `linkFactory`, `callEnv`: injectable network and media pieces (tests); the
+   *  defaults are the browser's. */
+  constructor({ kv, identity, settings, iceServers, WS, linkFactory, callEnv }) {
     super();
-    Object.assign(this, { kv, identity, settings, WS, linkFactory });
+    Object.assign(this, { kv, identity, settings, WS, linkFactory, callEnv });
     this.iceServers = iceServers;
   }
 
@@ -107,6 +108,7 @@ export class AppModel extends Emitter {
       settings: this.settings,
       WS: this.WS,
       linkFactory: this.linkFactory,
+      callEnv: this.callEnv,
       iceServers: () => this.iceServers(),
     };
   }

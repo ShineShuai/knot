@@ -12,6 +12,8 @@
 // Rooms with an owner (the creator) let in only those the owner admits: see roster.js and
 // lobby.js. Rooms without one stay open to anyone holding the secret.
 //
+// Audio/video calls: see `room.call` (call/call.js); its signaling rides our chat links.
+//
 // Events: 'message'(envelope), 'peers'(list), 'brokers'({connected,total}),
 //         'roster'(), 'requests'() (owner: join requests changed), 'removed'()
 import { Emitter } from '../util/emitter.js';
@@ -33,6 +35,7 @@ import {
 } from '../net/handshake.js';
 import { PeerLink } from '../net/peer-link.js';
 import { RoomChannel } from '../net/room-channel.js';
+import { CallManager } from '../call/call.js';
 import { FileTransfer } from '../files/transfer.js';
 import { PreviewCache } from '../files/preview-cache.js';
 import { asImage } from '../files/image.js';
@@ -74,7 +77,10 @@ export class Room extends Emitter {
   }
 
   constructor(
-    { identity, secret, label, owner = null, kv, settings, iceServers, linkFactory, WS, derive },
+    {
+      identity, secret, label, owner = null, kv, settings, iceServers, linkFactory, WS, derive,
+      callEnv = {},
+    },
     keys,
   ) {
     super();
@@ -103,6 +109,10 @@ export class Room extends Emitter {
     this.iceServers = iceServers ?? (() => iceServersFrom(settings));
     this.linkFactory = linkFactory ?? ((o) => new PeerLink(o));
     this.WS = WS;
+    this.call = new CallManager({
+      selfId: identity.id, settings, iceServers: () => this.iceServers(),
+      send: (id, frame) => this.#sendCall(id, frame), ...callEnv,
+    });
   }
 
   get #name() { return this.settings.name || `anon-${this.identity.id.slice(0, 4)}`; }
@@ -239,6 +249,7 @@ export class Room extends Emitter {
 
   stop() {
     for (const t of this.#timers) { clearInterval(t); clearTimeout(t); }
+    this.call.leave();
     this.#channel?.stop();
     this.#lobby?.stop();
     for (const { link } of this.#pending.values()) link.close();
@@ -336,6 +347,14 @@ export class Room extends Emitter {
     return env;
   }
 
+  /** Deliver a call frame to one member over its direct link. False if there is none. */
+  #sendCall(id, frame) {
+    const p = this.peers.get(id);
+    if (p?.state !== 'p2p' || !p.synced) return false;
+    try { p.link.sendChat(JSON.stringify({ t: 'call', ...frame })); } catch { return false; }
+    return true;
+  }
+
   #sendToPeers(env, exceptId = null) {
     const frame = JSON.stringify({ t: 'msg', e: env });
     for (const p of this.peers.values()) {
@@ -409,6 +428,7 @@ export class Room extends Emitter {
     if (kind === 'revoke') {
       if (body.id === this.identity.id) return this.#beRemoved();
       this.members.delete(body.id);
+      this.call.peerDown(body.id);
       this.#joinRequests.delete(body.id);
       const peer = this.peers.get(body.id);
       if (peer) { // tell them first, so their app can say so, then drop the link
@@ -457,6 +477,7 @@ export class Room extends Emitter {
     }
     if (this.roster && !entry.synced) return; // not (yet) known to be a member: ignored
     if (this.roster && m?.t === 'epoch') { await this.#onEpoch(m, entry); return; }
+    if (m?.t === 'call') { this.call.onFrame(entry.id, m); return; }
     if (m?.t === 'msg') await this.#ingest(m.e, entry);
     else if (m?.t === 'have' && Array.isArray(m.ids)) this.#sendGive(
       entry.link,
@@ -490,6 +511,7 @@ export class Room extends Emitter {
 
   #markSynced(entry) {
     entry.synced = true;
+    this.call.peerUp(entry.id);
     this.#sendEpoch(entry.link);
     this.#sendHave(entry.link);
     this.#emitPeers();
@@ -554,7 +576,11 @@ export class Room extends Emitter {
       clearTimeout(timer);
       entry.state = 'p2p';
       this.#emitPeers();
-      if (!this.roster) { entry.synced = true; this.#sendHave(link); } else {
+      if (!this.roster) {
+        entry.synced = true;
+        this.call.peerUp(peer.id);
+        this.#sendHave(link);
+      } else {
         this.#sendAdmin(link);
         if (this.roster.isMember(peer.id)) this.#markSynced(entry);
         const wait = setTimeout(() => !entry.synced && link.close(), this.settings.adminTimeoutMs);
@@ -572,6 +598,7 @@ export class Room extends Emitter {
       clearTimeout(timer);
       if (this.peers.get(peer.id) !== entry) return;
       this.peers.delete(peer.id);
+      this.call.peerDown(peer.id);
       this.#emitPeers();
       this.#announce();
     });

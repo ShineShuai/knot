@@ -7,7 +7,8 @@ import { encodeQr, qrPath } from '../qr/qr.js';
 import { ADMIN_KINDS, authorIdOf, quoteOf } from '../chat/envelope.js';
 import { nextRoomName } from '../app.js';
 import { fmtSize, h, qrSvg, safeFileName } from './dom.js';
-import { t } from './i18n.js';
+import { LANGUAGES, setLanguage, t } from './i18n.js';
+import { VERSION } from '../version.js';
 import { ImageCard } from './image-card.js';
 import {
   MAX_AT_ONCE, clipboardFiles, dragHasFiles, droppedFiles, stageFiles,
@@ -91,6 +92,15 @@ class Ui {
     this.#renderStage();
   }
 
+  /** The language changed: redraw everything on screen in the new one. */
+  relocalize() {
+    for (const card of this.#cards.values()) card.dispose(); // their labels are baked in
+    this.#cards.clear();
+    this.#renderRail();
+    this.#renderStage();
+    this.callPanel.relabel();
+  }
+
   notify(text) {
     this.toast.textContent = text;
     this.toast.classList.add('show');
@@ -123,7 +133,7 @@ class Ui {
       h(
         'header',
         {},
-        h('h1', {}, 'knot'),
+        h('h1', {}, 'knot', h('small', { class: 'version' }, `v${VERSION}`)),
         h('button', { class: 'ghost', onclick: () => this.#settingsDialog() }, t('settings')),
       ),
       h('ul', { class: 'rooms' }, items),
@@ -976,6 +986,10 @@ class Ui {
   #settingsDialog() {
     const s = this.model.settings;
     const name = h('input', { type: 'text', value: s.name, maxLength: 32 });
+    const languages = { auto: t('languageAuto'), ...LANGUAGES };
+    const language = h('select', {}, ...Object.entries(languages).map(
+      ([value, label]) => h('option', { value, selected: value === s.language }, label),
+    ));
     const stun = h('textarea', { class: 'code', rows: 4, value: s.stunServers.join('\n') });
     const turn = h('textarea', { class: 'code', rows: 3, value: JSON.stringify(s.turnServers) });
     const brokers = h('textarea', { class: 'code', rows: 3, value: s.brokers.join('\n') });
@@ -998,10 +1012,12 @@ class Ui {
           'brokers must use wss://',
         );
         if (!Array.isArray(turnList)) throw new Error('TURN must be a JSON list');
+        const languageChanged = language.value !== s.language;
         Object.assign(
           s,
           {
             name: name.value.trim(),
+            language: language.value,
             stunServers: stunList,
             turnServers: turnList,
             brokers: brokerList,
@@ -1011,6 +1027,7 @@ class Ui {
           },
         );
         await saveSettings(this.model.kv, s);
+        if (languageChanged) { setLanguage(s.language); this.relocalize(); }
         this.notify(t('saved'));
         this.dialog.close();
       } catch (err) { this.notify(t('badSettings', { why: err.message })); }
@@ -1029,6 +1046,7 @@ class Ui {
     );
     this.#open(
       t('settings'),
+      field(t('language'), language),
       field(t('name'), name),
       field(t('stun'), stun),
       field(t('turn'), turn),

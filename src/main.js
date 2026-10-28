@@ -4,12 +4,14 @@ import { loadIdentity } from './crypto/identity.js';
 import { IdbKV } from './store/kv.js';
 import { rankStun } from './net/ice-probe.js';
 import { AppModel } from './app.js';
+import { setLanguage } from './ui/i18n.js';
 import { mountUi } from './ui/view.js';
 
 async function boot() {
   const root = document.getElementById('app');
   const kv = new IdbKV();
   const settings = await loadSettings(kv);
+  setLanguage(settings.language);
   const identity = await loadIdentity(kv);
 
   let rankedStun = null; // filled in the background; new links then use the fastest servers

@@ -2,6 +2,7 @@
 // overridden by the user in Settings (stored under the "settings" key).
 export const DEFAULTS = Object.freeze({
   name: '',
+  language: 'auto', // auto: the browser's | en | zh | de
   topicPrefix: 'knot1',
   // STUN servers; the list is ranked by speed at startup. Servers reachable from
   // mainland China come first. Verify the list with lab/lab.html on real networks.

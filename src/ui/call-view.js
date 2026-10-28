@@ -28,6 +28,14 @@ export class CallPanel {
       h('footer', { class: 'call-bar' }, this.mic, this.cam, this.leave));
   }
 
+  /** The language changed: say everything again in the new one. */
+  relabel() {
+    this.element.setAttribute('aria-label', t('call'));
+    this.leave.textContent = t('callLeave');
+    this.#fold(this.#mini);
+    if (this.#room) this.#draw();
+  }
+
   /** Follow `room`'s call: show the window while we are in it, hide it otherwise. */
   sync(room) {
     if (room.call.joined) this.#show(room);

@@ -41,6 +41,7 @@ if no broker is reachable; with brokers, reconnection is automatic).
 
     src/
       config.js            defaults: STUN, brokers, limits (overridable in Settings)
+      version.js           the version shown in the room list (equal to package.json)
       app.js               AppModel: identity, settings, set of rooms
       main.js              boot
       util/                bytes (base64url, binary writer/reader), hlc, rate limiter
@@ -152,6 +153,12 @@ if no broker is reachable; with brokers, reconnection is automatic).
   listen. One call at a time per device; it keeps running while you read another room
   ("minimize"). Needs HTTPS or localhost. Without a TURN server (Settings) two people
   behind strict NATs cannot connect, same as chat.
+* **Version and language:** the version (`src/version.js`, kept equal to `package.json` by a
+  test; bump both for a release) sits next to the title in the room list. Settings >
+  Language picks Automatic (the browser's), English, 中文 or Deutsch; the choice is stored
+  with the other settings and redraws everything on screen at once (a running call goes on).
+  To add a language: a dictionary and a `LANGUAGES` entry in `ui/i18n.js`; a test fails while
+  any text is missing or its `{placeholders}` differ.
 * **Delete and quote:** a `del` envelope (signed by the author, naming one of the
   author's own message ids) makes every peer drop that message's content from memory
   and storage and show "<name> deleted a message" in its place; a copy that arrives

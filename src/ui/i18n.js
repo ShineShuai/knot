@@ -133,6 +133,8 @@ const en = {
   rooms: 'Rooms',
   badSettings: 'Invalid settings: {why}',
   you: 'You',
+  language: 'Language',
+  languageAuto: 'Automatic (browser)',
   call: 'Call',
   callAudio: 'Start an audio call',
   callVideo: 'Start a video call',
@@ -277,6 +279,8 @@ const zh = {
   rooms: '房间',
   badSettings: '设置无效：{why}',
   you: '我',
+  language: '语言',
+  languageAuto: '自动（跟随浏览器）',
   call: '通话',
   callAudio: '发起语音通话',
   callVideo: '发起视频通话',
@@ -427,6 +431,8 @@ const de = {
   rooms: 'Räume',
   badSettings: 'Ungültige Einstellungen: {why}',
   you: 'Ich',
+  language: 'Sprache',
+  languageAuto: 'Automatisch (Browser)',
   call: 'Anruf',
   callAudio: 'Sprachanruf starten',
   callVideo: 'Videoanruf starten',
@@ -443,12 +449,21 @@ const de = {
   callNoCam: 'Kamera nicht verfügbar',
   callConnecting: 'verbinde…',
 };
-const dictionaries = { en, zh, de };
-const lang = (globalThis.navigator?.language ?? 'en').slice(0, 2);
-const dict = dictionaries[lang] ?? en;
-if (typeof document !== 'undefined') {
-  document.documentElement.lang = dictionaries[lang] ? lang : 'en';
+export const dictionaries = { en, zh, de };
+/** Each language's name in that language, so you can find yours whatever the UI speaks now. */
+export const LANGUAGES = { en: 'English', zh: '中文', de: 'Deutsch' };
+let dict = en;
+
+/** Use `choice`: a code from LANGUAGES, or 'auto' for the browser's language (else English).
+ *  Returns the code in use. Screens already drawn must be redrawn to show it. */
+export function setLanguage(choice = 'auto') {
+  const wanted = choice === 'auto' ? (globalThis.navigator?.language ?? 'en').slice(0, 2) : choice;
+  const code = Object.hasOwn(dictionaries, wanted) ? wanted : 'en';
+  dict = dictionaries[code];
+  if (globalThis.document?.documentElement) document.documentElement.lang = code;
+  return code;
 }
+setLanguage();
 
 export const t = (key, vars = {}) =>
   (dict[key] ?? en[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => vars[name] ?? '');

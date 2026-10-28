@@ -27,6 +27,7 @@ textarea.code { font: .85rem/1.35 var(--mono); word-break: break-all; }
 .rail { background: var(--rail); display: flex; flex-direction: column; border-right: 1px solid var(--line); min-height: 0; }
 .rail header, .stage-head { display: flex; align-items: center; gap: .5rem; padding: .75rem 1rem; }
 .rail h1 { margin: 0; font-size: 1.35rem; letter-spacing: .02em; flex: 1; }
+.rail .version { margin-left: .5rem; font-size: .7rem; font-weight: 400; letter-spacing: 0; color: var(--muted); }
 .rooms { list-style: none; margin: 0; padding: 0 .5rem; flex: 1; overflow-y: auto; }
 .room-item { width: 100%; display: flex; justify-content: space-between; align-items: center; border-color: transparent; background: transparent; text-align: left; }
 .room-item[aria-current=true] { background: var(--surface); border-color: var(--line); }

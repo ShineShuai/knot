@@ -12,7 +12,7 @@
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body { font: 16px/1.5 var(--sans); background: var(--paper); color: var(--ink); }
-#app { height: 100%; }
+#app { height: 100%; display: flex; flex-direction: column; }
 button, .button, input, textarea, select { font: inherit; color: inherit; }
 button, .button { border: 1px solid var(--line); background: var(--surface); padding: .45rem .9rem; border-radius: 8px; cursor: pointer; text-decoration: none; display: inline-block; }
 button:hover:not(:disabled), .button:hover { border-color: var(--link); }
@@ -23,13 +23,16 @@ button.ghost { background: transparent; border-color: transparent; color: var(--
 textarea, input[type=text], select { width: 100%; border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: .5rem .65rem; resize: vertical; }
 textarea.code { font: .85rem/1.35 var(--mono); word-break: break-all; }
 
-.shell { display: grid; grid-template-columns: 17rem 1fr; height: 100%; }
+.shell { display: grid; grid-template-columns: 17rem 1fr; flex: 1; min-height: 0; }
 .rail { background: var(--rail); display: flex; flex-direction: column; border-right: 1px solid var(--line); min-height: 0; }
 .rail header, .stage-head { display: flex; align-items: center; gap: .5rem; padding: .75rem 1rem; }
 .rail h1 { margin: 0; font-size: 1.35rem; letter-spacing: .02em; flex: 1; }
 .rail .version { margin-left: .5rem; font-size: .7rem; font-weight: 400; letter-spacing: 0; color: var(--muted); }
 .rooms { list-style: none; margin: 0; padding: 0 .5rem; flex: 1; overflow-y: auto; }
 .room-item { width: 100%; display: flex; justify-content: space-between; align-items: center; border-color: transparent; background: transparent; text-align: left; }
+.room-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.room-name.new { font-weight: 700; }
+.unread { flex: none; margin-inline: .4rem; min-width: 1.4rem; padding: 0 .4rem; border-radius: 99px; text-align: center; font-size: .75rem; background: var(--ink); color: var(--paper); }
 .room-item[aria-current=true] { background: var(--surface); border-color: var(--line); }
 .dot { min-width: 1.4rem; text-align: center; border-radius: 99px; font-size: .75rem; color: var(--muted); }
 .dot.on { background: var(--link); color: var(--link-ink); }
@@ -153,3 +156,20 @@ button.icon { padding: .35rem .55rem; line-height: 1; }
 .call[data-mini=true] .call-head { flex: 1; min-width: 0; }
 .call[data-mini=true] .call-bar { padding-block: .5rem; }
 .call[data-mini=true] .call-grid { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); } /* still plays, just not seen */
+
+/* reactions, edits, search, updates */
+.edited { color: var(--muted); font-size: .8rem; }
+.reactions { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; margin-top: .3rem; }
+.palette { display: inline-flex; flex-wrap: wrap; gap: .15rem; }
+.rx { padding: 0 .5rem; border-radius: 99px; font-size: .85rem; line-height: 1.5; }
+.rx.mine { border-color: var(--link); background: var(--own); }
+.rx.pick { border-color: transparent; background: transparent; font-size: 1.1rem; padding: 0 .3rem; }
+.searchbar { display: flex; align-items: center; gap: .5rem; padding: .3rem 1rem; border-block: 1px solid var(--line); background: var(--rail); }
+.searchbar[hidden] { display: none; }
+.searchbar input { flex: 1; min-width: 0; }
+.search-count { flex: none; font-size: .8rem; color: var(--muted); }
+.update-bar { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: .5rem; padding: .35rem 1rem; background: var(--link); color: var(--link-ink); font-size: .9rem; }
+.update-bar[hidden] { display: none; }
+.update-bar button { padding: .1rem .7rem; }
+.update-bar button.primary { background: var(--link-ink); color: var(--link); border-color: var(--link-ink); }
+.update-bar button.ghost { color: inherit; }

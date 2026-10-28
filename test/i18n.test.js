@@ -17,7 +17,7 @@ test('every language has every text, with the same {placeholders}', () => {
   }
 });
 
-test('setLanguage switches the texts; auto follows the browser; unknown falls back to English', () => {
+test('setLanguage switches texts; auto follows the browser; unknown means English', () => {
   assert.equal(setLanguage('de'), 'de');
   assert.equal(t('send'), dictionaries.de.send);
   assert.equal(t('callInCall', { names: 'Ada' }), 'Im Anruf: Ada');
@@ -26,9 +26,12 @@ test('setLanguage switches the texts; auto follows the browser; unknown falls ba
   assert.equal(setLanguage('xx'), 'en');
   assert.equal(t('send'), dictionaries.en.send);
   const browser = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
-  Object.defineProperty(globalThis, 'navigator', { value: { language: 'de-AT' }, configurable: true });
+  const browserSays = (language) => Object.defineProperty(
+    globalThis, 'navigator', { value: { language }, configurable: true },
+  );
+  browserSays('de-AT');
   assert.equal(setLanguage('auto'), 'de');
-  Object.defineProperty(globalThis, 'navigator', { value: { language: 'fr-FR' }, configurable: true });
+  browserSays('fr-FR');
   assert.equal(setLanguage('auto'), 'en');
   Object.defineProperty(globalThis, 'navigator', browser);
 });

@@ -56,7 +56,9 @@ if no broker is reachable; with brokers, reconnection is automatic).
       net/ice-gather.js    wait for ICE candidates (shared by data and call connections)
       chat/envelope.js     signed chat message format + verification
       chat/log.js          ordered, de-duplicated, capped message log + sync delta
-      chat/room.js         Room: ties links, brokers, log, files together
+      chat/room.js         Room: ties links, brokers, log, files together; unread mark
+      chat/notice.js       one-line text for membership changes ("Bob joined")
+      chat/search.js       search the messages this device holds
       files/transfer.js    chunked P2P file transfer with SHA-256 check
       files/image.js       image sniffing, sender-side thumbnail/preview derivation
       files/preview-cache.js  per-room LRU cache of previews (IndexedDB)
@@ -67,6 +69,9 @@ if no broker is reachable; with brokers, reconnection is automatic).
       ui/                  DOM helpers, i18n (en/zh/de), views, camera scanner
       ui/image-card.js     one image in the log: thumbnail, preview, original
       ui/call-view.js      the call window: tiles, microphone / camera / leave
+      ui/notifier.js       browser notifications for rooms that are not on screen
+      ui/export.js         history as text or signed JSON
+      update.js            notices a newer published build (build.json)
     lab/                   network lab page
     test/                  unit tests (+ fakes) and real-Chromium e2e
 
@@ -159,6 +164,31 @@ if no broker is reachable; with brokers, reconnection is automatic).
   with the other settings and redraws everything on screen at once (a running call goes on).
   To add a language: a dictionary and a `LANGUAGES` entry in `ui/i18n.js`; a test fails while
   any text is missing or its `{placeholders}` differ.
+* **Reactions and edits:** two more signed envelope kinds that ride on another message.
+  `react` {id, emoji, on}: per author, message and emoji only the latest counts, so toggling
+  never piles up (one envelope per slot; the "off" one stays so an older "on" cannot return).
+  `edit` {id, text}: only the message's author may send it (checked on receipt, not only in the
+  UI); the latest wins and replaces older edits. The signed original is never changed, so the
+  original text stays in the log and in the JSON export: an edit corrects a typo, delete removes
+  content. Deleting a message also drops its edits and reactions, and later ones are refused.
+  Reactions must be one emoji (checked on receipt). Both travel and sync like messages and
+  count against the log cap.
+* **Unread and notifications:** each device keeps, per room, the stamp of the newest message it
+  has shown (`read:<room>` in storage; on first run everything already there counts as read).
+  Messages from others after that stamp are "unread": counted in the room list, in the tab
+  title `(3) knot` and on an installed app's icon. A room on screen (page visible and focused)
+  is read at once. Settings > "Notify me about new messages..." asks the browser for permission
+  (from the click) and then shows one notification per room, with several arrivals summed up.
+  Notifications go through the service worker when there is one (phones need that; clicking
+  opens the room). There is no push server, so they only work while the app is open somewhere.
+* **Search and export:** the search box (🔍) filters the conversation to messages whose
+  current text or file name contains every word (case and accents ignored); it covers what
+  this device holds (the log, up to `logCap`). Export (⤓) saves that same history as readable
+  text or as the signed envelopes (JSON, verifiable); shared files are not included.
+* **Updates:** the deploy writes `build.json` ({"build": "<commit>"}). The page reads it at
+  start and now and then (at most once a minute, also when you return to the tab); when it
+  differs, a bar offers "Reload" (and asks first during a call). A static page cannot update
+  itself. Without `build.json` (local development) nothing happens.
 * **Delete and quote:** a `del` envelope (signed by the author, naming one of the
   author's own message ids) makes every peer drop that message's content from memory
   and storage and show "<name> deleted a message" in its place; a copy that arrives

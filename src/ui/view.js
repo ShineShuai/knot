@@ -5,6 +5,8 @@ import { saveSettings } from '../config.js';
 import { decodeCode } from '../net/handshake.js';
 import { encodeQr, qrPath } from '../qr/qr.js';
 import { ADMIN_KINDS, authorIdOf, quoteOf } from '../chat/envelope.js';
+import { noticeLine } from '../chat/notice.js';
+import { searchLog } from '../chat/search.js';
 import { nextRoomName } from '../app.js';
 import { fmtSize, h, qrSvg, safeFileName } from './dom.js';
 import { LANGUAGES, setLanguage, t } from './i18n.js';
@@ -18,8 +20,13 @@ import { JoinRequest } from '../chat/join.js';
 import { MAX_GREETING } from '../chat/lobby.js';
 import { canScan, scanQr } from './scanner.js';
 import { CallPanel } from './call-view.js';
+import { exportJson, exportText } from './export.js';
+import { Notifier } from './notifier.js';
 
-export const mountUi = (root, model) => new Ui(root, model).start();
+const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+
+/** `opts`: `updates` (an UpdateWatcher), `notifierEnv` (tests): optional. */
+export const mountUi = (root, model, opts) => new Ui(root, model, opts).start();
 
 const roomLink = (room) => `${location.origin}${location.pathname}#r=${toB64u(room.secret)}`;
 const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -34,6 +41,10 @@ class Ui {
   #seen = null;         // IntersectionObserver
   #quote = null;        // envelope the composer is replying to
   #drawQuote = () => {};
+  #editing = null;      // our own envelope the message box is changing (instead of a new message)
+  #fitInput = () => {}; // resize the message box to its text
+  #reactTo = null;      // id of the message whose emoji palette is open
+  #updateReady = false; // a newer version of the app has been published
   #input = null;        // the composer's textarea
   #staged = new Map();  // room id -> files waiting in the message box to be sent
   #chipUrls = new Map(); // staged File -> object URL of its little preview
@@ -43,9 +54,15 @@ class Ui {
   #ownerEvents = new WeakSet(); // rooms whose owner events we already listen to
   #codes = new Set();     // rooms for which a recovery code is being made right now
 
-  constructor(root, model) {
+  constructor(root, model, opts = {}) {
     this.root = root;
     this.model = model;
+    this.opts = opts;
+    this.notifier = new Notifier({
+      settings: model.settings, env: opts.notifierEnv,
+      isActive: (room) => room === this.#current && this.#viewing(),
+      open: (id) => this.#openRoom(id),
+    });
   }
 
   start() {
@@ -55,7 +72,16 @@ class Ui {
     this.dialog = h('dialog', { onclose: () => this.#stopScan?.() });
     this.shell = h('div', { class: 'shell', 'data-view': 'rooms' }, this.rail, this.stage);
     this.callPanel = new CallPanel({ notify: (text) => this.notify(text) });
-    this.root.replaceChildren(this.shell, this.callPanel.element, this.toast, this.dialog);
+    this.updateBar = h('div', { class: 'update-bar', role: 'status', hidden: true });
+    this.root.replaceChildren(
+      this.updateBar, this.shell, this.callPanel.element, this.toast, this.dialog,
+    );
+    this.opts.updates?.on('update', () => { this.#updateReady = true; this.#drawUpdateBar(); });
+    globalThis.navigator?.serviceWorker?.addEventListener?.( // a clicked notification
+      'message', (e) => e.data?.knot === 'open-room' && this.#openRoom(e.data.room),
+    );
+    document.addEventListener('visibilitychange', () => this.#markViewed());
+    window.addEventListener('focus', () => this.#markViewed());
     this.model.on('rooms', () => { this.#renderRail(); this.#watchRooms(); });
     this.#watchRooms();
     document.addEventListener('paste', (e) => this.#onPaste(e));
@@ -64,7 +90,52 @@ class Ui {
     }
     this.#renderRail();
     this.#renderStage();
+    this.#drawUpdateBar();
     return this;
+  }
+
+  // ---- unread, updates ------------------------------------------------------------------
+
+  /** On screen right now: the page is visible and has the focus. */
+  #viewing() { return document.hidden !== true && (document.hasFocus?.() ?? true); }
+
+  /** The room in view counts as read. */
+  #markViewed() {
+    if (this.#current && this.#viewing()) this.#current.markRead();
+  }
+
+  #openRoom(id) {
+    const room = this.model.rooms.get(id);
+    if (!room) return;
+    window.focus?.();
+    this.select(room);
+  }
+
+  /** Unread counts: in the room list, in the tab title and on the installed app's icon. */
+  #refreshUnread() {
+    const total = [...this.model.rooms.values()].reduce((sum, room) => sum + room.unread, 0);
+    document.title = total ? `(${total}) knot` : 'knot';
+    const badge = total ? navigator.setAppBadge?.(total) : navigator.clearAppBadge?.();
+    badge?.catch?.(() => {}); // not every installed app may show a badge
+    this.#renderRail();
+  }
+
+  #drawUpdateBar() {
+    this.updateBar.hidden = !this.#updateReady;
+    this.updateBar.replaceChildren(
+      h('span', {}, t('updateAvailable')),
+      h('button', { class: 'primary', onclick: () => this.#reload() }, t('updateReload')),
+      h('button', {
+        class: 'ghost', title: t('close'), 'aria-label': t('close'),
+        onclick: () => { this.updateBar.hidden = true; },
+      }, '×'),
+    );
+  }
+
+  #reload() {
+    const calling = [...this.model.rooms.values()].some((room) => room.call.joined);
+    if (calling && !confirm(t('updateEndsCall'))) return;
+    location.reload();
   }
 
   /** Owner events that matter wherever the user currently is. */
@@ -78,6 +149,8 @@ class Ui {
       });
       room.on('roster', () => { if (room.isOwner) this.#ensureRecovery(room); });
       room.call.on('change', () => this.callPanel.sync(room));
+      room.on('unread', () => this.#refreshUnread());
+      this.notifier.watch(room);
       room.on('removed', () => {
         this.notify(t('removedBanner'));
         if (room === this.#current) this.#renderStage();
@@ -88,8 +161,9 @@ class Ui {
   select(room) {
     this.#current = room;
     this.shell.dataset.view = room ? 'chat' : 'rooms';
-    this.#renderRail();
     this.#renderStage();
+    this.#markViewed();
+    this.#refreshUnread();
   }
 
   /** The language changed: redraw everything on screen in the new one. */
@@ -99,6 +173,7 @@ class Ui {
     this.#renderRail();
     this.#renderStage();
     this.callPanel.relabel();
+    this.#drawUpdateBar();
   }
 
   notify(text) {
@@ -119,10 +194,16 @@ class Ui {
     }
     const items = rooms.map((room) => {
       const direct = room.peerList.filter((p) => p.state === 'p2p').length;
+      const unread = room.unread;
       return h('li', {},
         h('button', { class: 'room-item', 'aria-current': room === this.#current ? 'true'
           : null, onclick: () => this.select(room) },
-          h('span', { class: 'room-name' }, room.label || t('roomDefault')),
+          h('span', { class: unread ? 'room-name new' : 'room-name' },
+            room.label || t('roomDefault')),
+          unread ? h('span', {
+            class: 'unread', title: t('unread', { n: unread }),
+            'aria-label': t('unread', { n: unread }),
+          }, unread > 99 ? '99+' : String(unread)) : null,
           h(
             'span',
             { class: direct ? 'dot on' : 'dot', title: t('direct') },
@@ -224,6 +305,8 @@ class Ui {
     this.#seen?.disconnect();
     this.#watching.clear();
     this.#quote = null;
+    this.#editing = null;
+    this.#reactTo = null;
     const room = this.#current;
     if (!room) {
       this.stage.replaceChildren(
@@ -236,6 +319,18 @@ class Ui {
     const quoteBar = h('div', { class: 'quote-bar', hidden: true });
     const chips = h('div', { class: 'attachments', hidden: true });
     const brokers = h('span', { class: 'brokers' });
+    const searchInput = h('input', {
+      type: 'text', placeholder: t('search'), 'aria-label': t('search'),
+    });
+    const searchCount = h('span', { class: 'search-count' });
+    const searchBar = h('div', { class: 'searchbar', hidden: true },
+      searchInput, searchCount,
+      h('button', {
+        class: 'ghost', title: t('searchClose'), 'aria-label': t('searchClose'),
+        onclick: () => closeSearch(),
+      }, '×'));
+    let query = '';   // what the search box holds: while it is not empty, only hits are shown
+    let shown = 300;  // how many of the newest messages the log shows
     const callButtons = h('span', { class: 'call-buttons' });
     const callBanner = h('div', { class: 'call-banner', hidden: true, role: 'status' });
     const log = h('ol', { class: 'log', 'aria-live': 'polite' });
@@ -287,13 +382,39 @@ class Ui {
     };
     const drawLog = (stickToBottom = false) => {
       const nearBottom = stickToBottom || log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+      const hits = query ? searchLog(room, query) : null;
+      searchCount.textContent = hits ? t(hits.length ? 'searchCount' : 'searchNone',
+        { n: hits.length }) : '';
+      const opts = hits ? { onShow: (env) => showInChat(env) } : {};
       log.replaceChildren(
-        ...room.log.timeline().slice(-300).map(
-          (env) => this.#renderMessage(room, env, () => drawLog()),
+        ...(hits ?? room.log.timeline().slice(-shown)).map(
+          (env) => this.#renderMessage(room, env, () => drawLog(), opts),
         )
       );
       if (nearBottom) log.scrollTop = log.scrollHeight;
     };
+    const closeSearch = () => {
+      query = '';
+      searchInput.value = '';
+      searchBar.hidden = true;
+      drawLog(true);
+    };
+    const toggleSearch = () => {
+      if (!searchBar.hidden) return closeSearch();
+      searchBar.hidden = false;
+      return searchInput.focus();
+    };
+    /** Leave the search and scroll to the message in the conversation. */
+    const showInChat = (env) => {
+      shown = Infinity;
+      closeSearch();
+      this.#jumpTo(env.id);
+    };
+    searchInput.addEventListener('input', () => {
+      query = searchInput.value.trim();
+      drawLog(true);
+    });
+    searchInput.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSearch(); });
     const drawBrokers = (s = room.settings.brokersEnabled
       ? { connected: 0, total: room.settings.brokers.length } : null) => {
       brokers.textContent = s ? t('brokers', { n: s.connected, m: s.total }) : '';
@@ -304,17 +425,21 @@ class Ui {
       chips.replaceChildren(...files.map((file) => this.#chip(room, file)));
     });
     const drawQuote = () => keepBottom(() => {
-      const q = this.#quote;
+      const editing = this.#editing;
+      const q = editing ?? this.#quote;
       quoteBar.hidden = !q;
+      const cancel = t(editing ? 'editCancel' : 'quoteCancel');
       quoteBar.replaceChildren(...(q ? [
-        h('span', { class: 'quote-text' }, h('b', {}, q.name), ' ', quoteOf(q).text),
+        h('span', { class: 'quote-text' }, h('b', {}, editing ? t('editing') : q.name), ' ',
+          quoteOf(q, q.kind === 'file' ? null : room.log.textOf(q)).text),
         h('button', {
-          class: 'ghost', title: t('quoteCancel'), 'aria-label': t('quoteCancel'),
-          onclick: () => this.#setQuote(null),
+          class: 'ghost', title: cancel, 'aria-label': cancel,
+          onclick: () => (editing ? this.#cancelEdit() : this.#setQuote(null)),
         }, '×'),
       ] : []));
     });
     this.#drawQuote = drawQuote;
+    this.#fitInput = fit;
     const drawCall = () => {
       const { call } = room;
       const canStart = call.supported && !call.joined && !room.removed;
@@ -337,18 +462,25 @@ class Ui {
     const send = async () => {
       const text = input.value;
       const files = [...(this.#staged.get(room.id) ?? [])];
-      if ((!text.trim() && !files.length) || sending) return;
+      const editing = this.#editing;
+      if ((!text.trim() && !(files.length && !editing)) || sending) return;
       sending = true;
       sendButton.disabled = true;
       input.value = '';
       fit();
       try {
-        for (const file of files) { // nothing leaves the message box before this point
-          await room.shareFile(file);
-          this.#unstage(room, file);
+        if (editing) { // the staged files wait: an edit changes one message, nothing else
+          await room.editMessage(editing.id, text);
+          this.#editing = null;
+          drawQuote();
+        } else {
+          for (const file of files) { // nothing leaves the message box before this point
+            await room.shareFile(file);
+            this.#unstage(room, file);
+          }
+          if (text.trim()) await room.sendText(text, this.#quote);
+          this.#setQuote(null);
         }
-        if (text.trim()) await room.sendText(text, this.#quote);
-        this.#setQuote(null);
         drawLog(true);
       } catch (err) {
         input.value = text;
@@ -364,7 +496,7 @@ class Ui {
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
         e.preventDefault();
         send();
-      }
+      } else if (e.key === 'Escape' && this.#editing) this.#cancelEdit();
     });
     let depth = 0; // dragenter/dragleave also fire for every child element
     const stopDrop = () => { depth = 0; this.stage.classList.remove('dropping'); };
@@ -406,12 +538,14 @@ class Ui {
           class: 'ghost', title: t('renameRoom'), 'aria-label': t('renameRoom'),
           onclick: () => this.#renameDialog(room),
         }, '✎'),
+        this.#iconButton('🔍', t('search'), toggleSearch),
+        this.#iconButton('⤓', t('exportHistory'), () => this.#exportDialog(room)),
         brokers,
         callButtons,
         membersBtn,
         h('button', { onclick: () => this.#inviteDialog(room) }, t('invite')),
         h('button', { class: 'ghost', onclick: () => this.#leave(room) }, t('leave'))),
-      callBanner, peers, conn, log, quoteBar, chips,
+      callBanner, searchBar, peers, conn, log, quoteBar, chips,
       h('div', { class: 'composer' }, input, picker,
         h(
           'button',
@@ -426,7 +560,7 @@ class Ui {
         sendButton));
 
     this.#offStage.push(
-      room.on('message', () => drawLog()),
+      room.on('message', () => { drawLog(); this.#markViewed(); }),
       room.on('peers', drawPeers),
       room.on('brokers', drawBrokers),
       this.#holdToReveal(room, peers, conn));
@@ -487,36 +621,62 @@ class Ui {
     };
   }
 
-  #renderMessage(room, env, redraw) {
+  /** `opts.onShow`: this is a search hit; its only action is to show it in the conversation. */
+  #renderMessage(room, env, redraw, opts = {}) {
     if (env.kind === 'gone') return this.#renderGone(room, env);
     if (ADMIN_KINDS.includes(env.kind)) return this.#renderNotice(room, env);
     const own = authorIdOf(env) === room.identity.id;
+    const edited = room.log.isEdited(env);
     const parts = env.kind === 'file' ? [this.#renderFile(room, env, redraw)] : [
       env.kind === 'reply' ? this.#renderQuote(room, env.body.q) : null,
-      h('p', { class: 'text' }, env.kind === 'reply' ? env.body.text : env.body),
+      h('p', { class: 'text' }, room.log.textOf(env),
+        edited ? h('span', { class: 'edited' }, ` (${t('edited')})`) : null),
     ];
-    const acts = h('span', { class: 'acts' },
-      h('button', { class: 'ghost', onclick: () => this.#setQuote(env) }, t('reply')),
-      own || room.isOwner
-        ? h('button', { class: 'ghost', onclick: () => this.#confirmDelete(room, env) },
-          t('deleteMsg')) : null);
+    const button = (label, onclick) => h('button', { class: 'ghost', onclick }, label);
+    const acts = h('span', { class: 'acts' }, ...(opts.onShow
+      ? [button(t('searchShow'), () => opts.onShow(env))] : [
+        button(t('reply'), () => this.#setQuote(env)),
+        button(t('react'), () => {
+          this.#reactTo = this.#reactTo === env.id ? null : env.id;
+          redraw();
+        }),
+        own && env.kind !== 'file' ? button(t('edit'), () => this.#startEdit(room, env)) : null,
+        own || room.isOwner ? button(t('deleteMsg'), () => this.#confirmDelete(room, env)) : null,
+      ]));
     return h('li', { class: `msg ${own ? 'own' : 'other'}`, 'data-id': env.id },
       h('div', { class: 'meta' },
         own ? t('you') : env.name, ' ', h('time', {}, clock(env.ms)), acts),
-      ...parts);
+      ...parts,
+      opts.onShow ? null : this.#renderReactions(room, env, redraw));
+  }
+
+  /** The emoji under a message (tap one to add or take back yours) and, if open, the palette. */
+  #renderReactions(room, env, redraw) {
+    const byEmoji = room.log.overlay().reactions.get(env.id);
+    const open = this.#reactTo === env.id;
+    if (!byEmoji && !open) return null;
+    const me = room.identity.id;
+    const toggle = (emoji) => {
+      this.#reactTo = null;
+      redraw();
+      room.react(env.id, emoji).catch((err) => this.notify(err.message));
+    };
+    const chips = [...(byEmoji ?? [])].map(([emoji, ids]) => h('button', {
+      class: ids.includes(me) ? 'rx mine' : 'rx', 'aria-pressed': String(ids.includes(me)),
+      title: ids.map((id) => (id === me ? t('you') : room.nameOf(id))).join(', '),
+      onclick: () => toggle(emoji),
+    }, `${emoji} ${ids.length}`));
+    const pick = (emoji) => h(
+      'button', { class: 'rx pick', title: emoji, onclick: () => toggle(emoji) }, emoji,
+    );
+    const palette = open ? h('span', { class: 'palette' }, ...REACTIONS.map(pick)) : null;
+    return h('div', { class: 'reactions' }, ...chips, palette);
   }
 
   /** Membership changes, as one quiet line in the conversation. */
   #renderNotice(room, env) {
-    const { body } = env;
-    const lines = {
-      admit: () => t('sysJoined', { name: body.name }),
-      revoke: () => t('sysRemoved', { name: room.nameOf(body.id), by: env.name }),
-      transfer: () => t('sysOwner', { name: room.nameOf(body.to) }),
-      recover: () => t('sysRecovered', { name: env.name }),
-    };
     return h('li', { class: 'msg gone', 'data-id': env.id },
-      h('p', { class: 'text' }, lines[env.kind]()));
+      h('p', { class: 'text' }, noticeLine(room, env, t)));
   }
 
   /** What is left of a deleted message: who deleted it, in its old place. */
@@ -545,9 +705,50 @@ class Ui {
   }
 
   #setQuote(env) {
+    if (env && this.#editing) this.#cancelEdit();
     this.#quote = env;
     this.#drawQuote();
     if (env) this.#input?.focus();
+  }
+
+  /** Put one of our messages into the message box; sending then replaces its text. */
+  #startEdit(room, env) {
+    this.#quote = null;
+    this.#editing = env;
+    this.#input.value = room.log.textOf(env);
+    this.#fitInput();
+    this.#drawQuote();
+    this.#input.focus();
+  }
+
+  #cancelEdit() {
+    this.#editing = null;
+    this.#input.value = '';
+    this.#fitInput();
+    this.#drawQuote();
+  }
+
+  // ---- export ---------------------------------------------------------------------------------
+
+  #exportDialog(room) {
+    const save = (extension, content, type) => () => (
+      this.#download(room, extension, content(room), type)
+    );
+    this.#open(t('exportHistory'),
+      h('p', {}, t('exportHelp', { n: room.log.size })),
+      h('div', { class: 'actions' },
+        h('button', { class: 'primary', onclick: save('txt', exportText, 'text/plain') },
+          t('exportText')),
+        h('button', { onclick: save('json', exportJson, 'application/json') }, t('exportJson'))));
+  }
+
+  #download(room, extension, content, type) {
+    const day = new Date().toISOString().slice(0, 10);
+    const name = safeFileName(`knot-${room.label || t('roomDefault')}-${day}.${extension}`);
+    const url = URL.createObjectURL(new Blob([content], { type: `${type};charset=utf-8` }));
+    h('a', { href: url, download: name }).click();
+    const timer = setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    timer.unref?.();
   }
 
   #confirmDelete(room, env) {
@@ -995,6 +1196,7 @@ class Ui {
     const brokers = h('textarea', { class: 'code', rows: 3, value: s.brokers.join('\n') });
     const useBrokers = h('input', { type: 'checkbox', checked: s.brokersEnabled });
     const relay = h('input', { type: 'checkbox', checked: s.relayFallback });
+    const notifications = h('input', { type: 'checkbox', checked: s.notifications });
     const modes = { auto: 'previewAuto', tap: 'previewTap', off: 'previewOff' };
     const previews = h('select', {}, ...Object.entries(modes).map(
       ([value, label]) => h('option', { value, selected: value === s.imagePreviews }, t(label)),
@@ -1013,6 +1215,8 @@ class Ui {
         );
         if (!Array.isArray(turnList)) throw new Error('TURN must be a JSON list');
         const languageChanged = language.value !== s.language;
+        // asking for permission needs this click; if it is refused, the setting stays off
+        const allowed = !notifications.checked || await this.notifier.enable();
         Object.assign(
           s,
           {
@@ -1023,12 +1227,13 @@ class Ui {
             brokers: brokerList,
             brokersEnabled: useBrokers.checked,
             relayFallback: relay.checked,
+            notifications: notifications.checked && allowed,
             imagePreviews: previews.value,
           },
         );
         await saveSettings(this.model.kv, s);
         if (languageChanged) { setLanguage(s.language); this.relocalize(); }
-        this.notify(t('saved'));
+        this.notify(t(allowed ? 'saved' : 'notifyBlocked'));
         this.dialog.close();
       } catch (err) { this.notify(t('badSettings', { why: err.message })); }
     };
@@ -1053,6 +1258,7 @@ class Ui {
       field(t('brokerList'), brokers),
       check(t('useBrokers'), useBrokers),
       check(t('relayText'), relay),
+      this.notifier.supported ? check(t('notifications'), notifications) : null,
       field(t('imagePreviews'), previews),
       h(
         'div',

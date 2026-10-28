@@ -15,9 +15,11 @@
 // Audio/video calls: see `room.call` (call/call.js); its signaling rides our chat links.
 //
 // Events: 'message'(envelope), 'peers'(list), 'brokers'({connected,total}),
-//         'roster'(), 'requests'() (owner: join requests changed), 'removed'()
+//         'roster'(), 'requests'() (owner: join requests changed), 'removed'(),
+//         'incoming'(envelope) (a message from someone else that is not read yet),
+//         'unread'() (the unread count changed)
 import { Emitter } from '../util/emitter.js';
-import { HLC } from '../util/hlc.js';
+import { HLC, compareStamps } from '../util/hlc.js';
 import { RateLimiter } from '../util/rate.js';
 import {
   concat, fromB64u, fromUtf8, randomBytes, sha256, toB64u, utf8,
@@ -40,10 +42,11 @@ import { FileTransfer } from '../files/transfer.js';
 import { PreviewCache } from '../files/preview-cache.js';
 import { asImage } from '../files/image.js';
 import {
-  ADMIN_KINDS, admitBody, authorIdOf, authorOfId, createEnvelope, delBody, previewRef, quoteOf,
-  recoverBody, recoveryBody, replyBody, revokeBody, transferBody, verifyEnvelope,
+  ADMIN_KINDS, admitBody, authorIdOf, authorOfId, createEnvelope, delBody, editBody, isEmoji,
+  previewRef, quoteOf, reactBody, recoverBody, recoveryBody, replyBody, revokeBody, transferBody,
+  verifyEnvelope,
 } from './envelope.js';
-import { MessageLog } from './log.js';
+import { MessageLog, byStamp } from './log.js';
 import { MessageStore } from './message-store.js';
 import { Roster } from './roster.js';
 import { lobbyKeys, lobbySecretOf, makeDeny, makeGrant, readRequest } from './lobby.js';
@@ -52,6 +55,8 @@ const SEEN_SESSIONS_LIMIT = 200;
 const MAX_FRAME_BYTES = 48 * 1024; // keep chat frames well under every browser's SCTP limit
 const REDIAL_MS = 10000;
 const MAX_JOIN_REQUESTS = 50;
+const UNREAD_KINDS = ['text', 'reply', 'file']; // what counts as a message to catch up on
+const DECORATIONS = ['edit', 'react']; // envelopes that ride on another message
 
 export class Room extends Emitter {
   /** peerId -> { id, pub, name, link, via:'broker'|'manual', state:'connecting'|'p2p', sas } */
@@ -65,6 +70,7 @@ export class Room extends Emitter {
   #pulls = new Map();        // preview id -> in-flight fetch (shared by every asker)
   #joinRequests = new Map(); // joiner id -> request waiting for the owner's decision
   #lobby = null; #lobbyId = null;
+  #read = { ms: 0, c: 0 };   // stamp of the newest message seen on this device
   #pending = new Map();      // session -> { link, offer, peer|null } handshakes awaiting an answer
   #seenSessions = new Set(); // offers already answered (replay protection)
   #dialedAt = new Map();
@@ -149,11 +155,36 @@ export class Room extends Emitter {
     if (!this.roster && stored.some(ours)) this.roster = new Roster(this.identity.id);
     this.roster?.load(stored);
     this.removed = !!this.roster?.revoked.has(this.identity.id);
+    const mark = await this.#kv.get(`read:${this.id}`);
+    this.#read = mark ?? this.#newestStamp(); // first run: what is here counts as read
+    if (!mark) await this.#kv.put(`read:${this.id}`, this.#read).catch(() => {});
     const saved = await this.#kv.get(`epoch:${this.id}`);
     if (saved?.n) {
       this.#epoch = { n: saved.n, secret: fromB64u(saved.s) };
       this.#chan = await deriveRoomKeys(this.#chanSecret());
     }
+  }
+
+  #newestStamp() {
+    const last = this.log.list().at(-1);
+    return last ? { ms: last.ms, c: last.c } : { ms: 0, c: 0 };
+  }
+
+  #isUnread(env) {
+    return UNREAD_KINDS.includes(env.kind) && authorIdOf(env) !== this.identity.id
+      && compareStamps(env, this.#read) > 0;
+  }
+
+  /** Messages from others that this device has not shown to its user yet. */
+  get unread() { return this.log.where((e) => this.#isUnread(e)).length; }
+
+  /** The user has seen everything up to now (they are looking at this room). */
+  async markRead() {
+    const newest = this.#newestStamp();
+    if (compareStamps(newest, this.#read) <= 0) return;
+    this.#read = newest;
+    this.emit('unread');
+    await this.#kv.put(`read:${this.id}`, newest).catch(() => {});
   }
 
   /** What the broker channel and lobby keys derive from: the room secret, mixed with the
@@ -266,7 +297,8 @@ export class Room extends Emitter {
     if (!text) return null;
     if (text.length > this.settings.maxTextLength) throw new Error('Message too long');
     if (!quote) return this.#publish('text', text);
-    return this.#publish('reply', replyBody(text, quoteOf(quote)));
+    const shown = quote.kind === 'file' ? null : this.log.textOf(quote); // quote the edited text
+    return this.#publish('reply', replyBody(text, quoteOf(quote, shown)));
   }
 
   /** Recall a message: everyone drops its content and sees who deleted it. Its author may,
@@ -277,6 +309,28 @@ export class Room extends Emitter {
       throw new Error('You can only delete your own messages');
     }
     return this.#publish('del', delBody(id));
+  }
+
+  /** Change the text of one of our own messages. Everyone sees the new text, marked as edited. */
+  async editMessage(id, text) {
+    text = text.trim();
+    if (!text) throw new Error('A message cannot be empty');
+    if (text.length > this.settings.maxTextLength) throw new Error('Message too long');
+    const env = this.log.get(id);
+    if (!['text', 'reply'].includes(env?.kind)) throw new Error('That message cannot be edited');
+    if (authorIdOf(env) !== this.identity.id) {
+      throw new Error('You can only edit your own messages');
+    }
+    if (text === this.log.textOf(env)) return null;
+    return this.#publish('edit', editBody(id, text));
+  }
+
+  /** Switch our reaction `emoji` on message `id` on or off. */
+  async react(id, emoji) {
+    if (!isEmoji(emoji)) throw new Error('Not an emoji');
+    if (!this.log.get(id)) throw new Error('That message is gone');
+    const mine = this.log.overlay().reactions.get(id)?.get(emoji)?.includes(this.identity.id);
+    return this.#publish('react', reactBody(id, emoji, !mine));
   }
 
   async shareFile(file) {
@@ -392,6 +446,7 @@ export class Room extends Emitter {
     const author = authorIdOf(env);
     const owner = this.roster?.owner;
     if (env.kind === 'del' && authorOfId(env.body.id) !== author && author !== owner) return false;
+    if (env.kind === 'edit' && authorOfId(env.body.id) !== author) return false; // own only
     if (!this.roster) return !ADMIN_KINDS.includes(env.kind); // open rooms have no admin
     return ADMIN_KINDS.includes(env.kind) || this.roster.isMember(author);
   }
@@ -406,18 +461,42 @@ export class Room extends Emitter {
     return kept;
   }
 
+  /** Older edits / reactions that `env` replaces; null if a newer one is already here. For one
+   *  message only the latest edit counts, and per author and emoji only the latest reaction. */
+  #superseded(env) {
+    if (!DECORATIONS.includes(env.kind)) return [];
+    const author = authorIdOf(env);
+    const sameSlot = (e) => e.kind === env.kind && e.body.id === env.body.id && (
+      env.kind === 'edit' || (authorIdOf(e) === author && e.body.emoji === env.body.emoji));
+    const older = this.log.where(sameSlot);
+    return older.some((e) => byStamp(e, env) > 0) ? null : older;
+  }
+
+  /** Edits and reactions riding on message `id`. */
+  #decorations(id) {
+    return this.log.where((e) => DECORATIONS.includes(e.kind) && e.body.id === id);
+  }
+
   async #keep(env, source) {
+    // nothing may ride on a deleted message (an edit would bring its text back)
+    if (DECORATIONS.includes(env.kind) && this.log.isGone(env.body.id)) return false;
+    const stale = this.#superseded(env);
+    if (!stale) return false;
     const doomed = env.kind === 'del' ? this.log.get(env.body.id) : null;
+    const orphans = env.kind === 'del' ? this.#decorations(env.body.id) : [];
     if (!this.log.add(env)) return false;
+    this.log.drop([...stale, ...orphans]);
     this.hlc.observe(env);
     const removed = this.log.trim();
-    await Promise.all(
-      [this.#store.save(env), this.#store.remove(doomed ? [...removed, doomed] : removed)],
-    ).catch((err) => console.error('could not save message', err));
+    const dropped = [...removed, ...stale, ...orphans, ...(doomed ? [doomed] : [])];
+    await Promise.all([this.#store.save(env), this.#store.remove(dropped)])
+      .catch((err) => console.error('could not save message', err));
     if (doomed) await this.#forget(doomed);
     if (ADMIN_KINDS.includes(env.kind)) await this.#onAdmin(env);
+    const fresh = this.#isUnread(env); // decided before a viewer can mark it read
     // Membership changes are shown in the conversation too ("Bob joined"): redraw for them.
     if (env.kind !== 'recovery' && !removed.includes(env)) this.emit('message', env);
+    if (fresh && !removed.includes(env)) { this.emit('incoming', env); this.emit('unread'); }
     if (source) this.#sendToPeers(env, source.id); // gossip: heals meshes with a missing link
     return true;
   }

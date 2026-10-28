@@ -4,6 +4,7 @@ import { loadIdentity } from './crypto/identity.js';
 import { IdbKV } from './store/kv.js';
 import { rankStun } from './net/ice-probe.js';
 import { AppModel } from './app.js';
+import { UpdateWatcher } from './update.js';
 import { setLanguage } from './ui/i18n.js';
 import { mountUi } from './ui/view.js';
 
@@ -19,7 +20,9 @@ async function boot() {
     { kv, identity, settings, iceServers: () => iceServersFrom(settings, rankedStun) },
   );
   await model.load();
-  const ui = mountUi(root, model);
+  const updates = new UpdateWatcher();
+  const ui = mountUi(root, model, { updates });
+  updates.start();
 
   // Deep links: #r=<room secret> joins a room, #c=<pairing code> opens the join dialog.
   const hash = location.hash.slice(1);

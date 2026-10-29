@@ -3,6 +3,9 @@
 import { compareStamps } from '../util/hlc.js';
 import { ADMIN_KINDS, authorIdOf } from './envelope.js';
 
+/** Membership and unlinking must outlive the chat history. */
+const isKept = (e) => ADMIN_KINDS.includes(e.kind) || e.kind === 'unlink';
+
 export const byStamp = (a, b) => compareStamps(a, b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const stampOfId = (id) => parseInt(String(id).split('-')[0], 36) || 0;
 
@@ -45,7 +48,7 @@ export class MessageLog {
   trim() {
     const excess = this.#byId.size - this.#cap;
     if (excess <= 0) return [];
-    const removed = this.list().filter((e) => !ADMIN_KINDS.includes(e.kind)).slice(0, excess);
+    const removed = this.list().filter((e) => !isKept(e)).slice(0, excess);
     for (const e of removed) {
       this.#byId.delete(e.id);
       if (e.kind === 'del') this.#gone.delete(e.body.id);
@@ -62,7 +65,7 @@ export class MessageLog {
    *  envelopes are included: the UI shows them as short notices ("Bob joined"). */
   timeline() {
     // deletions show as stubs; recovery keys never show; edits and reactions decorate others
-    const hidden = ['del', 'recovery', 'edit', 'react'];
+    const hidden = ['del', 'recovery', 'edit', 'react', 'unlink'];
     const items = [...this.#byId.values()].filter((e) => !hidden.includes(e.kind));
     for (const [id, del] of this.#gone) {
       const [ms, c] = id.split('-').map((part) => parseInt(part, 36) || 0);

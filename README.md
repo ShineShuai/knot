@@ -47,6 +47,7 @@ if no broker is reachable; with brokers, reconnection is automatic).
       util/                bytes (base64url, binary writer/reader), hlc, rate limiter
       crypto/identity.js   Ed25519 device key (non-extractable, IndexedDB)
       crypto/room-keys.js  room secret -> HKDF -> topic id + AES-GCM key
+      crypto/delegation.js certificates of linked devices
       net/sdp.js           SDP <-> compact SdpInfo (data-channel-only)
       net/handshake.js     signed offer/answer, ~300-char code, short auth string
       net/peer-link.js     one RTCPeerConnection: "chat" + "files" channels
@@ -58,13 +59,14 @@ if no broker is reachable; with brokers, reconnection is automatic).
       chat/log.js          ordered, de-duplicated, capped message log + sync delta
       chat/room.js         Room: ties links, brokers, log, files together; unread mark
       chat/notice.js       one-line text for membership changes ("Bob joined")
+      chat/devices.js      linking a device: request and grant codes, six-digit check
       chat/search.js       search the messages this device holds
       files/transfer.js    chunked P2P file transfer with SHA-256 check
       files/image.js       image sniffing, sender-side thumbnail/preview derivation
       files/preview-cache.js  per-room LRU cache of previews (IndexedDB)
       call/call.js         CallManager: mesh call of one room, presence + signaling frames
       call/call-link.js    one audio+video RTCPeerConnection to one participant
-      call/media.js        microphone / camera access (swappable in tests)
+      call/media.js        microphone / camera / screen access (swappable in tests)
       qr/qr.js             QR encoder (verified against OpenCV in tests)
       ui/                  DOM helpers, i18n (en/zh/de), views, camera scanner
       ui/image-card.js     one image in the log: thumbnail, preview, original
@@ -156,7 +158,9 @@ if no broker is reachable; with brokers, reconnection is automatic).
   A connection that dies is offered again with growing pauses. Camera and microphone are
   asked for only when you join (or turn the camera on); a refused device still lets you
   listen. One call at a time per device; it keeps running while you read another room
-  ("minimize"). Needs HTTPS or localhost. Without a TURN server (Settings) two people
+  ("minimize"). Desktop browsers can share a screen, window or tab instead of the camera (the
+  tile shows it whole, not cropped; the browser's own "stop sharing" button ends it); phones
+  have no screen capture, so they only get the camera. Needs HTTPS or localhost. Without a TURN server (Settings) two people
   behind strict NATs cannot connect, same as chat.
 * **Version and language:** the version (`src/version.js`, kept equal to `package.json` by a
   test; bump both for a release) sits next to the title in the room list. Settings >
@@ -190,6 +194,29 @@ if no broker is reachable; with brokers, reconnection is automatic).
   return to the tab (at most once a minute); when they differ, a bar offers "Reload" (and asks
   first during a call). A static page cannot update itself. Without the stamp (local
   development, tests) nothing happens, not even a request.
+* **Linked devices (same identity on a second device):** the identity key cannot leave its
+  device, so a second device keeps its own key and gets a *certificate* from the main one
+  (`{r: main key, d: device key, n: name, ms, sig}`, signed by the main key). The linked device
+  writes as the main identity: its envelopes carry the certificate and the id of the main
+  identity, and `verifyEnvelope` accepts that only if the certificate is genuine and names
+  exactly the key that signed. On every new link the device first sends the certificate
+  (`{t:'cert'}`); it must name the key the link was authenticated with, and then the link counts
+  as the main identity's (so an owned room admits it without admitting the device key).
+  Membership changes and `unlink` must be signed by the main key itself, never through a
+  certificate, so a linked device can never administer a room or unlink others. Its counters
+  start at 500000, so it cannot make the same envelope id as the main device in one
+  millisecond. Linking is two codes (QR or pasted text), no server: the new device shows a
+  *request* (its key, a one-time sealing key, a name, signed with its key); the main device
+  answers with a *grant* (the certificate and every room's secret, owner id and key epoch,
+  sealed to that one-time key, signed by the main key). Both screens show six digits derived
+  from all keys; if they differ, a code was swapped. Rooms joined later need linking again
+  (it only adds). *Unlink* (main device, Settings > Linked devices) is a signed `unlink`
+  envelope in every room, kept forever like membership changes: peers drop that device's links
+  and refuse everything it writes with that certificate, including history that arrives later;
+  the device itself notices and goes back to its own identity. Limits: a stolen linked device
+  can read and write as you until its unlink has reached the others, and unlinking does not
+  change room keys (an owner removing a member does, see above); a linked device cannot create
+  rooms or own them; each device keeps its own unread marks and call connections.
 * **Delete and quote:** a `del` envelope (signed by the author, naming one of the
   author's own message ids) makes every peer drop that message's content from memory
   and storage and show "<name> deleted a message" in its place; a copy that arrives

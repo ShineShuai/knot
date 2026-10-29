@@ -8,6 +8,7 @@
 import { fromB64u, toB64u, utf8 } from '../util/bytes.js';
 import { peerIdOf, verifySignature } from '../crypto/identity.js';
 import { MAX_FUTURE_MS } from '../util/hlc.js';
+import { certShape, verifyCert } from '../crypto/delegation.js';
 import { LIMITS, PREVIEW_TYPES, THUMB_TYPES } from '../files/image.js';
 
 const B64U = /^[A-Za-z0-9_-]+$/;
@@ -35,6 +36,9 @@ export const replyBody = (text, { id, name, text: snippet }) => (
 /** Body of a deletion ("recall") of message `id` (its author, or the room owner, may do it;
  *  the room enforces who, see Room). */
 export const delBody = (id) => ({ id });
+/** Body of an unlink: the main identity withdraws the certificate of device key `d`. Signed
+ *  by the main key itself, never by a linked device. Never trimmed from the log. */
+export const unlinkBody = (d) => ({ d });
 /** Body of an edit: the new text of message `id`. Only its author may edit it; the latest edit
  *  wins. The original stays in the log (use delete to remove content). */
 export const editBody = (id, text) => ({ id, text });
@@ -86,7 +90,7 @@ export async function createEnvelope(identity, hlc, roomId, kind, body, name) {
   const { ms, c } = hlc.tick();
   const env = {
     v: 1,
-    id: `${ms.toString(36)}-${c.toString(36)}-${identity.id}`,
+    id: `${ms.toString(36)}-${c.toString(36)}-${identity.member ?? identity.id}`,
     room: roomId,
     kind,
     name,
@@ -95,7 +99,8 @@ export async function createEnvelope(identity, hlc, roomId, kind, body, name) {
     body,
     pub: toB64u(identity.pub),
   };
-  return { ...env, sig: toB64u(await identity.sign(signingBytes(env))) };
+  const signed = { ...env, sig: toB64u(await identity.sign(signingBytes(env))) };
+  return identity.cert ? { ...signed, cert: identity.cert } : signed;
 }
 
 const isB64u = (s, length) => typeof s === 'string' && s.length === length && B64U.test(s);
@@ -129,6 +134,9 @@ function wellFormed(e, roomId, { maxText, maxFileBytes, now }) {
   if (typeof e.id !== 'string' || e.id.length > 64 || typeof e.name !== 'string' ||
     e.name.length > 64) return false;
   if (!isInt(e.ms, now + MAX_FUTURE_MS) || !isInt(e.c, 1e9)) return false;
+  // A linked device's certificate rides along; membership and unlinking stay with the main key.
+  if (e.cert !== undefined && (!certShape(e.cert) || ADMIN_KINDS.includes(e.kind)
+    || e.kind === 'unlink')) return false;
   if (typeof e.pub !== 'string' || e.pub.length !== 43 || !B64U.test(e.pub)) return false;
   if (typeof e.sig !== 'string' || e.sig.length !== 86 || !B64U.test(e.sig)) return false;
   if (e.kind === 'text') return typeof e.body === 'string' && e.body.length > 0 &&
@@ -147,6 +155,7 @@ function wellFormed(e, roomId, { maxText, maxFileBytes, now }) {
     return !!b && typeof b === 'object' && isMessageId(b.id) && b.id !== e.id
       && typeof b.text === 'string' && b.text.length > 0 && b.text.length <= maxText;
   }
+  if (e.kind === 'unlink') return !!e.body && typeof e.body === 'object' && isB64u(e.body.d, 43);
   if (e.kind === 'react') {
     const b = e.body;
     return !!b && typeof b === 'object' && isMessageId(b.id) && b.id !== e.id
@@ -185,7 +194,11 @@ export async function verifyEnvelope(e, roomId, limits = {}) {
   const lim = { maxText: 4000, maxFileBytes: 100 * 1024 * 1024, now: Date.now(), ...limits };
   if (!wellFormed(e, roomId, lim)) return false;
   const pub = fromB64u(e.pub);
-  if (e.id !== `${e.ms.toString(36)}-${e.c.toString(36)}-${await peerIdOf(pub)}`) return false;
+  // Who wrote it: the key's own id, or, with a certificate, the main identity that certified
+  // exactly this key.
+  const author = e.cert ? await verifyCert(e.cert) : await peerIdOf(pub);
+  if (!author || (e.cert && e.cert.d !== e.pub)) return false;
+  if (e.id !== `${e.ms.toString(36)}-${e.c.toString(36)}-${author}`) return false;
   return verifySignature(pub, fromB64u(e.sig), signingBytes(e));
 }
 

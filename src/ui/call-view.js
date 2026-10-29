@@ -17,6 +17,7 @@ export class CallPanel {
     this.grid = h('div', { class: 'call-grid' });
     this.mic = h('button', { class: 'round', onclick: () => this.#toggleMic() });
     this.cam = h('button', { class: 'round', onclick: () => this.#toggleCam() });
+    this.share = h('button', { class: 'round', onclick: () => this.#toggleShare() });
     this.leave = h(
       'button',
       { class: 'danger', onclick: () => this.#room?.call.leave() },
@@ -25,7 +26,7 @@ export class CallPanel {
     this.element = h('section', { class: 'call', hidden: true, 'aria-label': t('call') },
       h('header', { class: 'call-head' }, this.title, this.size),
       this.grid,
-      h('footer', { class: 'call-bar' }, this.mic, this.cam, this.leave));
+      h('footer', { class: 'call-bar' }, this.mic, this.cam, this.share, this.leave));
   }
 
   /** The language changed: say everything again in the new one. */
@@ -80,14 +81,23 @@ export class CallPanel {
     if (!(await call.setVideo(wanted)) && wanted) this.#notify(t('callNoCam'));
   }
 
+  async #toggleShare() {
+    const { call } = this.#room;
+    await call.setScreen(!call.local.s); // a cancelled picker is not worth a message
+  }
+
   #draw() {
     const { call, label } = this.#room;
-    const { a, v } = call.local;
+    const { a, v, s } = call.local;
     this.title.textContent = label || t('roomDefault');
     this.#button(this.mic, a ? '🎤' : '🔇', t(a ? 'callMute' : 'callUnmute'), a);
     this.#button(this.cam, v ? '🎥' : '🚫', t(v ? 'callCameraOff' : 'callCameraOn'), v);
+    this.share.hidden = !call.canShare;
+    this.#button(this.share, '🖥', t(s ? 'callShareStop' : 'callShare'), s);
     const people = [
-      { id: SELF, name: t('you'), a, v, stream: call.localStream, state: 'connected' },
+      {
+        id: SELF, name: t('you'), a, v: v || s, s, stream: call.localStream, state: 'connected',
+      },
       ...call.participants.map((p) => ({ ...p, name: this.#room.nameOf(p.id) })),
     ];
     const gone = new Set(this.#tiles.keys());
@@ -109,7 +119,7 @@ export class CallPanel {
   }
 
   /** Tiles are created once and updated in place: a video element must not be rebuilt. */
-  #drawTile({ id, name, a, v, stream, state }) {
+  #drawTile({ id, name, a, v, s, stream, state }) {
     let tile = this.#tiles.get(id);
     if (!tile) {
       const video = h('video', { autoplay: true, playsinline: true, muted: id === SELF });
@@ -127,8 +137,10 @@ export class CallPanel {
       tile.video.play?.()?.catch(() => {}); // autoplay can refuse; the next tap starts it
     }
     tile.el.classList.toggle('novideo', !(v && stream));
+    tile.el.classList.toggle('sharing', !!s);
     tile.avatar.textContent = initial(name);
     tile.label.textContent = name;
-    tile.status.textContent = state !== 'connected' ? t('callConnecting') : a ? '' : '🔇';
+    const quiet = state !== 'connected' ? t('callConnecting') : a ? '' : '🔇';
+    tile.status.textContent = s ? `🖥 ${quiet}`.trim() : quiet;
   }
 }

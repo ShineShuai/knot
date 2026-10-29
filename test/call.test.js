@@ -14,11 +14,13 @@ const rooms = [];
 test.afterEach(() => { rooms.splice(0).forEach((r) => r.stop()); });
 
 /** `n` rooms (one secret, all linked pairwise) with fake media: [{ room, id, made, media }]. */
-async function party(n, { denied, extra = {} } = {}) {
+async function party(n, { denied, share, extra = {} } = {}) {
   const secret = newRoomSecret();
   const people = [];
   for (let i = 0; i < n; i++) {
-    const pieces = callParty({ denied: i === 0 ? denied : undefined });
+    const pieces = callParty({
+      denied: i === 0 ? denied : undefined, share: i === 0 ? share : undefined,
+    });
     const identity = await newIdentity();
     const settings = {
       ...DEFAULTS, name: `P${i}`, brokersEnabled: false, brokers: [], gatherTimeoutMs: 10,
@@ -194,4 +196,61 @@ test('a device that disappears mid-call is dropped without ending the call', asy
   await until(() => b.room.call.members.get(a.id).v === false);
   assert.equal(a.room.call.joined, true);
   assert.equal(sending(a.made[0], 'video'), null);
+});
+
+test('sharing the screen replaces the camera on the wire, and it comes back after', async () => {
+  const [a, b] = await party(2);
+  await Promise.all([a.room.call.join({ video: true }), b.room.call.join()]);
+  await until(() => connected(a, 1) && connected(b, 1));
+  const cam = a.media.tracks[1];
+  assert.equal(a.room.call.canShare, true);
+  assert.equal(await a.room.call.setScreen(true), true);
+  const screen = a.media.tracks[2];
+  assert.equal(screen.screen, true);
+  assert.equal(sending(a.made[0], 'video'), screen);
+  await until(() => b.room.call.members.get(a.id).s === true);
+  assert.equal(b.room.call.members.get(a.id).v, true);
+  assert.deepEqual(a.room.call.local, { a: true, v: true, s: true }, 'the camera stays on');
+  assert.equal(cam.stopped, false);
+  assert.equal(a.room.call.localStream.getTracks()[0], screen);
+  assert.equal(await a.room.call.setScreen(false), false);
+  assert.equal(screen.stopped, true);
+  assert.equal(sending(a.made[0], 'video'), cam);
+  await until(() => b.room.call.members.get(a.id).s === false);
+  assert.equal(a.made.length, 1, 'no new connection was needed');
+});
+
+test('a screen can be shared without a camera; the browser\'s own button ends it', async () => {
+  const [a, b] = await party(2);
+  await Promise.all([a.room.call.join(), b.room.call.join()]);
+  await until(() => connected(a, 1) && connected(b, 1));
+  assert.equal(b.room.call.members.get(a.id).v, false);
+  await a.room.call.setScreen(true);
+  await until(() => b.room.call.members.get(a.id).v === true);
+  const [, screen] = a.media.tracks;
+  screen.end(); // "Stop sharing" in the browser
+  await until(() => b.room.call.members.get(a.id).s === false);
+  assert.equal(b.room.call.members.get(a.id).v, false);
+  assert.equal(sending(a.made[0], 'video'), null);
+  assert.equal(a.room.call.joined, true);
+});
+
+test('a cancelled picker changes nothing; leaving stops a running share', async () => {
+  const [a, b] = await party(2, { denied: ['screen'] });
+  await Promise.all([a.room.call.join(), b.room.call.join()]);
+  assert.equal(await a.room.call.setScreen(true), false);
+  assert.equal(a.room.call.local.s, false);
+  const [c, d] = await party(2);
+  await Promise.all([c.room.call.join(), d.room.call.join()]);
+  await c.room.call.setScreen(true);
+  const [, screen] = c.media.tracks;
+  c.room.call.leave();
+  assert.equal(screen.stopped, true);
+  assert.equal(c.room.call.local.s, false);
+  assert.equal(b.room.call.joined, true);
+});
+
+test('a browser that cannot capture the screen does not offer it', async () => {
+  const [a] = await party(2, { share: false });
+  assert.equal(a.room.call.canShare, false);
 });

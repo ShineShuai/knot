@@ -9,12 +9,20 @@ export class HLC {
   c = 0;
   #now;
 
-  constructor(now = Date.now) { this.#now = now; }
+  #base;
+
+  /** `counterBase`: where the counter starts in each new millisecond. A linked device uses a
+   *  high one, so it cannot make the same id as the main device in the same millisecond (both
+   *  write as one identity). */
+  constructor(now = Date.now, counterBase = 0) {
+    this.#now = now;
+    this.#base = counterBase;
+  }
 
   /** Stamp for a local event. */
   tick() {
     const t = this.#now();
-    if (t > this.ms) { this.ms = t; this.c = 0; } else { this.c++; }
+    if (t > this.ms) { this.ms = t; this.c = this.#base; } else { this.c++; }
     return { ms: this.ms, c: this.c };
   }
 

@@ -5,7 +5,8 @@
 // to a known identity. Nothing here touches the brokers or the message log: who is in a call
 // is ephemeral.
 //
-// Frames (`k`):  in {a,v}   I am in the call; a/v: microphone / camera are on
+// Frames (`k`):  in {a,v,s} I am in the call; a/v: microphone / video (camera or screen) are
+//                           on; s: the video is a shared screen
 //                out        I left
 //                who        who is in the call? (answered with `in`; sent when a link is ready,
 //                           because a frame sent before the other side counts us as a member
@@ -32,7 +33,7 @@ export class CallManager extends Emitter {
   #tries = new Map();  // peer id -> failed connection attempts in a row
   #chains = new Map(); // peer id -> promise: one peer's negotiation steps run in order
   #timers = new Set();
-  #audio = null; #video = null; #localStream = null;
+  #audio = null; #video = null; #screen = null; #localStream = null;
   #generation = 0; #joining = false;
   #send; #opts; #media;
 
@@ -58,14 +59,17 @@ export class CallManager extends Emitter {
   get max() { return this.#opts.settings.callMaxParticipants; }
   /** Our camera, for the self view (null when it is off). */
   get localStream() { return this.#localStream; }
-  /** Our microphone / camera state. */
-  get local() { return { a: !!this.#audio?.enabled, v: !!this.#video }; }
+  /** Our microphone / camera / screen state (`v`: the camera is on; `s`: we share the screen). */
+  get local() { return { a: !!this.#audio?.enabled, v: !!this.#video, s: !!this.#screen }; }
+
+  /** Can this browser share a screen? (Not phones.) */
+  get canShare() { return !!this.#media.canShare?.(); }
 
   /** Everyone else in the call, in a stable order. state: connected | connecting | waiting */
   get participants() {
-    return [...this.members].sort(([x], [y]) => (x < y ? -1 : 1)).map(([id, { a, v }]) => {
+    return [...this.members].sort(([x], [y]) => (x < y ? -1 : 1)).map(([id, { a, v, s }]) => {
       const link = this.#links.get(id)?.link;
-      return { id, a, v, stream: link?.stream ?? null, state: link?.state ?? 'waiting' };
+      return { id, a, v, s, stream: link?.stream ?? null, state: link?.state ?? 'waiting' };
     });
   }
 
@@ -110,6 +114,8 @@ export class CallManager extends Emitter {
     this.#tries.clear();
     this.#audio?.stop();
     this.#audio = null;
+    this.#screen?.stop();
+    this.#screen = null;
     this.#setVideo(null);
     this.emit('change');
   }
@@ -136,6 +142,27 @@ export class CallManager extends Emitter {
     return !!this.#video;
   }
 
+  /** Share the screen (or a window or tab) instead of the camera, or go back to the camera.
+   *  Resolves to whether we share now; a cancelled or refused picker changes nothing. */
+  async setScreen(on) {
+    if (!this.joined) return false;
+    if (on && !this.#screen) {
+      let track = null;
+      try { track = await this.#media.getScreen(); } catch { return false; }
+      if (!this.joined) { track.stop(); return false; } // we left while the browser was asking
+      // The browser's own "stop sharing" button ends the track.
+      track.addEventListener?.('ended', () => track === this.#screen && this.setScreen(false));
+      this.#screen = track;
+    } else if (!on && this.#screen) {
+      this.#screen.stop();
+      this.#screen = null;
+    }
+    this.#refreshLocal();
+    this.#applyTracks();
+    this.#publish();
+    return !!this.#screen;
+  }
+
   #devices() { return { audio: !!this.#audio, video: !!this.#video }; }
 
   async #acquire(kind) {
@@ -149,13 +176,24 @@ export class CallManager extends Emitter {
     return track;
   }
 
+  /** What we send as video: the screen if we share it, else the camera. */
+  #sending() { return this.#screen ?? this.#video; }
+
   #setVideo(track) {
     this.#video?.stop();
     this.#video = track;
+    this.#refreshLocal();
+  }
+
+  #refreshLocal() {
+    const track = this.#sending();
     this.#localStream = track ? new this.#opts.Stream([track]) : null;
   }
 
-  #state() { return { k: 'in', a: this.local.a, v: this.local.v }; }
+  #state() {
+    const { a, s } = this.local;
+    return { k: 'in', a, v: !!this.#sending(), s };
+  }
 
   #publish() {
     this.#broadcast(this.#state());
@@ -164,7 +202,7 @@ export class CallManager extends Emitter {
 
   #applyTracks() {
     for (const { link } of this.#links.values()) {
-      link.setTracks({ audio: this.#audio, video: this.#video });
+      link.setTracks({ audio: this.#audio, video: this.#sending() });
     }
   }
 
@@ -189,7 +227,7 @@ export class CallManager extends Emitter {
   /** A {t:'call'} frame from a member. Malformed or out-of-place frames are ignored. */
   onFrame(id, m) {
     if (m?.k === 'in') {
-      this.members.set(id, { a: m.a === true, v: m.v === true });
+      this.members.set(id, { a: m.a === true, v: m.v === true, s: m.s === true });
       this.emit('change');
       this.#reconcile();
     } else if (m?.k === 'who') {
@@ -247,7 +285,7 @@ export class CallManager extends Emitter {
       iceServers: iceServers(), gatherTimeoutMs: settings.gatherTimeoutMs,
       connectTimeoutMs: settings.connectTimeoutMs, RTC, Stream,
     });
-    link.setTracks({ audio: this.#audio, video: this.#video });
+    link.setTracks({ audio: this.#audio, video: this.#sending() });
     const entry = { link, sid, offerer, answered: false };
     this.#links.set(id, entry);
     link.on('connected', () => { this.#tries.delete(id); this.emit('change'); });

@@ -2,6 +2,9 @@
 // Events: 'rooms' (list changed)
 import { Emitter } from './util/emitter.js';
 import { fromB64u, toB64u } from './util/bytes.js';
+import { saveSettings } from './config.js';
+import { newBoxKey } from './crypto/box.js';
+import { makeLinkGrant, makeLinkRequest, readLinkGrant, readLinkRequest } from './chat/devices.js';
 import { deriveRoomKeys, newRoomSecret } from './crypto/room-keys.js';
 import { decodeRecoveryCode } from './chat/recovery.js';
 import { verifyHandshake } from './net/handshake.js';
@@ -38,7 +41,79 @@ export class AppModel extends Emitter {
   }
 
   /** Create a brand-new room. We become its owner: nobody gets in without our approval. */
-  createRoom(label) { return this.addRoom(newRoomSecret(), label, this.identity.id); }
+  async createRoom(label) {
+    if (this.isLinked) throw new Error('Create rooms on your main device');
+    return this.addRoom(newRoomSecret(), label, this.identity.id);
+  }
+
+  // ---- linked devices (see chat/devices.js) ------------------------------------------------
+
+  /** Is this device linked to another one, writing as that device's identity? */
+  get isLinked() { return !!this.identity.cert; }
+
+  /** Main device: the devices linked so far, as { d: device key, n: name, ms }. */
+  async linkedDevices() { return (await this.kv.get('linked')) ?? []; }
+
+  /** Main device: answer a code from a new device. Resolves to { code, sas, name }: show the code
+   *  (it holds our rooms, sealed to that device) and the six digits to compare. */
+  async linkDevice(requestText) {
+    if (this.isLinked) throw new Error('Only the main device can link a device');
+    const request = await readLinkRequest(requestText);
+    if (!request) throw new Error('That is not a valid device code (or it has expired)');
+    const rooms = [...this.rooms.values()].map((room) => room.exportState());
+    const grant = await makeLinkGrant(
+      this.identity, request, { name: this.settings.name, rooms },
+    );
+    const others = (await this.linkedDevices()).filter((x) => x.d !== grant.cert.d);
+    const added = { d: grant.cert.d, n: grant.cert.n, ms: grant.cert.ms };
+    await this.kv.put('linked', [...others, added]);
+    this.emit('devices');
+    return { code: grant.code, sas: grant.sas, name: request.name };
+  }
+
+  /** Main device: withdraw a linked device in every room. */
+  async unlinkDevice(devicePub) {
+    for (const room of this.rooms.values()) await room.unlinkDevice(devicePub).catch(() => {});
+    await this.kv.put('linked', (await this.linkedDevices()).filter((x) => x.d !== devicePub));
+    this.emit('devices');
+  }
+
+  /** New device: make a code for the main device. `read(text)` then reads the code it answers
+   *  with: null if invalid, else { name, mainId, sas, rooms, apply() }; `apply()` stores the
+   *  link and the rooms (reload the app after it). */
+  async startLinking(deviceName) {
+    if (this.isLinked) throw new Error('This device is already linked');
+    const boxKey = await newBoxKey();
+    const name = deviceName || `device-${this.identity.id.slice(0, 4)}`;
+    const code = await makeLinkRequest(this.identity, { name, boxPub: boxKey.pub });
+    const read = async (text) => {
+      const grant = await readLinkGrant(
+        text, { identity: this.identity, boxKey, boxPub: boxKey.pub },
+      );
+      if (!grant) return null;
+      return {
+        name: grant.name, mainId: grant.mainId, sas: grant.sas, rooms: grant.rooms.length,
+        apply: () => this.#applyGrant(grant),
+      };
+    };
+    return { code, read };
+  }
+
+  async #applyGrant({ cert, name, rooms }) {
+    await this.kv.put('delegate', { cert });
+    if (name) {
+      this.settings.name = name;
+      await saveSettings(this.kv, this.settings);
+    }
+    for (const r of rooms) {
+      await this.completeJoin(
+        { secret: fromB64u(r.secret), label: r.label, founder: r.founder, epoch: r.epoch },
+      );
+    }
+  }
+
+  /** The main device withdrew this device: go back to being a device of our own. */
+  async forgetLinking() { await this.kv.delete('delegate'); }
 
   /** Join (or return the existing) room with this secret. `owner`: its owner's id, if it has
    *  one (older rooms do not: anyone with the secret may join those). */

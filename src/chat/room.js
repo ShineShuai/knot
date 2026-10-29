@@ -38,13 +38,14 @@ import {
 import { PeerLink } from '../net/peer-link.js';
 import { RoomChannel } from '../net/room-channel.js';
 import { CallManager } from '../call/call.js';
+import { verifyCert } from '../crypto/delegation.js';
 import { FileTransfer } from '../files/transfer.js';
 import { PreviewCache } from '../files/preview-cache.js';
 import { asImage } from '../files/image.js';
 import {
   ADMIN_KINDS, admitBody, authorIdOf, authorOfId, createEnvelope, delBody, editBody, isEmoji,
   previewRef, quoteOf, reactBody, recoverBody, recoveryBody, replyBody, revokeBody, transferBody,
-  verifyEnvelope,
+  unlinkBody, verifyEnvelope,
 } from './envelope.js';
 import { MessageLog, byStamp } from './log.js';
 import { MessageStore } from './message-store.js';
@@ -57,6 +58,7 @@ const REDIAL_MS = 10000;
 const MAX_JOIN_REQUESTS = 50;
 const UNREAD_KINDS = ['text', 'reply', 'file']; // what counts as a message to catch up on
 const DECORATIONS = ['edit', 'react']; // envelopes that ride on another message
+const LINKED_COUNTER_BASE = 500_000;
 
 export class Room extends Emitter {
   /** peerId -> { id, pub, name, link, via:'broker'|'manual', state:'connecting'|'p2p', sas } */
@@ -71,6 +73,7 @@ export class Room extends Emitter {
   #joinRequests = new Map(); // joiner id -> request waiting for the owner's decision
   #lobby = null; #lobbyId = null;
   #read = { ms: 0, c: 0 };   // stamp of the newest message seen on this device
+  #unlinked = new Set();     // "<member id>|<device key>" of every withdrawn certificate
   #pending = new Map();      // session -> { link, offer, peer|null } handshakes awaiting an answer
   #seenSessions = new Set(); // offers already answered (replay protection)
   #dialedAt = new Map();
@@ -100,7 +103,9 @@ export class Room extends Emitter {
     this.id = keys.id; // the room's identity: signatures, storage; never changes
     this.#chan = { id: keys.id, aes: keys.aes }; // where we meet on the brokers: can rotate
     this.#kv = kv;
-    this.hlc = new HLC();
+    // A linked device writes as the main identity: its counters start high, so their ids
+    // cannot collide with the main device's.
+    this.hlc = new HLC(Date.now, identity.cert ? LINKED_COUNTER_BASE : 0);
     this.log = new MessageLog(settings.logCap);
     this.previews = new PreviewCache(kv, this.id, settings.previewCacheBytes);
     this.files = new FileTransfer(
@@ -129,14 +134,14 @@ export class Room extends Emitter {
       this.members.get(id) ?? { seen: 0 },
     );
     const owner = (id) => id === this.roster?.owner;
-    const rows = [...this.peers.values()].map(({ id, name, state, via, sas }) => ({
-      id, name, via, sas, owner: owner(id),
+    const rows = [...this.peers.values()].map(({ id, name, state, via, sas, member }) => ({
+      id, name, via, sas, member: member ?? id, owner: owner(member ?? id),
       state: state === 'p2p' || !viaRelay(id) ? state : 'relay',
     }));
     for (const [id, m] of this.members) {
       if (!this.peers.has(id) && this.#isFresh(m)) rows.push({
         id, name: m.name, state: viaRelay(id) ? 'relay' : 'seen', via: 'broker', sas: null,
-        owner: owner(id),
+        member: id, owner: owner(id),
       });
     }
     return rows;
@@ -154,7 +159,8 @@ export class Room extends Emitter {
       && authorIdOf(e) === this.identity.id;
     if (!this.roster && stored.some(ours)) this.roster = new Roster(this.identity.id);
     this.roster?.load(stored);
-    this.removed = !!this.roster?.revoked.has(this.identity.id);
+    this.removed = !!this.roster?.revoked.has(this.identity.member);
+    for (const e of this.log.where((x) => x.kind === 'unlink')) this.#noteUnlink(e);
     const mark = await this.#kv.get(`read:${this.id}`);
     this.#read = mark ?? this.#newestStamp(); // first run: what is here counts as read
     if (!mark) await this.#kv.put(`read:${this.id}`, this.#read).catch(() => {});
@@ -170,8 +176,12 @@ export class Room extends Emitter {
     return last ? { ms: last.ms, c: last.c } : { ms: 0, c: 0 };
   }
 
+  /** Is this author id us: this device, or the main identity we write as (or one of its
+   *  other devices, which write as the same identity)? */
+  isMine(authorId) { return authorId === this.identity.member; }
+
   #isUnread(env) {
-    return UNREAD_KINDS.includes(env.kind) && authorIdOf(env) !== this.identity.id
+    return UNREAD_KINDS.includes(env.kind) && !this.isMine(authorIdOf(env))
       && compareStamps(env, this.#read) > 0;
   }
 
@@ -194,6 +204,15 @@ export class Room extends Emitter {
   }
 
   get epoch() { return this.#epoch.n; }
+
+  /** What another device of ours needs to join this room (sent sealed, see chat/devices.js). */
+  exportState() {
+    const { n, secret } = this.#epoch;
+    return {
+      secret: toB64u(this.secret), label: this.label, founder: this.roster?.founder ?? null,
+      epoch: n ? { n, s: toB64u(secret) } : null,
+    };
+  }
   /** Id of the broker channel in use (changes with every rotation). */
   get channelId() { return this.#chan.id; }
 
@@ -305,7 +324,7 @@ export class Room extends Emitter {
    *  and so may the room owner. */
   async deleteMessage(id) {
     if (this.log.isGone(id) || this.log.get(id)?.kind === 'del') return null;
-    if (authorOfId(id) !== this.identity.id && !this.isOwner) {
+    if (!this.isMine(authorOfId(id)) && !this.isOwner) {
       throw new Error('You can only delete your own messages');
     }
     return this.#publish('del', delBody(id));
@@ -318,7 +337,7 @@ export class Room extends Emitter {
     if (text.length > this.settings.maxTextLength) throw new Error('Message too long');
     const env = this.log.get(id);
     if (!['text', 'reply'].includes(env?.kind)) throw new Error('That message cannot be edited');
-    if (authorIdOf(env) !== this.identity.id) {
+    if (!this.isMine(authorIdOf(env))) {
       throw new Error('You can only edit your own messages');
     }
     if (text === this.log.textOf(env)) return null;
@@ -329,7 +348,7 @@ export class Room extends Emitter {
   async react(id, emoji) {
     if (!isEmoji(emoji)) throw new Error('Not an emoji');
     if (!this.log.get(id)) throw new Error('That message is gone');
-    const mine = this.log.overlay().reactions.get(id)?.get(emoji)?.includes(this.identity.id);
+    const mine = this.log.overlay().reactions.get(id)?.get(emoji)?.some((who) => this.isMine(who));
     return this.#publish('react', reactBody(id, emoji, !mine));
   }
 
@@ -367,7 +386,7 @@ export class Room extends Emitter {
     const author = authorIdOf(env);
     const links = [...this.peers.values()]
       .filter((p) => p.state === 'p2p' && p.link.state === 'open')
-      .sort((a, b) => (b.id === author) - (a.id === author))
+      .sort((a, b) => ((b.member ?? b.id) === author) - ((a.member ?? a.id) === author))
       .map((p) => p.link);
     if (!links.length) throw new Error('The sender is not connected right now');
     let failure;
@@ -384,15 +403,31 @@ export class Room extends Emitter {
 
   /** Fetch a shared file directly from its author. Resolves to a Blob. */
   async downloadFile(env, onProgress) {
-    const own = authorIdOf(env) === this.identity.id && this.files.local(env.body.id);
+    const author = authorIdOf(env);
+    const own = this.isMine(author) && this.files.local(env.body.id);
     if (own) return own;
-    const link = this.peers.get(authorIdOf(env))?.link;
-    if (link?.state !== 'open') throw new Error('The sender is not connected right now');
-    return this.files.download(link, env.body, onProgress);
+    const links = this.#linksOf(author); // the author may have several devices
+    if (!links.length) throw new Error('The sender is not connected right now');
+    let failure;
+    for (const link of links) {
+      try { return await this.files.download(link, env.body, onProgress); } catch (err) {
+        failure = err;
+      }
+    }
+    throw failure;
+  }
+
+  /** Open direct links to the devices of one member. */
+  #linksOf(memberId) {
+    return [...this.peers.values()]
+      .filter((p) => p.state === 'p2p' && p.link.state === 'open')
+      .filter((p) => (p.member ?? p.id) === memberId)
+      .map((p) => p.link);
   }
 
   async #publish(kind, body, signer = this.identity) {
     if (this.removed) throw new Error('You were removed from this room');
+    if (this.#isUnlinked(signer.cert, signer.member)) throw new Error('This device was unlinked');
     const env = await createEnvelope(signer, this.hlc, this.id, kind, body, this.#name);
     const kept = await this.#accept(env, null);
     if (!kept && ADMIN_KINDS.includes(kind)) throw new Error('That change could not be applied');
@@ -437,8 +472,52 @@ export class Room extends Emitter {
       maxFileBytes: this.settings.maxFileBytes,
     };
     if (!(await verifyEnvelope(env, this.id, limits))) return false;
+    if (this.#isUnlinked(env.cert, authorIdOf(env))) return false;
     if (!this.#permits(env)) return false;
     return this.#accept(env, source);
+  }
+
+  // ---- linked devices ---------------------------------------------------------------------
+
+  #isUnlinked(cert, memberId) { return !!cert && this.#unlinked.has(`${memberId}|${cert.d}`); }
+
+  #noteUnlink(env) { this.#unlinked.add(`${authorIdOf(env)}|${env.body.d}`); }
+
+  /** Main device: withdraw the certificate of a linked device (its public key, base64url) in
+   *  this room. Everyone drops its links and refuses what it writes from then on. */
+  async unlinkDevice(devicePub) {
+    if (this.identity.cert) throw new Error('Only the main device can unlink a device');
+    return this.#publish('unlink', unlinkBody(devicePub));
+  }
+
+  /** A certificate was withdrawn: close that device's links; if it was ours, say so. */
+  #onUnlink(env) {
+    this.#noteUnlink(env);
+    for (const entry of this.peers.values()) {
+      const theirs = (entry.member ?? entry.id) === authorIdOf(env);
+      if (!theirs || !entry.pub || toB64u(entry.pub) !== env.body.d) continue;
+      const timer = setTimeout(() => entry.link.close(), 300); // the news travels on first
+      timer.unref?.();
+    }
+    if (this.#isUnlinked(this.identity.cert, this.identity.member)) this.emit('unlinked');
+  }
+
+  /** A linked device introduces itself on a new link: the certificate must be for exactly
+   *  the key this link was authenticated with. */
+  async #onCert(entry, { cert }) {
+    const member = await verifyCert(cert);
+    if (!member || !entry.pub || cert.d !== toB64u(entry.pub)) return;
+    if (this.#isUnlinked(cert, member) || this.roster?.revoked.has(member)) {
+      entry.link.close();
+      return;
+    }
+    entry.member = member;
+    if (this.roster && !entry.synced && this.roster.isMember(member)) this.#markSynced(entry);
+    this.#emitPeers();
+  }
+
+  #sendCert(link) {
+    if (this.identity.cert) link.sendChat(JSON.stringify({ t: 'cert', cert: this.identity.cert }));
   }
 
   /** Who may post what. Admin envelopes are checked by the roster itself. */
@@ -493,6 +572,7 @@ export class Room extends Emitter {
       .catch((err) => console.error('could not save message', err));
     if (doomed) await this.#forget(doomed);
     if (ADMIN_KINDS.includes(env.kind)) await this.#onAdmin(env);
+    if (env.kind === 'unlink') this.#onUnlink(env);
     const fresh = this.#isUnread(env); // decided before a viewer can mark it read
     // Membership changes are shown in the conversation too ("Bob joined"): redraw for them.
     if (env.kind !== 'recovery' && !removed.includes(env)) this.emit('message', env);
@@ -505,18 +585,21 @@ export class Room extends Emitter {
   async #onAdmin(env) {
     const { kind, body } = env;
     if (kind === 'revoke') {
-      if (body.id === this.identity.id) return this.#beRemoved();
+      if (this.isMine(body.id)) return this.#beRemoved();
       this.members.delete(body.id);
       this.call.peerDown(body.id);
       this.#joinRequests.delete(body.id);
-      const peer = this.peers.get(body.id);
-      if (peer) { // tell them first, so their app can say so, then drop the link
+      for (const peer of [...this.peers.values()]) {
+        if ((peer.member ?? peer.id) !== body.id) continue;
+        // tell them first, so their app can say so, then drop the link
         try { peer.link.sendChat(JSON.stringify({ t: 'admin', es: [env] })); } catch { /* gone */ }
         const timer = setTimeout(() => peer.link.close(), 300);
         timer.unref?.();
       }
     }
-    if (kind === 'recover' && this.roster.revoked.has(this.identity.id)) return this.#beRemoved();
+    if (kind === 'recover' && this.roster.revoked.has(this.identity.member)) {
+      return this.#beRemoved();
+    }
     if (kind === 'transfer' || kind === 'recover') await this.#syncLobby();
     this.#emitPeers();
     this.emit('roster');
@@ -549,9 +632,10 @@ export class Room extends Emitter {
     if (!entry.limiter.allow()) return;
     let m;
     try { m = JSON.parse(raw); } catch { return; }
+    if (m?.t === 'cert') { await this.#onCert(entry, m); return; }
     if (this.roster && m?.t === 'admin' && Array.isArray(m.es)) {
       for (const e of m.es.slice(0, 100)) await this.#ingest(e, null);
-      if (!entry.synced && this.roster.isMember(entry.id)) this.#markSynced(entry);
+      if (!entry.synced && this.roster.isMember(entry.member ?? entry.id)) this.#markSynced(entry);
       return;
     }
     if (this.roster && !entry.synced) return; // not (yet) known to be a member: ignored
@@ -655,6 +739,7 @@ export class Room extends Emitter {
       clearTimeout(timer);
       entry.state = 'p2p';
       this.#emitPeers();
+      this.#sendCert(link);
       if (!this.roster) {
         entry.synced = true;
         this.call.peerUp(peer.id);
@@ -795,10 +880,10 @@ export class Room extends Emitter {
   /** Everyone in the room (owner first), for the members list. */
   membersView() {
     if (!this.roster) return [];
-    const live = new Map(this.peerList.map((p) => [p.id, p.state]));
+    const live = new Map(this.peerList.map((p) => [p.member, p.state]));
     return [this.roster.owner, ...this.roster.members.keys()].map((id) => ({
-      id, name: this.#nameOf(id), owner: id === this.roster.owner, self: id === this.identity.id,
-      state: id === this.identity.id ? 'self' : live.get(id) ?? 'offline',
+      id, name: this.#nameOf(id), owner: id === this.roster.owner, self: this.isMine(id),
+      state: this.isMine(id) ? 'self' : live.get(id) ?? 'offline',
     }));
   }
 
@@ -806,7 +891,7 @@ export class Room extends Emitter {
   nameOf(id) { return this.#nameOf(id); }
 
   #nameOf(id) {
-    if (id === this.identity.id) return this.#name;
+    if (id === this.identity.id || id === this.identity.member) return this.#name;
     const seen = this.peers.get(id)?.name ?? this.members.get(id)?.name
       ?? this.roster?.names.get(id);
     if (seen) return seen;

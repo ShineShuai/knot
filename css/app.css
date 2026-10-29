@@ -173,3 +173,7 @@ button.icon { padding: .35rem .55rem; line-height: 1; }
 .update-bar button { padding: .1rem .7rem; }
 .update-bar button.primary { background: var(--link-ink); color: var(--link); border-color: var(--link-ink); }
 .update-bar button.ghost { color: inherit; }
+/* a shared screen is shown whole, not cropped, and never mirrored */
+.tile.sharing video { object-fit: contain; }
+.tile.self.sharing video { transform: none; }
+.call-bar button[hidden] { display: none; }

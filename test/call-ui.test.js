@@ -16,14 +16,14 @@ const { root: rootA } = installFakeDom();
 const rooms = [];
 test.afterEach(() => { rooms.splice(0).forEach((r) => r.stop()); });
 
-async function person(name, { calls = true } = {}) {
+async function person(name, { calls = true, share } = {}) {
   const settings = {
     ...DEFAULTS, name, brokersEnabled: false, brokers: [], gatherTimeoutMs: 10,
     connectTimeoutMs: 2000, callRetryMs: 20,
   };
   const model = new AppModel({
     kv: new MemoryKV(), identity: await newIdentity(), settings, iceServers: () => [],
-    linkFactory: () => new FakeLink(), callEnv: calls ? callParty().env : undefined,
+    linkFactory: () => new FakeLink(), callEnv: calls ? callParty({ share }).env : undefined,
   });
   const root = new rootA.constructor('div');
   return { model, root, ui: mountUi(root, model) };
@@ -116,4 +116,32 @@ test('ui: a refused microphone is reported, and the call still opens', async () 
   await until(() => room.call.joined);
   assert.match(root.querySelector('.toast').textContent, /No microphone/);
   assert.equal(root.querySelector('.call').hidden, false);
+});
+
+test('ui: share the screen from the call window; phones do not get the button', async () => {
+  const a = await person('Ada');
+  const room = await a.model.addRoom(newRoomSecret(), 'Club');
+  rooms.push(room);
+  a.ui.select(room);
+  byLabel(a.root, 'Start an audio call').click();
+  await until(() => room.call.joined);
+  const share = byLabel(a.root, 'Share screen');
+  assert.equal(share.hidden, false);
+  share.click();
+  await until(() => byLabel(a.root, 'Stop sharing'));
+  const own = a.root.querySelector('.self');
+  assert.ok(own.classList.contains('sharing'));
+  assert.ok(!own.classList.contains('novideo'), 'our own screen is shown to us');
+  assert.match(own.querySelector('.tile-status').textContent, /🖥/);
+  byLabel(a.root, 'Stop sharing').click();
+  await until(() => byLabel(a.root, 'Share screen'));
+  assert.ok(!own.classList.contains('sharing'));
+
+  const phone = await person('Bob', { share: false });
+  const room2 = await phone.model.addRoom(newRoomSecret(), 'Club');
+  rooms.push(room2);
+  phone.ui.select(room2);
+  byLabel(phone.root, 'Start an audio call').click();
+  await until(() => room2.call.joined);
+  assert.equal(byLabel(phone.root, 'Share screen').hidden, true);
 });

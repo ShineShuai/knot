@@ -145,3 +145,75 @@ test('ui: share the screen from the call window; phones do not get the button', 
   await until(() => room2.call.joined);
   assert.equal(byLabel(phone.root, 'Share screen').hidden, true);
 });
+
+test('ui: text and files during a call: chat beside the video, or a bar under it', async () => {
+  const [a, b] = [await person('Ada'), await person('Bob')];
+  const [ra, rb] = await pair(a, b);
+  a.ui.select(ra);
+  b.ui.select(rb);
+  const panel = a.root.querySelector('.call');
+  const shell = a.root.querySelector('.shell');
+  byLabel(a.root, 'Start an audio call').click();
+  await until(() => ra.call.joined);
+  assert.equal(panel.dataset.mode, 'full');
+
+  // The full-screen call hides the conversation: what arrives is unread, and the button says so.
+  await rb.sendText('are you there?');
+  await until(() => byLabel(a.root, 'Show chat (1 unread)'));
+  assert.equal(ra.unread, 1);
+  assert.equal(panel.querySelector('.count').textContent, '1');
+
+  byLabel(a.root, 'Show chat (1 unread)').click();
+  assert.equal(panel.dataset.mode, 'chat');
+  assert.equal(shell.dataset.call, 'chat');
+  assert.equal(panel.hidden, false);
+  assert.equal(ra.unread, 0, 'now it is on screen');
+  assert.equal(panel.querySelector('.count').hidden, true);
+
+  // Text from the call window's side...
+  const box = a.root.querySelector('textarea');
+  box.value = 'yes, with you https://example.com/doc';
+  box.fire('keydown', { key: 'Enter' });
+  const has = (text) => rb.log.timeline().some((e) => rb.log.textOf(e).startsWith(text));
+  await until(() => has('yes, with you'));
+  // ...and a file, through the same message box.
+  const picker = a.root.querySelectorAll('input').find((el) => el.type === 'file');
+  picker.files = [new File(['meeting notes'], 'notes.txt', { type: 'text/plain' })];
+  picker.fire('change');
+  box.fire('keydown', { key: 'Enter' });
+  await until(() => rb.log.timeline().some((e) => e.body.name === 'notes.txt'));
+  assert.equal(ra.call.joined, true, 'the call goes on');
+
+  // A message that arrives while the chat is beside the call counts as read at once.
+  await rb.sendText('got it');
+  await until(() => a.root.querySelectorAll('.msg').some((m) => m.textContent.includes('got it')));
+  assert.equal(ra.unread, 0);
+
+  byLabel(a.root, 'Minimize').click(); // a bar under the conversation: it stays usable
+  assert.equal(panel.dataset.mode, 'mini');
+  assert.equal(shell.dataset.call, 'mini');
+  byLabel(a.root, 'Expand').click(); // back to what it was
+  assert.equal(panel.dataset.mode, 'chat');
+  byLabel(a.root, 'Hide chat').click();
+  assert.equal(panel.dataset.mode, 'full');
+  assert.equal(shell.dataset.call, '');
+
+  find(a.root, 'button', 'Leave call')[0].click();
+  assert.equal(panel.hidden, true);
+  assert.equal(panel.dataset.mode, 'full');
+});
+
+test('ui: the chat button brings up the room of the call, wherever you are', async () => {
+  const a = await person('Ada');
+  const [r1, r2] = [await a.model.addRoom(newRoomSecret(), 'One'),
+    await a.model.addRoom(newRoomSecret(), 'Two')];
+  rooms.push(r1, r2);
+  a.ui.select(r1);
+  byLabel(a.root, 'Start an audio call').click();
+  await until(() => r1.call.joined);
+  a.ui.select(r2); // reading another room: the call goes on
+  assert.match(a.root.querySelector('h2').textContent, /Two/);
+  byLabel(a.root, 'Show chat').click();
+  assert.match(a.root.querySelector('h2').textContent, /One/);
+  assert.equal(a.root.querySelector('.call').dataset.mode, 'chat');
+});

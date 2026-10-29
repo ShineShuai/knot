@@ -70,7 +70,9 @@ if no broker is reachable; with brokers, reconnection is automatic).
       qr/qr.js             QR encoder (verified against OpenCV in tests)
       ui/                  DOM helpers, i18n (en/zh/de), views, camera scanner
       ui/image-card.js     one image in the log: thumbnail, preview, original
-      ui/call-view.js      the call window: tiles, microphone / camera / leave
+      ui/call-view.js      the call window: tiles, microphone / camera / chat / leave
+      ui/linkify.js        http(s) links in message text
+      ui/emoji.js          the emoji offered for reactions
       ui/notifier.js       browser notifications for rooms that are not on screen
       ui/export.js         history as text or signed JSON
       update.js            notices a newer published build (build.json)
@@ -158,7 +160,13 @@ if no broker is reachable; with brokers, reconnection is automatic).
   A connection that dies is offered again with growing pauses. Camera and microphone are
   asked for only when you join (or turn the camera on); a refused device still lets you
   listen. One call at a time per device; it keeps running while you read another room
-  ("minimize"). Desktop browsers can share a screen, window or tab instead of the camera (the
+  ("minimize"). Texting and files work during a call: the chat button (💬) puts the room's
+  conversation next to the video (call at the side on a desktop, on top on a phone) with the
+  usual message box, drop, paste and reactions, and counts what arrives while the call covers
+  the conversation; "minimize" leaves a bar *below* the conversation, so the message box stays
+  free. Files use their own data channel, so a transfer shares bandwidth with the call but needs
+  no extra connection.
+  Desktop browsers can share a screen, window or tab instead of the camera (the
   tile shows it whole, not cropped; the browser's own "stop sharing" button ends it); phones
   have no screen capture, so they only get the camera. Needs HTTPS or localhost. Without a TURN server (Settings) two people
   behind strict NATs cannot connect, same as chat.
@@ -176,7 +184,16 @@ if no broker is reachable; with brokers, reconnection is automatic).
   original text stays in the log and in the JSON export: an edit corrects a typo, delete removes
   content. Deleting a message also drops its edits and reactions, and later ones are refused.
   Reactions must be one emoji (checked on receipt). Both travel and sync like messages and
-  count against the log cap.
+  count against the log cap. The palette shows a quick row of six; "＋" opens about sixty more
+  and a box for any other emoji (typed or pasted from the keyboard's emoji picker; anything
+  `isEmoji` refuses is ignored). A person may react with as many different emoji as they like.
+* **Links:** `http://` and `https://` addresses in message text become links that open in a new
+  tab with `noopener noreferrer`. Only plain-ASCII addresses with a dotted host (or `localhost`)
+  are linked, never ones with a user name or password (`https://bank.com@evil.test`), other
+  schemes (`javascript:`, `data:`), or addresses over 2000 characters; so look-alike letters and
+  hidden direction marks cannot pass for a known site. Trailing punctuation and unmatched
+  closing brackets stay outside the link. The text itself is never changed (and signed as typed);
+  hovering a link shows the address it really goes to. Quotes and notifications show plain text.
 * **Unread and notifications:** each device keeps, per room, the stamp of the newest message it
   has shown (`read:<room>` in storage; on first run everything already there counts as read).
   Messages from others after that stamp are "unread": counted in the room list, in the tab

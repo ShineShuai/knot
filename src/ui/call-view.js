@@ -1,6 +1,8 @@
 // The call window: one tile per person plus the controls. It sits outside the room view, so
-// a call goes on (and stays audible) while you read another room; "minimize" folds it into a
-// bar. It only renders `room.call` and forwards clicks.
+// a call goes on (and stays audible) while you read another room. Three layouts: full screen,
+// "chat" (the call at the side, or on top on a phone, with the room's conversation next to it:
+// text and files work as always) and "minimize" (a bar under the conversation, audio goes on).
+// It only renders `room.call` and forwards clicks.
 import { h } from './dom.js';
 import { t } from './i18n.js';
 
@@ -8,16 +10,28 @@ const SELF = 'self';
 const initial = (name) => ([...name][0] ?? '?').toUpperCase();
 
 export class CallPanel {
-  #room = null; #off = null; #tiles = new Map(); #mini = false; #notify;
+  #room = null; #off = null; #tiles = new Map(); #notify;
+  #mode = 'full';  // 'full' | 'chat' | 'mini'
+  #before = 'full'; // what a minimized window goes back to
+  #openChat; #onMode;
 
-  constructor({ notify }) {
+  /** `openChat(room)`: show that room's conversation; `onMode(mode)`: the layout changed. */
+  constructor({ notify, openChat = () => {}, onMode = () => {} }) {
     this.#notify = notify;
+    this.#openChat = openChat;
+    this.#onMode = onMode;
     this.title = h('span', { class: 'call-title' });
-    this.size = h('button', { class: 'ghost', onclick: () => this.#fold(!this.#mini) });
+    this.size = h('button', {
+      class: 'ghost', onclick: () => this.#setMode(this.#mode === 'mini' ? this.#before : 'mini'),
+    });
     this.grid = h('div', { class: 'call-grid' });
     this.mic = h('button', { class: 'round', onclick: () => this.#toggleMic() });
     this.cam = h('button', { class: 'round', onclick: () => this.#toggleCam() });
     this.share = h('button', { class: 'round', onclick: () => this.#toggleShare() });
+    this.chatCount = h('span', { class: 'count', hidden: true });
+    this.chatGlyph = h('span', { 'aria-hidden': 'true' }, '💬');
+    this.chat = h('button', { class: 'round chat', onclick: () => this.#toggleChat() },
+      this.chatGlyph, this.chatCount);
     this.leave = h(
       'button',
       { class: 'danger', onclick: () => this.#room?.call.leave() },
@@ -26,15 +40,21 @@ export class CallPanel {
     this.element = h('section', { class: 'call', hidden: true, 'aria-label': t('call') },
       h('header', { class: 'call-head' }, this.title, this.size),
       this.grid,
-      h('footer', { class: 'call-bar' }, this.mic, this.cam, this.share, this.leave));
+      h('footer', { class: 'call-bar' }, this.mic, this.cam, this.share, this.chat, this.leave));
+    this.#setMode('full', false);
   }
 
   /** The language changed: say everything again in the new one. */
   relabel() {
     this.element.setAttribute('aria-label', t('call'));
     this.leave.textContent = t('callLeave');
-    this.#fold(this.#mini);
+    this.#setMode(this.#mode, false);
     if (this.#room) this.#draw();
+  }
+
+  /** Does the call window hide this room's conversation right now? */
+  covers(room) {
+    return !!room && this.#room === room && !this.element.hidden && this.#mode === 'full';
   }
 
   /** Follow `room`'s call: show the window while we are in it, hide it otherwise. */
@@ -47,26 +67,53 @@ export class CallPanel {
     if (this.#room !== room) {
       this.#hide();
       this.#room = room;
-      this.#fold(false);
+      this.#off = room.on('unread', () => this.#drawChat());
+      this.#setMode('full');
     }
     this.#draw();
     this.element.hidden = false;
   }
 
   #hide() {
+    this.#off?.();
+    this.#off = null;
     this.#room = null;
     this.#tiles.clear();
     this.grid.replaceChildren();
     this.element.hidden = true;
+    this.#setMode('full');
   }
 
-  #fold(mini) {
-    this.#mini = mini;
-    this.element.dataset.mini = String(mini);
+  /** `tell`: let the page know (it adjusts its layout and marks what is now visible as read). */
+  #setMode(mode, tell = true) {
+    if (mode === 'mini' && this.#mode !== 'mini') this.#before = this.#mode;
+    this.#mode = mode;
+    this.element.dataset.mode = mode;
+    const mini = mode === 'mini';
     const label = t(mini ? 'callExpand' : 'callMinimize');
     this.size.textContent = mini ? '▴' : '▾';
     this.size.title = label;
     this.size.setAttribute('aria-label', label);
+    this.#drawChat();
+    if (tell) this.#onMode(mode === 'chat' ? 'chat' : mode === 'mini' ? 'mini' : '');
+  }
+
+  #toggleChat() {
+    this.#setMode(this.#mode === 'chat' ? 'full' : 'chat');
+    if (this.#mode === 'chat' && this.#room) this.#openChat(this.#room);
+  }
+
+  /** The chat button: its label says what it does; the badge counts what is unread. */
+  #drawChat() {
+    const on = this.#mode === 'chat';
+    const unread = on ? 0 : (this.#room?.unread ?? 0);
+    const label = t(on ? 'callChatHide' : 'callChat');
+    const full = unread ? `${label} (${t('unread', { n: unread })})` : label;
+    this.chat.title = full;
+    this.chat.setAttribute('aria-label', full);
+    this.chat.setAttribute('aria-pressed', String(on));
+    this.chatCount.hidden = !unread;
+    this.chatCount.textContent = unread > 99 ? '99+' : String(unread);
   }
 
   async #toggleMic() {

@@ -275,6 +275,66 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
   await b.getByRole('button', { name: 'Members' }).click();
   assert.equal(await b.getByRole('button', { name: 'Remove' }).count(), 0); // only the owner
   await b.keyboard.press('Escape');
+  // Links and more reactions in the real page.
+  await b.getByPlaceholder('Write a message').fill('docs https://example.com/a?b=1, thanks');
+  await b.keyboard.press('Enter');
+  const docs = a.locator('.msg.other', { hasText: 'docs https' });
+  await docs.waitFor();
+  assert.equal(await docs.locator('a.link').getAttribute('href'), 'https://example.com/a?b=1');
+  assert.equal(await docs.locator('a.link').getAttribute('target'), '_blank');
+  assert.match(await docs.locator('a.link').getAttribute('rel'), /noopener/);
+  await docs.hover();
+  await docs.getByRole('button', { name: 'React' }).click();
+  await docs.getByRole('button', { name: 'More emoji' }).click();
+  const grid = await docs.locator('.palette-grid').boundingBox();
+  const bubble = await docs.boundingBox();
+  assert.ok(grid.height <= 170 && grid.x + grid.width <= bubble.x + bubble.width + 1, 'fits');
+  await docs.locator('.pick', { hasText: '🎉' }).click();
+  await b.locator('.rx', { hasText: '🎉 1' }).waitFor();
+
+  // Text and files during a call, with the real layout: desktop width, then a phone.
+  const reachable = (sel) => a.locator(sel).evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    return el === hit || el.contains(hit);
+  });
+  const call = a.locator('section.call');
+  await a.getByRole('button', { name: 'Start an audio call' }).click();
+  await a.locator('.call .tile').waitFor();
+  const view = a.viewportSize();
+  let at = await call.boundingBox();
+  assert.ok(at.width >= view.width - 1 && at.height >= view.height - 1, 'full screen at first');
+  await call.getByRole('button', { name: 'Show chat' }).click();
+  at = await call.boundingBox();
+  const beside = await a.locator('.stage').boundingBox();
+  assert.ok(at.x > 0 && Math.abs(at.x + at.width - view.width) <= 1, 'the call is at the side');
+  assert.ok(beside.x + beside.width <= at.x + 1, 'the conversation is beside it, not under it');
+  assert.ok(await reachable('.composer textarea'));
+  await a.getByPlaceholder('Write a message').fill('typing during the call');
+  await a.keyboard.press('Enter');
+  await b.locator('.msg.other', { hasText: 'typing during the call' }).waitFor();
+  await a.locator('input[type=file]').setInputFiles(
+    { name: 'during.txt', mimeType: 'text/plain', buffer: Buffer.from('sent in a call') },
+  );
+  await a.getByRole('button', { name: 'Send' }).click();
+  await b.locator('.file', { hasText: 'during.txt' }).waitFor();
+
+  await a.setViewportSize({ width: 390, height: 800 }); // a phone: the call on top
+  at = await call.boundingBox();
+  const below = await a.locator('.stage').boundingBox();
+  assert.ok(at.y <= 1 && at.width >= 389, 'the call is on top');
+  assert.ok(below.y >= at.y + at.height - 1, 'the conversation is below it');
+  assert.ok(await reachable('.composer textarea'));
+  const wide = await a.evaluate(() => document.documentElement.scrollWidth - innerWidth);
+  assert.ok(wide <= 0, `sideways overflow ${wide}px`);
+  await call.getByRole('button', { name: 'Minimize' }).click(); // a bar: must not cover the box
+  at = await call.boundingBox();
+  const composer = await a.locator('.composer').boundingBox();
+  assert.ok(composer.y + composer.height <= at.y + 1, 'the bar does not cover the message box');
+  assert.ok(await reachable('.composer textarea'));
+  await call.getByRole('button', { name: 'Leave call' }).click();
+  await call.waitFor({ state: 'hidden' });
+
   assert.deepEqual([...a.errors, ...b.errors], []);
   await Promise.all([a, b].map((p) => p.context().close()));
 });

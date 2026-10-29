@@ -4,7 +4,7 @@ import { fromB64u, toB64u } from '../util/bytes.js';
 import { saveSettings } from '../config.js';
 import { decodeCode } from '../net/handshake.js';
 import { encodeQr, qrPath } from '../qr/qr.js';
-import { ADMIN_KINDS, authorIdOf, quoteOf } from '../chat/envelope.js';
+import { ADMIN_KINDS, authorIdOf, isEmoji, quoteOf } from '../chat/envelope.js';
 import { noticeLine } from '../chat/notice.js';
 import { searchLog } from '../chat/search.js';
 import { nextRoomName } from '../app.js';
@@ -22,8 +22,8 @@ import { canScan, scanQr } from './scanner.js';
 import { CallPanel } from './call-view.js';
 import { exportJson, exportText } from './export.js';
 import { Notifier } from './notifier.js';
-
-const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+import { linkify } from './linkify.js';
+import { MORE, QUICK } from './emoji.js';
 
 /** `opts`: `updates` (an UpdateWatcher), `notifierEnv` (tests): optional. */
 export const mountUi = (root, model, opts) => new Ui(root, model, opts).start();
@@ -44,6 +44,7 @@ class Ui {
   #editing = null;      // our own envelope the message box is changing (instead of a new message)
   #fitInput = () => {}; // resize the message box to its text
   #reactTo = null;      // id of the message whose emoji palette is open
+  #reactMore = false;   // that palette shows every emoji, not just the quick row
   #updateReady = false; // a newer version of the app has been published
   #unlinkedShown = false;
   #input = null;        // the composer's textarea
@@ -72,7 +73,11 @@ class Ui {
     this.toast = h('div', { class: 'toast', role: 'status' });
     this.dialog = h('dialog', { onclose: () => this.#stopScan?.() });
     this.shell = h('div', { class: 'shell', 'data-view': 'rooms' }, this.rail, this.stage);
-    this.callPanel = new CallPanel({ notify: (text) => this.notify(text) });
+    this.callPanel = new CallPanel({
+      notify: (text) => this.notify(text),
+      openChat: (room) => (room === this.#current ? this.#markViewed() : this.select(room)),
+      onMode: (mode) => { this.shell.dataset.call = mode; this.#markViewed(); },
+    });
     this.updateBar = h('div', { class: 'update-bar', role: 'status', hidden: true });
     this.root.replaceChildren(
       this.updateBar, this.shell, this.callPanel.element, this.toast, this.dialog,
@@ -97,8 +102,12 @@ class Ui {
 
   // ---- unread, updates ------------------------------------------------------------------
 
-  /** On screen right now: the page is visible and has the focus. */
-  #viewing() { return document.hidden !== true && (document.hasFocus?.() ?? true); }
+  /** On screen right now: the page is visible and has the focus, and a full-screen call is
+   *  not covering the conversation. */
+  #viewing() {
+    return document.hidden !== true && (document.hasFocus?.() ?? true)
+      && !this.callPanel.covers(this.#current);
+  }
 
   /** The room in view counts as read. */
   #markViewed() {
@@ -321,6 +330,7 @@ class Ui {
     this.#quote = null;
     this.#editing = null;
     this.#reactTo = null;
+    this.#reactMore = false;
     const room = this.#current;
     if (!room) {
       this.stage.replaceChildren(
@@ -643,7 +653,7 @@ class Ui {
     const edited = room.log.isEdited(env);
     const parts = env.kind === 'file' ? [this.#renderFile(room, env, redraw)] : [
       env.kind === 'reply' ? this.#renderQuote(room, env.body.q) : null,
-      h('p', { class: 'text' }, room.log.textOf(env),
+      h('p', { class: 'text' }, ...linkify(room.log.textOf(env)),
         edited ? h('span', { class: 'edited' }, ` (${t('edited')})`) : null),
     ];
     const button = (label, onclick) => h('button', { class: 'ghost', onclick }, label);
@@ -652,6 +662,7 @@ class Ui {
         button(t('reply'), () => this.#setQuote(env)),
         button(t('react'), () => {
           this.#reactTo = this.#reactTo === env.id ? null : env.id;
+          this.#reactMore = false;
           redraw();
         }),
         own && env.kind !== 'file' ? button(t('edit'), () => this.#startEdit(room, env)) : null,
@@ -672,6 +683,7 @@ class Ui {
     const me = room.identity.id;
     const toggle = (emoji) => {
       this.#reactTo = null;
+      this.#reactMore = false;
       redraw();
       room.react(env.id, emoji).catch((err) => this.notify(err.message));
     };
@@ -683,7 +695,27 @@ class Ui {
     const pick = (emoji) => h(
       'button', { class: 'rx pick', title: emoji, onclick: () => toggle(emoji) }, emoji,
     );
-    const palette = open ? h('span', { class: 'palette' }, ...REACTIONS.map(pick)) : null;
+    const more = this.#reactMore;
+    const label = t(more ? 'reactLess' : 'reactMore');
+    /** A box for any other emoji: typed, or pasted from the keyboard's emoji picker. */
+    const anyEmoji = () => {
+      const input = h('input', {
+        type: 'text', class: 'rx-any', maxLength: 16, placeholder: t('reactAny'),
+        'aria-label': t('reactAny'),
+      });
+      input.addEventListener('input', () => {
+        const value = input.value.trim();
+        if (isEmoji(value)) toggle(value);
+      });
+      return input;
+    };
+    const palette = !open ? null : h('span', { class: 'palette' },
+      ...QUICK.map(pick),
+      h('button', {
+        class: 'rx more', 'aria-expanded': String(more), title: label, 'aria-label': label,
+        onclick: () => { this.#reactMore = !more; redraw(); },
+      }, more ? '−' : '＋'),
+      more ? h('span', { class: 'palette-grid' }, ...MORE.map(pick), anyEmoji()) : null);
     return h('div', { class: 'reactions' }, ...chips, palette);
   }
 

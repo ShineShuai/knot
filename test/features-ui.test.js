@@ -8,6 +8,7 @@ import { DEFAULTS } from '../src/config.js';
 import { newRoomSecret } from '../src/crypto/room-keys.js';
 import { MemoryKV } from '../src/store/kv.js';
 import { dictionaries, setLanguage } from '../src/ui/i18n.js';
+import { MORE, QUICK } from '../src/ui/emoji.js';
 import { mountUi } from '../src/ui/view.js';
 import { Emitter } from '../src/util/emitter.js';
 import { newIdentity } from './helpers.js';
@@ -52,6 +53,7 @@ async function chatting() {
 const messages = (p) => p.root.querySelectorAll('.msg');
 const message = (p, text) => messages(p).find((el) => el.textContent.includes(text));
 const button = (el, label) => find(el, 'button', label)[0];
+const labelled = (el, label) => el.querySelector(`[aria-label="${label}"]`);
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function notifierEnv({ permission = 'granted', supported = true } = {}) {
@@ -253,4 +255,52 @@ test('ui: without browser notifications the setting is not offered', async () =>
   const a = await person('Ada', { notifierEnv: notifierEnv({ supported: false }) });
   button(a.root, 'Settings').click();
   assert.equal(find(a.root.querySelector('dialog'), 'label', 'Notify me').length, 0);
+});
+
+test('ui: a web link in a message is a link, on both screens; other text is not', async () => {
+  const { a, b, ra } = await chatting();
+  await ra.sendText('docs: https://example.com/a?b=1, and javascript:alert(1) is just text');
+  await until(() => message(b, 'docs:'));
+  for (const p of [a, b]) {
+    const anchors = message(p, 'docs:').querySelectorAll('a');
+    assert.equal(anchors.length, 1);
+    assert.equal(anchors[0].href, 'https://example.com/a?b=1');
+    assert.equal(anchors[0].textContent, 'https://example.com/a?b=1');
+    assert.equal(anchors[0].getAttribute('target'), '_blank');
+    assert.match(anchors[0].getAttribute('rel'), /noopener/);
+    assert.match(message(p, 'docs:').querySelector('.text').textContent,
+      /^docs: https:\/\/example.com\/a\?b=1, and javascript:alert\(1\) is just text$/);
+  }
+});
+
+test('ui: more reactions: "+" opens every emoji, and any emoji can be typed', async () => {
+  const { a, b, ra } = await chatting();
+  await ra.sendText('party?');
+  await until(() => message(b, 'party?'));
+  button(message(b, 'party?'), 'React').click();
+  const open = () => message(b, 'party?');
+  assert.equal(open().querySelector('.palette-grid'), null, 'quick row first');
+  labelled(open(), 'More emoji').click();
+  const grid = open().querySelector('.palette-grid');
+  assert.equal(grid.querySelectorAll('.pick').length, MORE.length);
+  assert.equal(open().querySelectorAll('.pick').length, QUICK.length + MORE.length);
+  labelled(open(), 'Fewer emoji').click(); // back to the quick row
+  assert.equal(open().querySelector('.palette-grid'), null);
+  assert.equal(open().querySelectorAll('.pick').length, 6);
+
+  labelled(open(), 'More emoji').click();
+  open().querySelectorAll('.pick').find((el) => el.textContent === '🎉').click();
+  await until(() => message(a, 'party?').querySelector('.rx')?.textContent === '🎉 1');
+  assert.equal(open().querySelector('.palette'), null, 'the palette closes, "more" is forgotten');
+
+  button(open(), 'React').click();
+  labelled(open(), 'More emoji').click();
+  const any = open().querySelector('.rx-any');
+  any.value = 'not an emoji';
+  any.fire('input');
+  any.value = '🦄';
+  any.fire('input');
+  await until(() => message(a, 'party?').querySelectorAll('.rx').length === 2);
+  const chips = message(a, 'party?').querySelectorAll('.rx').map((el) => el.textContent);
+  assert.deepEqual(chips.sort(), ['🎉 1', '🦄 1']);
 });

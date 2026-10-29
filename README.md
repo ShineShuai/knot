@@ -58,7 +58,11 @@ if no broker is reachable; with brokers, reconnection is automatic).
       net/ice-gather.js    wait for ICE candidates (shared by data and call connections)
       chat/envelope.js     signed chat message format + verification
       chat/log.js          ordered, de-duplicated, capped message log + sync delta
-      chat/room.js         Room: ties links, brokers, log, files together; unread mark
+      chat/room.js         Room: ties links, brokers, log together and delegates to the four below
+      chat/room-files.js   share a file, fetch one, get an image preview from any peer
+      chat/owner-desk.js   the owner's part: join requests, lobby, removal, recovery, transfer
+      chat/pairing.js      connecting two devices: codes by hand, or offers through the brokers
+      chat/read-marks.js   what this device has shown its user: the unread count
       chat/notice.js       one-line text for membership changes ("Bob joined")
       chat/devices.js      linking a device: request and grant codes, six-digit check
       chat/search.js       search the messages this device holds
@@ -71,8 +75,18 @@ if no broker is reachable; with brokers, reconnection is automatic).
       call/media.js        microphone / camera / screen access (swappable in tests)
       qr/qr.js             QR encoder (verified against OpenCV in tests)
       ui/                  DOM helpers, i18n (en/zh/de), views, camera scanner
+      ui/view.js           the page: room list, the open room, unread, updates
+      ui/composer.js       the message box: text, replies, edits, staged files, drop, paste
+      ui/messages.js       one message: links, reactions with their palette, files, notices
+      ui/image-cards.js    the image cards of the open room, the lightbox
+      ui/dialog-kit.js     the dialog frame, copy field, QR, code box with scanner
+      ui/room-dialogs.js   new, rename, recovery code, invite, members, export, leave
+      ui/join-dialogs.js   joining: by link, code, recovery code, or asking the owner
+      ui/settings-dialogs.js  settings, linked devices, diagnostics
+      ui/reveal.js         hold V: how everyone is connected
       ui/image-card.js     one image in the log: thumbnail, preview, original
       ui/call-view.js      the call window: tiles, microphone / camera / chat / leave
+      call/speaking.js     who is speaking: loudness per stream, with a short hold time
       ui/linkify.js        http(s) links in message text
       ui/emoji.js          the emoji offered for reactions
       ui/notifier.js       browser notifications for rooms that are not on screen
@@ -174,6 +188,11 @@ if no broker is reachable; with brokers, reconnection is automatic).
   Everyone in the call is always shown, camera or not: a person without video gets an avatar,
   the grid divides its space by head count (nobody scrolls out of view, also beside the chat
   or above it on a phone), and the minimized bar names everyone (🔇: muted, …: connecting).
+  The person who is speaking gets an outline on their tile (and 🔊 in the minimized bar):
+  each audio stream is measured in the browser (Web Audio analyser, nothing is played or
+  recorded), above a small loudness threshold and held for 0.4 s so it does not flicker; our
+  own microphone counts too, a muted one is silent. Browsers without Web Audio just show no
+  highlight.
   Call signalling travels on direct links only, so someone without a direct link to you cannot
   be listed.
   Desktop browsers can share a screen, window or tab instead of the camera (the

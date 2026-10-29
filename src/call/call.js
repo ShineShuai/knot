@@ -34,6 +34,7 @@ export class CallManager extends Emitter {
   #chains = new Map(); // peer id -> promise: one peer's negotiation steps run in order
   #timers = new Set();
   #audio = null; #video = null; #screen = null; #localStream = null;
+  #mic = { track: null, stream: null };
   #generation = 0; #joining = false;
   #send; #opts; #media;
 
@@ -59,6 +60,16 @@ export class CallManager extends Emitter {
   get max() { return this.#opts.settings.callMaxParticipants; }
   /** Our camera, for the self view (null when it is off). */
   get localStream() { return this.#localStream; }
+  /** Our microphone as a stream (null without one); it measures our own voice, nothing is sent. */
+  get micStream() {
+    if (this.#mic.track !== this.#audio) {
+      this.#mic = {
+        track: this.#audio, stream: this.#audio ? new this.#opts.Stream([this.#audio]) : null,
+      };
+    }
+    return this.#mic.stream;
+  }
+
   /** Our microphone / camera / screen state (`v`: the camera is on; `s`: we share the screen). */
   get local() { return { a: !!this.#audio?.enabled, v: !!this.#video, s: !!this.#screen }; }
 

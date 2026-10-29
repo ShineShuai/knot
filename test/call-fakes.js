@@ -115,3 +115,24 @@ export function callParty({ denied, share } = {}) {
 export const sending = (rtc, kind) => rtc.getTransceivers().find(
   (t) => t.receiver.track.kind === kind,
 ).sender.track;
+
+/** An AudioContext whose analysers hear loud sound for the streams in `FakeAudio.loud`. */
+export class FakeAudio {
+  static loud = new Set(); // streams that are "being spoken into"
+  static last = null;
+  sources = 0;
+  closed = false;
+  constructor() { FakeAudio.last = this; }
+  createAnalyser() {
+    return {
+      fftSize: 0, stream: null,
+      getByteTimeDomainData(bytes) { bytes.fill(FakeAudio.loud.has(this.stream) ? 190 : 128); },
+    };
+  }
+  createMediaStreamSource(stream) {
+    this.sources++;
+    return { connect(node) { node.stream = stream; }, disconnect() {} };
+  }
+  async resume() {}
+  async close() { this.closed = true; }
+}

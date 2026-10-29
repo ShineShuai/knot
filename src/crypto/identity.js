@@ -9,10 +9,14 @@ export async function peerIdOf(pub) {
 }
 
 export class Identity {
+  /** `id` names this key (it is what links and the network know us by). `member`: who we speak
+   *  as in rooms: ourselves, unless this is a linked device (`cert`: see delegation.js). */
   constructor(privateKey, pub, id) {
     this.privateKey = privateKey;
     this.pub = pub;
     this.id = id;
+    this.member = id;
+    this.cert = null;
   }
   async sign(data) {
     return new Uint8Array(await crypto.subtle.sign(ALG, this.privateKey, data));

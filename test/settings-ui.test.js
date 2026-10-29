@@ -71,3 +71,9 @@ test('ui: choosing a language in Settings redraws the screen and is kept', async
   await until(() => find(root, 'button', 'Settings').length > 0);
   assert.equal(model.settings.language, 'auto');
 });
+
+test('ui: a dialog never prints "null" for a field the browser cannot offer', async () => {
+  const { root } = await person(); // no Notification support here: that field is left out
+  find(root, 'button', 'Settings')[0].click();
+  assert.ok(!root.querySelector('dialog').textContent.includes('null'));
+});

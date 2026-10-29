@@ -1,5 +1,6 @@
 // Open (ownerless) rooms over fake links, for tests that need a few connected members.
 import { Room } from '../src/chat/room.js';
+import { makeCert } from '../src/crypto/delegation.js';
 import { DEFAULTS } from '../src/config.js';
 import { decodeCode } from '../src/net/handshake.js';
 import { newRoomSecret } from '../src/crypto/room-keys.js';
@@ -10,17 +11,19 @@ import { FakeLink, until } from './fakes.js';
 const made = [];
 export const stopRooms = () => made.splice(0).forEach((r) => r.stop());
 
-/** One room; pass `secret`, `kv` and `identity` again to reopen the same device's room. */
+/** One room; pass `secret`, `kv` and `identity` again to reopen the same device's room.
+ *  `owner`: the owner's id for a room with an owner; `broker`: a FakeBroker, to find peers. */
 export async function makeRoom({
-  secret = newRoomSecret(), name = 'Ada', kv = new MemoryKV(), identity, extra = {},
+  secret = newRoomSecret(), name = 'Ada', kv = new MemoryKV(), identity, owner = null, broker,
+  extra = {},
 } = {}) {
   const settings = {
-    ...DEFAULTS, name, brokersEnabled: false, brokers: [], gatherTimeoutMs: 10,
-    connectTimeoutMs: 2000, adminTimeoutMs: 400, ...extra,
+    ...DEFAULTS, name, presenceIntervalMs: 60, gatherTimeoutMs: 10, connectTimeoutMs: 2000,
+    adminTimeoutMs: 400, brokersEnabled: !!broker, brokers: broker ? ['wss://fake'] : [], ...extra,
   };
   const room = await Room.open({
-    identity: identity ?? await newIdentity(), secret, label: name, kv, settings,
-    iceServers: () => [], linkFactory: () => new FakeLink(),
+    identity: identity ?? await newIdentity(), secret, label: name, kv, settings, owner,
+    iceServers: () => [], linkFactory: () => new FakeLink(), WS: broker?.ws(),
   });
   made.push(room);
   return room;
@@ -45,3 +48,10 @@ export async function pairRooms(names = ['Ada', 'Bob']) {
 }
 
 export const texts = (room) => room.log.list().filter((e) => e.kind === 'text').map((e) => e.body);
+
+/** Make `device` a linked device of `main`, the way the stored record would. */
+export async function linkIdentity(main, device, name = 'Pixel') {
+  const cert = await makeCert(main, device.pub, name);
+  Object.assign(device, { member: main.id, cert });
+  return cert;
+}

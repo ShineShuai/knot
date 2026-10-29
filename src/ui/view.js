@@ -45,6 +45,7 @@ class Ui {
   #fitInput = () => {}; // resize the message box to its text
   #reactTo = null;      // id of the message whose emoji palette is open
   #updateReady = false; // a newer version of the app has been published
+  #unlinkedShown = false;
   #input = null;        // the composer's textarea
   #staged = new Map();  // room id -> files waiting in the message box to be sent
   #chipUrls = new Map(); // staged File -> object URL of its little preview
@@ -104,6 +105,14 @@ class Ui {
     if (this.#current && this.#viewing()) this.#current.markRead();
   }
 
+  /** The main device withdrew this device. */
+  async #onUnlinked() {
+    if (!this.model.isLinked || this.#unlinkedShown) return;
+    this.#unlinkedShown = true;
+    await this.model.forgetLinking();
+    this.notify(t('unlinkedNotice'));
+  }
+
   #openRoom(id) {
     const room = this.model.rooms.get(id);
     if (!room) return;
@@ -150,6 +159,7 @@ class Ui {
       room.on('roster', () => { if (room.isOwner) this.#ensureRecovery(room); });
       room.call.on('change', () => this.callPanel.sync(room));
       room.on('unread', () => this.#refreshUnread());
+      room.on('unlinked', () => this.#onUnlinked());
       this.notifier.watch(room);
       room.on('removed', () => {
         this.notify(t('removedBanner'));
@@ -271,9 +281,13 @@ class Ui {
 
   async #createRoom(name) {
     const label = name.trim().slice(0, 40) || this.#freeRoomName();
-    const room = await this.model.createRoom(label);
+    let room;
+    try { room = await this.model.createRoom(label); } catch (err) {
+      this.dialog.close();
+      return this.notify(err.message);
+    }
     this.select(room);
-    await this.#ensureRecovery(room, () => this.#inviteDialog(room));
+    return this.#ensureRecovery(room, () => this.#inviteDialog(room));
   }
 
   /** The owner needs a recovery code: make one and show it once. `force`: replace the old. */
@@ -728,6 +742,89 @@ class Ui {
     this.#drawQuote();
   }
 
+  // ---- linked devices ---------------------------------------------------------------------
+
+  /** Link a second device (main device: answer its code; new device: make a code), and the
+   *  list of linked devices with "Unlink". */
+  async #devicesDialog() {
+    const { model } = this;
+    const linked = await model.linkedDevices();
+    const parts = [];
+    if (model.isLinked) {
+      parts.push(h('p', {}, t('linkedTo', { id: model.identity.member.slice(0, 4) })));
+    } else {
+      parts.push(h('h3', {}, t('devices')), linked.length ? h('ul', { class: 'devices-list' },
+        ...linked.map((device) => h('li', {},
+          h('span', { class: 'device-name' }, device.n),
+          h('button', {
+            class: 'ghost',
+            onclick: async () => {
+              if (!confirm(t('devicesUnlinkConfirm', { name: device.n }))) return;
+              await model.unlinkDevice(device.d);
+              this.#devicesDialog();
+            },
+          }, t('devicesUnlink')),
+        ))) : h('p', { class: 'muted' }, t('devicesNone')),
+      h('h3', {}, t('linkNew')), h('p', {}, t('linkNewHelp')), this.#linkNewDevice());
+      parts.push(h('h3', {}, t('linkThis')), h('p', {}, t('linkThisHelp')), this.#linkThisDevice());
+    }
+    this.#open(t('devices'), ...parts);
+  }
+
+  /** Main device: paste or scan the new device's code, show the answer. */
+  #linkNewDevice() {
+    const result = h('div', { class: 'link-result' });
+    const input = this.#codeInput(t('linkRequestPlaceholder'), async (text) => {
+      try {
+        const { code, sas, name } = await this.model.linkDevice(text);
+        result.replaceChildren(
+          h('p', {}, t('linkGrantHelp', { name })), h('p', { class: 'sas-line' },
+            h('strong', { class: 'sas' }, sas)),
+          this.#copyField(code, 4), this.#qr(code),
+        );
+      } catch (err) { this.notify(err.message); }
+    });
+    return h('div', {}, input.node,
+      h('button', { class: 'primary', onclick: input.submit }, t('linkMake')), result);
+  }
+
+  /** New device: show our code, take the main device's answer, confirm, apply. */
+  #linkThisDevice() {
+    const area = h('div', { class: 'link-result' });
+    const name = h('input', {
+      type: 'text', maxLength: 32, value: '', placeholder: t('linkDeviceName'),
+    });
+    const start = h('button', {
+      onclick: async () => {
+        start.disabled = true;
+        try {
+          const { code, read } = await this.model.startLinking(name.value.trim());
+          const confirmBox = h('div');
+          const reply = this.#codeInput(t('linkGrantPlaceholder'), async (text) => {
+            const grant = await read(text);
+            if (!grant) return this.notify(t('linkInvalid'));
+            return confirmBox.replaceChildren(
+              h('p', {}, t('linkConfirm', { id: grant.mainId.slice(0, 4), rooms: grant.rooms })),
+              h('p', { class: 'sas-line' }, h('strong', { class: 'sas' }, grant.sas)),
+              h('button', {
+                class: 'primary',
+                onclick: async () => {
+                  if (!confirm(t('linkWarn'))) return;
+                  await grant.apply();
+                  this.notify(t('linkDone'));
+                  location.reload();
+                },
+              }, t('linkDo')),
+            );
+          });
+          area.replaceChildren(this.#copyField(code, 4), this.#qr(code), reply.node,
+            h('button', { onclick: reply.submit }, t('connect')), confirmBox);
+        } catch (err) { this.notify(err.message); start.disabled = false; }
+      },
+    }, t('linkMakeCode'));
+    return h('div', {}, name, start, area);
+  }
+
   // ---- export ---------------------------------------------------------------------------------
 
   #exportDialog(room) {
@@ -924,7 +1021,7 @@ class Ui {
         h('h2', {}, title),
         h('button', { class: 'ghost', onclick: () => this.dialog.close() }, t('close')),
       ),
-      ...content);
+      ...content.filter((part) => part != null && part !== false)); // never print "null"
     if (!this.dialog.open) this.dialog.showModal();
   }
 
@@ -1259,6 +1356,8 @@ class Ui {
       check(t('useBrokers'), useBrokers),
       check(t('relayText'), relay),
       this.notifier.supported ? check(t('notifications'), notifications) : null,
+      h('div', { class: 'field' },
+        h('button', { onclick: () => this.#devicesDialog() }, t('devices'))),
       field(t('imagePreviews'), previews),
       h(
         'div',

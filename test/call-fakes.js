@@ -19,13 +19,22 @@ export class FakeStream {
   getTracks() { return this.tracks; }
 }
 
-/** `denied`: kinds whose device is refused. `tracks`: everything handed out, in order. */
-export const fakeMedia = ({ denied = [] } = {}) => ({
+/** `denied`: kinds whose device is refused ('screen' too). `tracks`: everything handed out, in
+ *  order. `share: false`: a browser without getDisplayMedia (a phone). */
+export const fakeMedia = ({ denied = [], share = true } = {}) => ({
   tracks: [],
   available: () => true,
+  canShare: () => share,
   async getTrack(kind) {
     if (denied.includes(kind)) throw new Error('permission denied');
     const track = new FakeTrack(kind);
+    this.tracks.push(track);
+    return track;
+  },
+  async getScreen() {
+    if (denied.includes('screen')) throw new Error('cancelled');
+    const track = new FakeTrack('video');
+    track.screen = true;
     this.tracks.push(track);
     return track;
   },
@@ -95,9 +104,9 @@ export class FakeRtc {
 }
 
 /** One call participant's pieces: spread `env` into the Room's `callEnv`. */
-export function callParty({ denied } = {}) {
+export function callParty({ denied, share } = {}) {
   const made = [];
-  const media = fakeMedia({ denied });
+  const media = fakeMedia({ denied, share });
   class Rtc extends FakeRtc { constructor(...a) { super(...a); made.push(this); } }
   return { made, media, env: { RTC: Rtc, Stream: FakeStream, media } };
 }

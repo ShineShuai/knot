@@ -1,5 +1,6 @@
 // Entry point: open storage, load identity + settings, mount the UI.
 import { iceServersFrom, loadSettings } from './config.js';
+import { applyDelegation } from './crypto/delegation.js';
 import { loadIdentity } from './crypto/identity.js';
 import { IdbKV } from './store/kv.js';
 import { rankStun } from './net/ice-probe.js';
@@ -13,7 +14,7 @@ async function boot() {
   const kv = new IdbKV();
   const settings = await loadSettings(kv);
   setLanguage(settings.language);
-  const identity = await loadIdentity(kv);
+  const identity = await applyDelegation(await loadIdentity(kv), kv);
 
   let rankedStun = null; // filled in the background; new links then use the fastest servers
   const model = new AppModel(

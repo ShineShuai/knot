@@ -20,6 +20,8 @@ export class FileTransfer {
   #downloads = new Map(); // id -> in-flight download state
   #serving = new WeakMap(); // link -> transfers we are serving on it right now
   #chunkSize; #maxBytes; #derive; #lookup;
+  /** While true we neither share, serve nor fetch files (a call keeps the bandwidth). */
+  paused = false;
 
   /** `derive(file, bytes)` makes the thumbnail/preview of an image (null for other files);
    *  `lookup(id)` finds a cached Blob to serve when `#shared` does not have it. */
@@ -42,6 +44,7 @@ export class FileTransfer {
   /** Register a file for sharing; returns the metadata to announce. Images also get a
    *  thumbnail (inline in the metadata) and, if big, a preview shared under its own id. */
   async share(file) {
+    if (this.paused) throw new Error('File transfers are paused during the call');
     const id = toB64u(randomBytes(ID_BYTES));
     const bytes = new Uint8Array(await file.arrayBuffer());
     const digest = await sha256(bytes);
@@ -78,6 +81,7 @@ export class FileTransfer {
   local(id) { return this.#shared.get(id) ?? null; }
 
   async #serve(link, id) {
+    if (this.paused) return link.sendFile(JSON.stringify({ t: 'err', id, reason: 'paused' }));
     const busy = this.#serving.get(link) ?? 0;
     if (busy >= MAX_SERVES) {
       return link.sendFile(JSON.stringify({ t: 'err', id, reason: 'busy' }));
@@ -102,6 +106,7 @@ export class FileTransfer {
 
   /** Ask the sharer on `link` for the file described by `body`. Resolves to a Blob. */
   download(link, body, onProgress = () => {}) {
+    if (this.paused) return Promise.reject(new Error('File transfers are paused during the call'));
     if (this.#downloads.has(body.id)) return Promise.reject(new Error('Already downloading'));
     if (body.size > this.#maxBytes) return Promise.reject(new Error('File too large'));
     return new Promise((resolve, reject) => {
@@ -166,6 +171,7 @@ export class FileTransfer {
       const why = {
         unavailable: 'The sender no longer has this file',
         busy: 'The sender is busy, try again',
+        paused: 'The sender paused file transfers during a call',
       };
       state.fail(new Error(why[m.reason] ?? 'Transfer failed'));
     } else if (m.t === 'end') {

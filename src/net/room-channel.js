@@ -9,6 +9,7 @@ import { fromB64u, fromUtf8, toB64u, utf8 } from '../util/bytes.js';
 import { peerIdOf } from '../crypto/identity.js';
 import { open, seal } from '../crypto/room-keys.js';
 import { MqttClient } from './mqtt.js';
+import { DOWN_RETRY_MS } from './broker-health.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const SEEN_LIMIT = 2000;
@@ -19,9 +20,11 @@ export class RoomChannel extends Emitter {
   #seen = new Set();
   #running = false;
 
-  constructor({ roomId, aes, selfId, brokers, topicPrefix, WS }) {
+  /** `health`: optional BrokerHealth; fast brokers connect first, known-down ones are retried
+   *  slowly. */
+  constructor({ roomId, aes, selfId, brokers, topicPrefix, WS, health = null }) {
     super();
-    Object.assign(this, { roomId, selfId, brokers });
+    Object.assign(this, { roomId, selfId, brokers, health });
     this.aes = aes;
     this.WS = WS;
     this.base = `${topicPrefix}/${roomId}`;
@@ -31,7 +34,7 @@ export class RoomChannel extends Emitter {
 
   start() {
     this.#running = true;
-    for (const url of this.brokers) this.#supervise(url);
+    for (const url of this.health?.order(this.brokers) ?? this.brokers) this.#supervise(url);
   }
 
   stop() {
@@ -90,9 +93,15 @@ export class RoomChannel extends Emitter {
   async #supervise(url) {
     let delay = 1000;
     while (this.#running) {
+      if (this.health?.isDown(url)) { // its probe failed: look again slowly, or when it is back
+        await this.health.untilUp(url, DOWN_RETRY_MS * (0.5 + Math.random()));
+        if (!this.#running) return;
+      }
       const client = new MqttClient(url, { WS: this.WS });
+      const t0 = Date.now();
       try {
         await client.connect();
+        this.health?.report(url, Date.now() - t0);
         delay = 1000;
         client.on('message', (topic, payload) => this.#onMessage(topic, payload));
         const topics = [`${this.base}/p`, `${this.base}/s/${this.selfId}`, `${this.base}/m`];

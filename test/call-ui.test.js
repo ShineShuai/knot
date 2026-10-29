@@ -217,3 +217,51 @@ test('ui: the chat button brings up the room of the call, wherever you are', asy
   assert.match(a.root.querySelector('h2').textContent, /One/);
   assert.equal(a.root.querySelector('.call').dataset.mode, 'chat');
 });
+
+test('ui: pause file transfers from the call window; leaving the call ends the pause', async () => {
+  const a = await person('Ada');
+  const room = await a.model.addRoom(newRoomSecret(), 'Club');
+  rooms.push(room);
+  a.ui.select(room);
+  byLabel(a.root, 'Start an audio call').click();
+  await until(() => room.call.joined);
+  assert.equal(room.fileTransfer, true);
+  assert.equal(byLabel(a.root, 'Pause file transfers').getAttribute('aria-pressed'), 'false');
+
+  byLabel(a.root, 'Pause file transfers').click();
+  assert.equal(room.fileTransfer, false);
+  assert.equal(byLabel(a.root, 'Allow file transfers').getAttribute('aria-pressed'), 'true');
+  byLabel(a.root, 'Attach file').click(); // the message box says why it does not open
+  assert.match(a.root.querySelector('.toast').textContent, /paused during the call/);
+
+  byLabel(a.root, 'Allow file transfers').click();
+  assert.equal(room.fileTransfer, true);
+  byLabel(a.root, 'Pause file transfers').click();
+  find(a.root, 'button', 'Leave call')[0].click();
+  assert.equal(room.fileTransfer, true, 'files are back when the call is over');
+});
+
+test('ui: everyone in the call is shown, camera or not, also in the minimized bar', async () => {
+  const [a, b] = [await person('Ada'), await person('Bob')];
+  const [ra, rb] = await pair(a, b);
+  a.ui.select(ra);
+  b.ui.select(rb);
+  byLabel(a.root, 'Start an audio call').click(); // Ada: no camera
+  await until(() => ra.call.joined);
+  b.root.querySelector('.call-banner').querySelectorAll('button')[0].click();
+  await until(() => rb.call.joined && a.root.querySelectorAll('.tile').length === 2);
+
+  const grid = a.root.querySelector('.call-grid');
+  assert.equal(grid.dataset.count, '2');
+  const tiles = a.root.querySelectorAll('.tile');
+  assert.ok(tiles.every((tile) => tile.classList.contains('novideo')), 'nobody has a camera');
+  const names = tiles.map((tile) => tile.querySelector('.tile-name').textContent);
+  assert.deepEqual(names, ['You', 'Bob']);
+  assert.ok(tiles.every((tile) => tile.querySelector('.avatar').textContent !== ''));
+
+  byLabel(a.root, 'Minimize').click(); // the video is hidden, the people are not
+  assert.equal(a.root.querySelector('.call').dataset.mode, 'mini');
+  assert.match(a.root.querySelector('.call-roster').textContent, /^You.*Bob/);
+  byLabel(b.root, 'Mute microphone').click();
+  await until(() => /Bob 🔇/.test(a.root.querySelector('.call-roster').textContent));
+});

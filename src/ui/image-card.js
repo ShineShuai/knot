@@ -10,6 +10,7 @@ import { authorIdOf, previewRef } from '../chat/envelope.js';
 import { LIMITS, asImage, thumbBlob } from '../files/image.js';
 import { fmtSize, h, safeFileName } from './dom.js';
 import { t } from './i18n.js';
+import { record } from './diagnostics.js';
 
 const SHOW = { w: 320, h: 384 }; // largest size of an image inside a message, in CSS px
 const PARALLEL = 2; // previews fetched at the same time, across all cards
@@ -73,7 +74,8 @@ export class ImageCard extends Emitter {
 
   /** Call whenever the card is put on screen: arranges loading for when it is visible. */
   mount() {
-    const auto = this.#own || this.#room.settings.imagePreviews === 'auto';
+    const auto = (this.#own || this.#room.settings.imagePreviews === 'auto')
+      && this.#room.fileTransfer !== false; // paused for a call: wait, the log redraws later
     if (this.preview === 'idle' && this.#ref && auto) {
       this.#host.watch(this.el, () => this.load());
     }
@@ -92,7 +94,10 @@ export class ImageCard extends Emitter {
         Object.assign(this.original, { state: 'done', url: this.previewUrl });
       }
       this.#setPreview('ready');
-    } catch { this.#setPreview('failed'); }
+    } catch (err) {
+      record('preview', err);
+      this.#setPreview('failed');
+    }
   }
 
   async loadOriginal() {
@@ -141,6 +146,7 @@ export class ImageCard extends Emitter {
 
   #tap() {
     if (this.#ref && this.preview !== 'ready') {
+      if (this.#room.fileTransfer === false) return this.#host.notify(t('filesOff'));
       if (this.preview !== 'loading') this.load();
     } else this.#host.open(this);
   }

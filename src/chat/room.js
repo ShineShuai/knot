@@ -88,7 +88,7 @@ export class Room extends Emitter {
   constructor(
     {
       identity, secret, label, owner = null, kv, settings, iceServers, linkFactory, WS, derive,
-      callEnv = {},
+      callEnv = {}, health = null,
     },
     keys,
   ) {
@@ -120,10 +120,26 @@ export class Room extends Emitter {
     this.iceServers = iceServers ?? (() => iceServersFrom(settings));
     this.linkFactory = linkFactory ?? ((o) => new PeerLink(o));
     this.WS = WS;
+    this.health = health; // BrokerHealth: which brokers to try first, which to leave alone
     this.call = new CallManager({
       selfId: identity.id, settings, iceServers: () => this.iceServers(),
       send: (id, frame) => this.#sendCall(id, frame), ...callEnv,
     });
+    // File transfers paused for a call end with it.
+    this.call.on('change', () => {
+      if (!this.call.joined && this.files.paused) this.setFileTransfer(true);
+    });
+  }
+
+  /** Are files shared, served and fetched on this device? (Paused during a call on request.) */
+  get fileTransfer() { return !this.files.paused; }
+
+  /** Pause or resume file transfers on this device, e.g. to keep the bandwidth for a call.
+   *  Text and thumbnails are not affected; previews and files wait until it is back on. */
+  setFileTransfer(on) {
+    if (this.files.paused === !on) return;
+    this.files.paused = !on;
+    this.emit('files');
   }
 
   get #name() { return this.settings.name || `anon-${this.identity.id.slice(0, 4)}`; }
@@ -241,14 +257,14 @@ export class Room extends Emitter {
   #openChannel() {
     this.#channel = new RoomChannel({
       roomId: this.#chan.id, aes: this.#chan.aes, selfId: this.identity.id, WS: this.WS,
-      brokers: this.settings.brokers, topicPrefix: this.settings.topicPrefix,
+      brokers: this.settings.brokers, topicPrefix: this.settings.topicPrefix, health: this.health,
     });
     this.#channel.on('presence', (p) => this.#onPresence(p));
     this.#channel.on('signal', (bytes) => this.#onSignal(bytes));
     this.#channel.on('relay', (bytes) => this.#onRelay(bytes));
     this.#channel.on(
       'status',
-      (s) => { this.emit('brokers', s); if (s.connected) this.#announce(); },
+      (s) => { this.brokerStatus = s; this.emit('brokers', s); if (s.connected) this.#announce(); },
     );
     this.#channel.start();
   }
@@ -1038,7 +1054,7 @@ export class Room extends Emitter {
     this.#lobbyId = keys.id;
     this.#lobby = new RoomChannel({
       roomId: keys.id, aes: keys.aes, selfId: this.identity.id, WS: this.WS,
-      brokers: settings.brokers, topicPrefix: settings.topicPrefix,
+      brokers: settings.brokers, topicPrefix: settings.topicPrefix, health: this.health,
     });
     this.#lobby.on('signal', (bytes) => this.#onJoinRequest(bytes));
     this.#lobby.start();

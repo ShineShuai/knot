@@ -10,7 +10,7 @@ const SELF = 'self';
 const initial = (name) => ([...name][0] ?? '?').toUpperCase();
 
 export class CallPanel {
-  #room = null; #off = null; #tiles = new Map(); #notify;
+  #room = null; #offs = []; #tiles = new Map(); #notify;
   #mode = 'full';  // 'full' | 'chat' | 'mini'
   #before = 'full'; // what a minimized window goes back to
   #openChat; #onMode;
@@ -28,6 +28,8 @@ export class CallPanel {
     this.mic = h('button', { class: 'round', onclick: () => this.#toggleMic() });
     this.cam = h('button', { class: 'round', onclick: () => this.#toggleCam() });
     this.share = h('button', { class: 'round', onclick: () => this.#toggleShare() });
+    this.files = h('button', { class: 'round', onclick: () => this.#toggleFiles() });
+    this.roster = h('span', { class: 'call-roster' });
     this.chatCount = h('span', { class: 'count', hidden: true });
     this.chatGlyph = h('span', { 'aria-hidden': 'true' }, '💬');
     this.chat = h('button', { class: 'round chat', onclick: () => this.#toggleChat() },
@@ -38,9 +40,10 @@ export class CallPanel {
       t('callLeave'),
     );
     this.element = h('section', { class: 'call', hidden: true, 'aria-label': t('call') },
-      h('header', { class: 'call-head' }, this.title, this.size),
+      h('header', { class: 'call-head' }, this.title, this.roster, this.size),
       this.grid,
-      h('footer', { class: 'call-bar' }, this.mic, this.cam, this.share, this.chat, this.leave));
+      h('footer', { class: 'call-bar' }, this.mic, this.cam, this.share, this.files, this.chat,
+        this.leave));
     this.#setMode('full', false);
   }
 
@@ -67,7 +70,8 @@ export class CallPanel {
     if (this.#room !== room) {
       this.#hide();
       this.#room = room;
-      this.#off = room.on('unread', () => this.#drawChat());
+      this.#offs = [room.on('unread', () => this.#drawChat()),
+        room.on('files', () => this.#drawFiles())];
       this.#setMode('full');
     }
     this.#draw();
@@ -75,8 +79,8 @@ export class CallPanel {
   }
 
   #hide() {
-    this.#off?.();
-    this.#off = null;
+    for (const off of this.#offs) off();
+    this.#offs = [];
     this.#room = null;
     this.#tiles.clear();
     this.grid.replaceChildren();
@@ -96,6 +100,14 @@ export class CallPanel {
     this.size.setAttribute('aria-label', label);
     this.#drawChat();
     if (tell) this.#onMode(mode === 'chat' ? 'chat' : mode === 'mini' ? 'mini' : '');
+  }
+
+  /** Pause or resume file transfers on this device: a transfer shares the call's bandwidth. */
+  #toggleFiles() { this.#room.setFileTransfer(!this.#room.fileTransfer); }
+
+  #drawFiles() {
+    const on = this.#room?.fileTransfer ?? true;
+    this.#button(this.files, on ? '📎' : '⛔', t(on ? 'callFilesPause' : 'callFilesAllow'), !on);
   }
 
   #toggleChat() {
@@ -156,6 +168,15 @@ export class CallPanel {
       this.#tiles.get(id).el.remove();
       this.#tiles.delete(id);
     }
+    this.#drawFiles();
+    // Everyone is shown, whatever their camera or microphone does: the grid shares its space
+    // out by head count, and the minimized bar names them.
+    this.grid.dataset.count = String(people.length);
+    const roster = people.map(
+      (p) => `${p.name}${p.a ? '' : ' 🔇'}${p.state === 'connected' ? '' : ' …'}`,
+    ).join(', ');
+    this.roster.textContent = roster;
+    this.roster.title = roster;
   }
 
   #button(el, glyph, label, on) {

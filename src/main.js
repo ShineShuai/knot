@@ -4,21 +4,29 @@ import { applyDelegation } from './crypto/delegation.js';
 import { loadIdentity } from './crypto/identity.js';
 import { IdbKV } from './store/kv.js';
 import { rankStun } from './net/ice-probe.js';
+import { BrokerHealth } from './net/broker-health.js';
+import { keepStorage } from './store/persist.js';
+import { watchErrors } from './ui/diagnostics.js';
 import { AppModel } from './app.js';
 import { UpdateWatcher } from './update.js';
 import { setLanguage } from './ui/i18n.js';
 import { mountUi } from './ui/view.js';
 
 async function boot() {
+  watchErrors();
   const root = document.getElementById('app');
   const kv = new IdbKV();
   const settings = await loadSettings(kv);
   setLanguage(settings.language);
   const identity = await applyDelegation(await loadIdentity(kv), kv);
 
+  const brokerHealth = new BrokerHealth();
   let rankedStun = null; // filled in the background; new links then use the fastest servers
   const model = new AppModel(
-    { kv, identity, settings, iceServers: () => iceServersFrom(settings, rankedStun) },
+    {
+      kv, identity, settings, iceServers: () => iceServersFrom(settings, rankedStun),
+      brokerHealth,
+    },
   );
   await model.load();
   const updates = new UpdateWatcher({
@@ -34,6 +42,9 @@ async function boot() {
     ui.openJoin(hash.startsWith('c=') ? hash.slice(2) : `#${hash}`);
   }
 
+  brokerHealth.start(() => (settings.brokersEnabled ? settings.brokers : []));
+  // Ask the browser to keep our data; it decides by its own rules, and some want a click.
+  window.addEventListener('pointerdown', () => keepStorage(), { once: true });
   rankStun(settings.stunServers).then((r) => { if (r.length) rankedStun = r.map((x) => x.url); });
   if ('serviceWorker' in navigator && isSecureContext) navigator.serviceWorker.register(
     'sw.js',

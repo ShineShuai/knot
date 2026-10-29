@@ -5,6 +5,7 @@ import { installFakeDom, find } from './fake-dom.js';
 import { AppModel } from '../src/app.js';
 import { DEFAULTS } from '../src/config.js';
 import { MemoryKV } from '../src/store/kv.js';
+import { BrokerHealth } from '../src/net/broker-health.js';
 import { newRoomSecret } from '../src/crypto/room-keys.js';
 import { dictionaries, setLanguage } from '../src/ui/i18n.js';
 import { mountUi } from '../src/ui/view.js';
@@ -76,4 +77,62 @@ test('ui: a dialog never prints "null" for a field the browser cannot offer', as
   const { root } = await person(); // no Notification support here: that field is left out
   find(root, 'button', 'Settings')[0].click();
   assert.ok(!root.querySelector('dialog').textContent.includes('null'));
+});
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test('ui: Settings: broker status, keep my data, diagnostics', async () => {
+  const health = new BrokerHealth({ probe: async (url) => (url.includes('dead')
+    ? { url, ok: false, ms: 9, error: 'socket error' } : { url, ok: true, ms: 42 }) });
+  let kept = false;
+  const storage = {
+    persisted: async () => kept,
+    persist: async () => { kept = true; return true; },
+  };
+  const settings = {
+    ...DEFAULTS, name: 'Ada', brokersEnabled: false,
+    brokers: ['wss://dead.test', 'wss://fast.test'],
+  };
+  const model = new AppModel({
+    kv: new MemoryKV(), identity: await newIdentity(), settings, iceServers: () => [],
+    linkFactory: () => new FakeLink(), brokerHealth: health,
+  });
+  const root = new rootA.constructor('div');
+  const ui = mountUi(root, model, { storage });
+  const room = await model.addRoom(newRoomSecret(), 'Club');
+  rooms.push(room);
+  ui.select(room);
+  await health.check(settings.brokers);
+
+  find(root, 'button', 'Settings')[0].click();
+  const dialog = root.querySelector('dialog');
+  const lines = () => dialog.querySelectorAll('li').map((li) => li.textContent);
+  assert.deepEqual(lines(), ['✓ wss://fast.test: 42 ms', '✗ wss://dead.test: not reachable']);
+
+  await until(() => find(dialog, 'button', 'Keep my data').length === 1
+    && find(dialog, 'button', 'Keep my data')[0].hidden === false);
+  assert.match(dialog.querySelector('.storage').textContent, /may delete/);
+  find(dialog, 'button', 'Keep my data')[0].click();
+  await until(() => /keeps this app/.test(dialog.querySelector('.storage').textContent));
+  assert.equal(find(dialog, 'button', 'Keep my data')[0].hidden, true);
+
+  find(dialog, 'button', 'Check brokers')[0].click();
+  await wait(20);
+  find(dialog, 'button', 'Diagnostics')[0].click();
+  await until(() => dialog.querySelector('textarea')?.value?.startsWith('knot '));
+  assert.match(dialog.querySelector('textarea').value, /room [\w-]{6}: peers/);
+  assert.match(dialog.querySelector('textarea').value, /broker wss:\/\/dead.test: down/);
+});
+
+test('ui: without storage support or broker health, Settings shows neither', async () => {
+  const { root, ui, model } = await person();
+  const room = await model.addRoom(newRoomSecret(), 'Club');
+  rooms.push(room);
+  ui.select(room);
+  find(root, 'button', 'Settings')[0].click();
+  const dialog = root.querySelector('dialog');
+  assert.equal(dialog.querySelector('.broker-health'), null);
+  assert.equal(find(dialog, 'button', 'Keep my data')[0].hidden, true, 'nothing to keep');
+  assert.equal(dialog.querySelector('.storage').textContent, '');
+  assert.equal(find(dialog, 'button', 'Check brokers').length, 0);
 });

@@ -23,6 +23,8 @@ import { CallPanel } from './call-view.js';
 import { exportJson, exportText } from './export.js';
 import { Notifier } from './notifier.js';
 import { linkify } from './linkify.js';
+import { diagnosticsReport, record } from './diagnostics.js';
+import { keepStorage, storageState } from '../store/persist.js';
 import { MORE, QUICK } from './emoji.js';
 
 /** `opts`: `updates` (an UpdateWatcher), `notifierEnv` (tests): optional. */
@@ -488,6 +490,7 @@ class Ui {
       const files = [...(this.#staged.get(room.id) ?? [])];
       const editing = this.#editing;
       if ((!text.trim() && !(files.length && !editing)) || sending) return;
+      if (files.length && !editing && !room.fileTransfer) return this.notify(t('filesOff'));
       sending = true;
       sendButton.disabled = true;
       input.value = '';
@@ -577,7 +580,7 @@ class Ui {
             class: 'ghost',
             title: t('attach'),
             'aria-label': t('attach'),
-            onclick: () => picker.click(),
+            onclick: () => (room.fileTransfer ? picker.click() : this.notify(t('filesOff'))),
           },
           '+',
         ),
@@ -586,6 +589,7 @@ class Ui {
     this.#offStage.push(
       room.on('message', () => { drawLog(); this.#markViewed(); }),
       room.on('peers', drawPeers),
+      room.on('files', () => drawLog()), // image previews start or wait with the transfers
       room.on('brokers', drawBrokers),
       this.#holdToReveal(room, peers, conn));
     drawPeers(); drawBrokers(); drawLog(true); drawCall();
@@ -882,7 +886,7 @@ class Ui {
 
   #confirmDelete(room, env) {
     if (!confirm(t('deleteConfirm'))) return;
-    room.deleteMessage(env.id).catch((err) => this.notify(err.message));
+    room.deleteMessage(env.id).catch((err) => { record('delete', err); this.notify(err.message); });
   }
 
   // ---- image cards ----------------------------------------------------------------------------
@@ -987,6 +991,7 @@ class Ui {
   /** Put files into the message box (picker, paste, drop). They are only sent, to everyone
    *  in the room, when the user presses Enter or Send. */
   #stage(room, files, folders = 0) {
+    if (!room.fileTransfer) return this.notify(t('filesOff')); // paused for a call
     if (folders) this.notify(t('noFolders'));
     const { list, tooBig, tooMany } = stageFiles(
       this.#staged.get(room.id) ?? [], files, { maxBytes: room.settings.maxFileBytes },
@@ -1313,6 +1318,12 @@ class Ui {
 
   openJoin(prefill) { this.#joinDialog(prefill); }
 
+  /** What this browser supports and how the links look: to paste when something fails. */
+  async #diagnosticsDialog() {
+    const text = await diagnosticsReport(this.model, this.opts.diagnosticsEnv ?? globalThis);
+    this.#open(t('diagnostics'), h('p', {}, t('diagnosticsHelp')), this.#copyField(text));
+  }
+
   #settingsDialog() {
     const s = this.model.settings;
     const name = h('input', { type: 'text', value: s.name, maxLength: 32 });
@@ -1324,6 +1335,35 @@ class Ui {
     const turn = h('textarea', { class: 'code', rows: 3, value: JSON.stringify(s.turnServers) });
     const brokers = h('textarea', { class: 'code', rows: 3, value: s.brokers.join('\n') });
     const useBrokers = h('input', { type: 'checkbox', checked: s.brokersEnabled });
+    const health = this.model.brokerHealth;
+    const brokerRows = h('ul', { class: 'broker-health' });
+    const showBrokers = () => brokerRows.replaceChildren(...(health?.rows(
+      brokers.value.split('\n').map((l) => l.trim()).filter(Boolean),
+    ) ?? []).map((r) => h('li', { class: r.ok ? 'up' : r.ok === false ? 'down' : '' },
+      `${r.ok ? '✓' : r.ok === false ? '✗' : '…'} `
+      + t(r.ok ? 'brokerUp' : r.ok === false ? 'brokerDown' : 'brokerUnknown', r))));
+    const checkBrokers = h('button', { onclick: async () => {
+      await health.check(brokers.value.split('\n').map((l) => l.trim()).filter(Boolean));
+      showBrokers();
+    } }, t('brokerCheck'));
+    if (health) {
+      showBrokers();
+      this.dialog.addEventListener('close', health.on('change', showBrokers), { once: true });
+    }
+    // Ask the browser to keep our data; a refusal is explained, never an error.
+    const storage = this.opts.storage ?? globalThis.navigator?.storage;
+    const kept = h('p', { class: 'storage' });
+    const keep = h('button', { hidden: true, onclick: async () => {
+      if (!(await keepStorage(storage))) this.notify(t('storageDenied'));
+      showStorage();
+    } }, t('storageKeep'));
+    const showStorage = async () => {
+      const state = await storageState(storage);
+      kept.textContent = !state.supported ? ''
+        : t(state.persisted ? 'storageKept' : 'storageAtRisk');
+      keep.hidden = !state.supported || state.persisted;
+    };
+    showStorage();
     const relay = h('input', { type: 'checkbox', checked: s.relayFallback });
     const notifications = h('input', { type: 'checkbox', checked: s.notifications });
     const modes = { auto: 'previewAuto', tap: 'previewTap', off: 'previewOff' };
@@ -1385,11 +1425,14 @@ class Ui {
       field(t('stun'), stun),
       field(t('turn'), turn),
       field(t('brokerList'), brokers),
+      health ? h('div', { class: 'field' }, brokerRows, checkBrokers) : null,
       check(t('useBrokers'), useBrokers),
       check(t('relayText'), relay),
       this.notifier.supported ? check(t('notifications'), notifications) : null,
+      h('div', { class: 'field' }, kept, keep),
       h('div', { class: 'field' },
-        h('button', { onclick: () => this.#devicesDialog() }, t('devices'))),
+        h('button', { onclick: () => this.#devicesDialog() }, t('devices')),
+        h('button', { onclick: () => this.#diagnosticsDialog() }, t('diagnostics'))),
       field(t('imagePreviews'), previews),
       h(
         'div',

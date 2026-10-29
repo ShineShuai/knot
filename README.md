@@ -54,6 +54,7 @@ if no broker is reachable; with brokers, reconnection is automatic).
       net/mqtt.js          minimal MQTT 3.1.1 client over WebSocket
       net/room-channel.js  presence, signaling, text relay over brokers (sealed)
       net/ice-probe.js     STUN ranking, NAT type probe
+      net/broker-health.js which brokers answer and how fast; probed at startup
       net/ice-gather.js    wait for ICE candidates (shared by data and call connections)
       chat/envelope.js     signed chat message format + verification
       chat/log.js          ordered, de-duplicated, capped message log + sync delta
@@ -64,6 +65,7 @@ if no broker is reachable; with brokers, reconnection is automatic).
       files/transfer.js    chunked P2P file transfer with SHA-256 check
       files/image.js       image sniffing, sender-side thumbnail/preview derivation
       files/preview-cache.js  per-room LRU cache of previews (IndexedDB)
+      store/persist.js     asks the browser not to delete our storage
       call/call.js         CallManager: mesh call of one room, presence + signaling frames
       call/call-link.js    one audio+video RTCPeerConnection to one participant
       call/media.js        microphone / camera / screen access (swappable in tests)
@@ -75,6 +77,7 @@ if no broker is reachable; with brokers, reconnection is automatic).
       ui/emoji.js          the emoji offered for reactions
       ui/notifier.js       browser notifications for rooms that are not on screen
       ui/export.js         history as text or signed JSON
+      ui/diagnostics.js    browser feature checks and recent errors, as copyable text
       update.js            notices a newer published build (build.json)
     lab/                   network lab page
     test/                  unit tests (+ fakes) and real-Chromium e2e
@@ -165,7 +168,14 @@ if no broker is reachable; with brokers, reconnection is automatic).
   usual message box, drop, paste and reactions, and counts what arrives while the call covers
   the conversation; "minimize" leaves a bar *below* the conversation, so the message box stays
   free. Files use their own data channel, so a transfer shares bandwidth with the call but needs
-  no extra connection.
+  no extra connection. The call bar has a file toggle (📎): paused, this device neither shares,
+  serves nor fetches files and waits with image previews (thumbnails and text are not affected;
+  a peer asking gets "paused during a call"); it is local to the device and ends with the call.
+  Everyone in the call is always shown, camera or not: a person without video gets an avatar,
+  the grid divides its space by head count (nobody scrolls out of view, also beside the chat
+  or above it on a phone), and the minimized bar names everyone (🔇: muted, …: connecting).
+  Call signalling travels on direct links only, so someone without a direct link to you cannot
+  be listed.
   Desktop browsers can share a screen, window or tab instead of the camera (the
   tile shows it whole, not cropped; the browser's own "stop sharing" button ends it); phones
   have no screen capture, so they only get the camera. Needs HTTPS or localhost. Without a TURN server (Settings) two people
@@ -187,6 +197,22 @@ if no broker is reachable; with brokers, reconnection is automatic).
   count against the log cap. The palette shows a quick row of six; "＋" opens about sixty more
   and a box for any other emoji (typed or pasted from the keyboard's emoji picker; anything
   `isEmoji` refuses is ignored). A person may react with as many different emoji as they like.
+* **Broker health:** at startup every configured broker is probed (WebSocket and MQTT
+  CONNACK, with its time), like STUN. Channels connect to the fast ones first; a broker whose
+  probe failed is left alone (a retry only every minute or so, at once if a real connection
+  works) and probed again every five minutes. Settings shows each broker with its time or
+  "not reachable", with a *Check brokers* button.
+* **Keeping your data:** the page asks the browser for persistent storage
+  (`navigator.storage.persist()`) at the first click; Settings says whether it was granted and
+  can ask again. Without it the browser may delete the identity key and history when space is
+  low (Safari: after about a week without a visit unless the app is installed to the Home
+  Screen or Dock). The key cannot be recovered.
+* **Diagnostics:** Settings > Diagnostics makes a text report for when something works in one
+  browser and not in another: the browser, what it supports (WebRTC, Ed25519 and X25519,
+  image encoding, IndexedDB buffers...), every room's links (direct, relayed), the brokers and
+  the last errors the page hit. It holds no messages or keys. A JPEG thumbnail (the only
+  format Safari encodes) may be up to 9 KB; a failing OffscreenCanvas falls back to a page
+  canvas.
 * **Links:** `http://` and `https://` addresses in message text become links that open in a new
   tab with `noopener noreferrer`. Only plain-ASCII addresses with a dotted host (or `localhost`)
   are linked, never ones with a user name or password (`https://bank.com@evil.test`), other
@@ -266,4 +292,5 @@ if no broker is reachable; with brokers, reconnection is automatic).
 * Files: whole file in memory (default cap 100 MB), no resume.
 * One tab per room should be open; multi-tab coordination is not implemented.
 * Verified: unit tests, real WebRTC in headless Chromium. Not verified: real
-  public brokers, Firefox/Safari, phones, mainland China networks.
+  public brokers, Firefox/Safari (reported: image previews and message deletion fail in Safari;
+  use Settings > Diagnostics there), phones, mainland China networks.

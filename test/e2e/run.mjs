@@ -298,9 +298,34 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
     const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
     return el === hit || el.contains(hit);
   });
+  // Settings: broker status (probed at startup), diagnostics report, storage line.
+  await a.getByRole('button', { name: 'Settings' }).click();
+  await a.waitForFunction(() => document.querySelectorAll('.broker-health li').length === 3
+    && [...document.querySelectorAll('.broker-health li')]
+      .every((li) => !li.textContent.startsWith('…')),
+  null, { timeout: 20000 });
+  await a.getByRole('button', { name: 'Diagnostics' }).click();
+  await a.locator('dialog h2', { hasText: 'Diagnostics' }).waitFor();
+  const report = await a.locator('dialog textarea').inputValue();
+  assert.match(report, /^knot \d/);
+  assert.match(report, /WebCrypto Ed25519: yes/);
+  assert.match(report, /room \S+: peers \[p2p/);
+  await a.keyboard.press('Escape');
+
   const call = a.locator('section.call');
   await a.getByRole('button', { name: 'Start an audio call' }).click();
   await a.locator('.call .tile').waitFor();
+  await b.locator('.call-banner button').click(); // Bob joins: both are shown, camera or not
+  await a.locator('.call .tile').nth(1).waitFor();
+  const fits = () => a.locator('.call-grid').evaluate((grid) => {
+    const g = grid.getBoundingClientRect();
+    return grid.scrollHeight <= grid.clientHeight + 1 && [...grid.children].every((tile) => {
+      const r = tile.getBoundingClientRect();
+      return r.width > 40 && r.height > 40 && r.left >= g.left - 1 && r.right <= g.right + 1
+        && r.bottom <= g.bottom + 1;
+    });
+  });
+  assert.ok(await fits(), 'both tiles fit in the full window');
   const view = a.viewportSize();
   let at = await call.boundingBox();
   assert.ok(at.width >= view.width - 1 && at.height >= view.height - 1, 'full screen at first');
@@ -310,6 +335,7 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
   assert.ok(at.x > 0 && Math.abs(at.x + at.width - view.width) <= 1, 'the call is at the side');
   assert.ok(beside.x + beside.width <= at.x + 1, 'the conversation is beside it, not under it');
   assert.ok(await reachable('.composer textarea'));
+  assert.ok(await fits(), 'both tiles fit beside the conversation');
   await a.getByPlaceholder('Write a message').fill('typing during the call');
   await a.keyboard.press('Enter');
   await b.locator('.msg.other', { hasText: 'typing during the call' }).waitFor();
@@ -323,6 +349,7 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
   at = await call.boundingBox();
   const below = await a.locator('.stage').boundingBox();
   assert.ok(at.y <= 1 && at.width >= 389, 'the call is on top');
+  assert.ok(await fits(), 'both tiles fit in the strip above the conversation');
   assert.ok(below.y >= at.y + at.height - 1, 'the conversation is below it');
   assert.ok(await reachable('.composer textarea'));
   const wide = await a.evaluate(() => document.documentElement.scrollWidth - innerWidth);

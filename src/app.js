@@ -24,9 +24,9 @@ export class AppModel extends Emitter {
 
   /** `WS`, `linkFactory`, `callEnv`: injectable network and media pieces (tests); the
    *  defaults are the browser's. */
-  constructor({ kv, identity, settings, iceServers, WS, linkFactory, callEnv }) {
+  constructor({ kv, identity, settings, iceServers, WS, linkFactory, callEnv, brokerHealth }) {
     super();
-    Object.assign(this, { kv, identity, settings, WS, linkFactory, callEnv });
+    Object.assign(this, { kv, identity, settings, WS, linkFactory, callEnv, brokerHealth });
     this.iceServers = iceServers;
   }
 
@@ -185,6 +185,7 @@ export class AppModel extends Emitter {
       WS: this.WS,
       linkFactory: this.linkFactory,
       callEnv: this.callEnv,
+      health: this.brokerHealth ?? null,
       iceServers: () => this.iceServers(),
     };
   }

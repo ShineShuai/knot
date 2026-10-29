@@ -170,11 +170,12 @@ const PREVIEW_SIDES = [1280, 1024, 800];
 const PREVIEW_QUALITY = [0.82, 0.7, 0.55];
 
 /** First rendition (largest side, best quality) that fits `cap` bytes, or null. */
-async function fit(src, sides, qualities, cap) {
+async function fit(src, sides, qualities, cap, jpegCap = cap) {
   for (const side of sides) {
     for (const quality of qualities) {
       const blob = await src.encode(side, quality);
-      if (blob && blob.size <= cap && PREVIEW_TYPES.includes(blob.type)) return blob;
+      const limit = blob?.type === 'image/jpeg' ? jpegCap : cap; // JPEG is bigger than WebP
+      if (blob && blob.size <= limit && PREVIEW_TYPES.includes(blob.type)) return blob;
     }
   }
   return null;
@@ -202,7 +203,7 @@ export async function deriveImage(file, bytes, io = browserIo()) {
     }
     const thumb = svg && bytes.length <= LIMITS.thumbTarget
       ? new Blob([bytes], { type: 'image/svg+xml' }) // tiny vector: crisp at any size
-      : await fit(src, THUMB_SIDES, THUMB_QUALITY, LIMITS.thumbTarget);
+      : await fit(src, THUMB_SIDES, THUMB_QUALITY, LIMITS.thumbTarget, LIMITS.thumbMax - 1024);
     if (!thumb) return null;
     const own = !!sniffed && bytes.length <= LIMITS.ownPreviewMax && pixelsOk(sniffed);
     const preview = own ? null
@@ -258,23 +259,30 @@ const toBlob = (canvas, type, quality) => (
 /** encode(side, quality): scale to fit `side`, flatten on white, WebP (JPEG if unsupported). */
 function makeEncoder(source, w, h, vector) {
   let last = null;
-  return async (side, quality) => {
-    const k = vector ? side / Math.max(w, h) : Math.min(1, side / Math.max(w, h));
-    const [cw, ch] = [Math.max(1, Math.round(w * k)), Math.max(1, Math.round(h * k))];
-    if (last?.cw !== cw || last.ch !== ch) {
-      const canvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(cw, ch)
+  let dom = typeof OffscreenCanvas === 'undefined'; // a page canvas, if OffscreenCanvas fails
+  const render = async (cw, ch, quality) => {
+    if (last?.cw !== cw || last.ch !== ch || last.dom !== dom) {
+      const canvas = !dom ? new OffscreenCanvas(cw, ch)
         : Object.assign(document.createElement('canvas'), { width: cw, height: ch });
       const ctx = canvas.getContext('2d');
       ctx.fillStyle = '#fff';
       ctx.fillRect(0, 0, cw, ch);
       ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(source, 0, 0, cw, ch);
-      last = { cw, ch, canvas };
+      last = { cw, ch, dom, canvas };
     }
     for (const type of ['image/webp', 'image/jpeg']) { // Safari cannot encode WebP
-      const blob = await toBlob(last.canvas, type, quality);
+      const blob = await toBlob(last.canvas, type, quality).catch(() => null);
       if (blob?.type === type) return blob;
     }
     return null;
+  };
+  return async (side, quality) => {
+    const k = vector ? side / Math.max(w, h) : Math.min(1, side / Math.max(w, h));
+    const [cw, ch] = [Math.max(1, Math.round(w * k)), Math.max(1, Math.round(h * k))];
+    const blob = await render(cw, ch, quality).catch(() => null);
+    if (blob || dom || typeof document === 'undefined') return blob;
+    dom = true; // OffscreenCanvas drew or encoded nothing: try a canvas of the page
+    return render(cw, ch, quality).catch(() => null);
   };
 }

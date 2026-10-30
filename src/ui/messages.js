@@ -7,6 +7,7 @@ import { t } from './i18n.js';
 import { linkify } from './linkify.js';
 import { record } from './diagnostics.js';
 import { MORE, QUICK } from './emoji.js';
+import { withDevice } from './alias.js';
 
 const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -29,7 +30,7 @@ export class Messages {
   render(room, env, redraw, opts = {}) {
     if (env.kind === 'gone') return this.#renderGone(room, env);
     if (ADMIN_KINDS.includes(env.kind)) return this.#renderNotice(room, env);
-    const own = authorIdOf(env) === room.identity.id;
+    const own = room.isMine(authorIdOf(env));
     const edited = room.log.isEdited(env);
     const parts = env.kind === 'file' ? [this.#renderFile(room, env, redraw)] : [
       env.kind === 'reply' ? this.#renderQuote(room, env.body.q) : null,
@@ -51,7 +52,8 @@ export class Messages {
       ]));
     return h('li', { class: `msg ${own ? 'own' : 'other'}`, 'data-id': env.id },
       h('div', { class: 'meta' },
-        own ? t('you') : env.name, ' ', h('time', {}, clock(env.ms)), acts),
+        withDevice(own ? t('you') : env.name, room.deviceOf(authorIdOf(env), env.cert?.n)),
+        ' ', h('time', {}, clock(env.ms)), acts),
       ...parts,
       opts.onShow ? null : this.#renderReactions(room, env, redraw));
   }
@@ -61,7 +63,7 @@ export class Messages {
     const byEmoji = room.log.overlay().reactions.get(env.id);
     const open = this.#reactTo === env.id;
     if (!byEmoji && !open) return null;
-    const me = room.identity.id;
+    const me = room.identity.member;
     const toggle = (emoji) => {
       this.#reactTo = null;
       this.#reactMore = false;
@@ -109,7 +111,7 @@ export class Messages {
   /** What is left of a deleted message: who deleted it, in its old place. */
   #renderGone(room, item) {
     this.ui.images.forget(room.id, item.id);
-    const text = item.by === room.identity.id
+    const text = room.isMine(item.by)
       ? t('youDeleted') : t('deletedBy', { name: item.name });
     return h('li', { class: 'msg gone', 'data-id': item.id }, h('p', { class: 'text' }, text));
   }

@@ -5,6 +5,7 @@
 // It only renders `room.call` and forwards clicks.
 import { h } from './dom.js';
 import { SpeakingMeter } from '../call/speaking.js';
+import { peerLabel, withDevice } from './alias.js';
 import { t } from './i18n.js';
 
 const SELF = 'self';
@@ -159,9 +160,10 @@ export class CallPanel {
     this.#button(this.share, '🖥', t(s ? 'callShareStop' : 'callShare'), s);
     const people = [
       {
-        id: SELF, name: t('you'), a, v: v || s, s, stream: call.localStream, state: 'connected',
+        id: SELF, name: withDevice(t('you'), this.#room.peerDevice(this.#room.identity.id)),
+        a, v: v || s, s, stream: call.localStream, state: 'connected',
       },
-      ...call.participants.map((p) => ({ ...p, name: this.#room.nameOf(p.id) })),
+      ...call.participants.map((p) => ({ ...p, name: peerLabel(this.#room, p.id) })),
     ];
     this.#listen(people);
     const gone = new Set(this.#tiles.keys());

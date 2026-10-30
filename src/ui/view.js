@@ -6,6 +6,7 @@
 // settings-dialogs.js).
 import { searchLog } from '../chat/search.js';
 import { h } from './dom.js';
+import { peerLabel, withDevice } from './alias.js';
 import { t } from './i18n.js';
 import { VERSION } from '../version.js';
 import { dragHasFiles } from './attach.js';
@@ -286,7 +287,7 @@ class Ui {
           (p) => h(
             'li',
             { class: `peer ${p.state}`, title: p.sas ? `${t('verify')} ${p.sas}` : '' },
-            `${p.name} · ${t(p.state === 'p2p' ? 'direct' : p.state)}`,
+            `${withDevice(p.name, p.device)} · ${t(p.state === 'p2p' ? 'direct' : p.state)}`,
           ),
         )
       );
@@ -337,7 +338,7 @@ class Ui {
         this.#iconButton('📞', t('callAudio'), () => this.#startCall(room, false)),
         this.#iconButton('🎥', t('callVideo'), () => this.#startCall(room, true)),
       ] : []));
-      const others = call.joined ? [] : [...call.members.keys()].map((id) => room.nameOf(id));
+      const others = call.joined ? [] : [...call.members.keys()].map((id) => peerLabel(room, id));
       callBanner.hidden = !others.length;
       callBanner.replaceChildren(...(others.length ? [
         h('span', { class: 'call-names' }, t('callInCall', { names: others.join(', ') })),

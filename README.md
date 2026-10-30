@@ -303,9 +303,10 @@ if no broker is reachable; with brokers, reconnection is automatic).
 * **Hardening:** CSP without inline code, all text via `textContent`, rate
   limit per link, size/shape validation of every envelope, replay protection for
   pairing codes (10 min TTL, single use), `wss://` only for brokers. The CSP forbids inline
-  styles, and Safari (WebKit) applies that to styles set from script too, so nothing is sized
-  with `style`: an image card gets its size from the `width` and `height` attributes of its
-  image (set that way, a blocked style left the card with no size in Safari).
+  styles, so an image card gets its size from the `width` and `height` attributes of its
+  image rather than from `style`. WebKit also reports violations for the interface of its own
+  `<video>` / `<audio>` elements; the QR scanner's video is therefore only made when scanning
+  starts, and the browser tests ignore that one message in WebKit.
 * **China:** no Google/Firebase/CDN dependency, STUN servers reachable from the
   mainland first, runtime ranking of STUN servers, TURN over TLS 443 supported
   through Settings (host it outside the mainland; operating infrastructure
@@ -323,13 +324,11 @@ if no broker is reachable; with brokers, reconnection is automatic).
   through brokers or a new code.
 * Files: whole file in memory (default cap 100 MB), no resume.
 * One tab per room should be open; multi-tab coordination is not implemented.
-* Verified: unit tests, real WebRTC in headless Chromium. The Firefox and WebKit runs are wired
-  (`test/e2e/browsers.mjs`, CI matrix); the first CI run found Firefox (synthetic paste and
-  drop events, the frame counter) and WebKit on Linux (no STUN, so two pages on one machine
-  cannot find each other; CSP violations from the image card's inline styles; one Ed25519
-  key-generation failure, now retried and reported with its cause) failing. WebKit on macOS
-  (Playwright's build) still fails to connect two pages (the ICE log of a failed check is now
-  printed to find out why); Firefox on macOS did not start with Node 26. Not verified: real
-  public brokers, real Safari (reported: image previews and message deletion fail; the card
-  sizing above is the first fix; use Settings > Diagnostics there), phones, mainland China
-  networks.
+* Verified: unit tests, real WebRTC in headless Chromium, and (CI) Firefox. WebKit: on Linux CI
+  everything passes except the CSP lines above (now filtered); on macOS, Playwright's WebKit
+  cannot connect two pages (only `.local` host candidates it cannot resolve, and STUN gives no
+  public address), so the two-page checks are skipped there and the check "two rooms in one
+  page" (text, edit, reaction, image thumbnail and preview, original, delete) is the one that
+  tells what the engine can do. Firefox on macOS with Node 26 does not start at all. Not
+  verified: real public brokers, real Safari (reported: image previews and message deletion
+  fail; Settings > Diagnostics there), phones, mainland China networks.

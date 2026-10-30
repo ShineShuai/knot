@@ -48,9 +48,21 @@ export function contextOptions(name) {
   };
 }
 
+/** WebKit applies the page's CSP to the style of its own media-element interface (a `<video>`
+ *  or `<audio>` is enough), and says so in the console. Nothing of ours is blocked: the
+ *  detailed message names the element that was being created, the plain one cannot. */
+const WEBKIT_MEDIA_CSP = [
+  /^Refused to apply a stylesheet because its hash, its nonce, or 'unsafe-inline'/,
+  /^CSP: style-src(-attr)? blocked inline .* after createElement\((video|audio)\)/,
+];
+
 /** Console errors that are expected in a test run: the public brokers cannot be reached from
- *  the sandbox (each browser words that its own way), and nobody serves a favicon. */
-export const isExpectedNoise = (text) => /WebSocket|wss?:\/\/|favicon/i.test(text);
+ *  the sandbox (each browser words that its own way), nobody serves a favicon, and WebKit's
+ *  media interface (see above). */
+export const isExpectedNoise = (text, name = 'chromium') => (
+  /WebSocket|wss?:\/\/|favicon/i.test(text)
+  || (name === 'webkit' && WEBKIT_MEDIA_CSP.some((re) => re.test(text)))
+);
 
 /** WebKit shows other pages only a made-up `.local` name instead of the machine's address, and
  *  two pages on one machine cannot look those names up: they need STUN (a real network) to

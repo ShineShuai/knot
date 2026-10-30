@@ -85,3 +85,17 @@ test('Playwright is looked for in the usual places; a missing one gets a helpful
     /PLAYWRIGHT_MODULE=… is not a Playwright folder[\s\S]*npm install --no-save playwright/,
   );
 });
+
+test('WebKit alone gets to ignore the CSP lines of its own media interface', () => {
+  const plain = "Refused to apply a stylesheet because its hash, its nonce, or 'unsafe-inline'";
+  const where = 'CSP: style-src-attr blocked inline at http://127.0.0.1:1/src/ui/dom.js:6';
+  const video = `${where} after createElement(video) `;
+  const other = `${where} after createElement(img) `;
+  assert.equal(isExpectedNoise(plain, 'webkit'), true);
+  assert.equal(isExpectedNoise(video, 'webkit'), true);
+  assert.equal(isExpectedNoise(other, 'webkit'), false, 'a violation of ours must still fail');
+  for (const name of ['chromium', 'firefox']) {
+    assert.equal(isExpectedNoise(plain, name), false);
+    assert.equal(isExpectedNoise(video, name), false);
+  }
+});

@@ -55,18 +55,21 @@ export class DialogKit {
   /** Textarea + optional camera scanner; onText receives pasted or scanned text. */
   codeInput(placeholder, onText) {
     const area = h('textarea', { class: 'code', rows: 3, placeholder });
-    const video = h('video', { class: 'scan', playsInline: true, muted: true, hidden: true });
+    const view = h('div', { hidden: true }); // holds the camera picture, only while scanning
     const scan = canScan() && h('button', {
       onclick: () => {
-        video.hidden = false;
-        this.#stopScan = scanQr(
-          video,
-          (text) => { video.hidden = true; if (text) { area.value = text; onText(text); } },
-        );
+        const video = h('video', { class: 'scan', playsInline: true, muted: true });
+        view.replaceChildren(video);
+        view.hidden = false;
+        this.#stopScan = scanQr(video, (text) => {
+          view.hidden = true;
+          view.replaceChildren();
+          if (text) { area.value = text; onText(text); }
+        });
       },
     }, t('scan'));
     const submit = () => area.value.trim() && onText(area.value);
     area.addEventListener('paste', () => setTimeout(submit, 0));
-    return { area, submit, node: h('div', { class: 'code-input' }, area, video, scan) };
+    return { area, submit, node: h('div', { class: 'code-input' }, area, view, scan) };
   }
 }

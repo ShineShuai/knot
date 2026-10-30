@@ -18,13 +18,21 @@ const server = await startServer(0);
 const base = `http://127.0.0.1:${server.address().port}`;
 let browser;
 try {
-  browser = await playwright[NAME].launch(launchOptions(NAME));
+  try {
+    browser = await playwright[NAME].launch(launchOptions(NAME));
+  } catch (err) {
+    if (!/profile folder/.test(String(err)) || !Object.keys(launchOptions(NAME)).length) throw err;
+    // Does the browser start at all? If it does without our preferences, they are the cause.
+    browser = await playwright[NAME].launch({}).catch(() => { throw err; });
+    console.log(`note: ${NAME} starts only without our preferences (fake camera and microphone):`
+      + ' its call checks will be skipped');
+  }
 } catch (err) {
   server.close();
   if (/profile folder/.test(String(err))) {
-    console.log(`${NAME} could not start with Playwright's temporary profile (not the app).\n`
-      + `Try Node 22 or 24 (this is ${process.version}), or a temp folder of your own:\n`
-      + `    mkdir -p ~/tmp-pw && TMPDIR=$HOME/tmp-pw npm run test:e2e:${NAME}`);
+    console.log(`${NAME} does not start with Playwright's temporary profile, with or without our `
+      + `settings (so not because of the app).\nTry another Node (this is ${process.version}; `
+      + `22 or 24), then \`npx playwright install --force ${NAME}\`.`);
   }
   if (process.env.E2E_SKIP_MISSING && /Executable doesn't exist/.test(String(err))) {
     console.log(`skip ${NAME}: not installed (npx playwright install ${NAME})`);
@@ -107,9 +115,16 @@ const newPage = async () => {
         }
       };
     }
+    const create = document.createElement.bind(document);
+    let lastTag = ''; // the element being made when a violation is reported (they are sync)
+    document.createElement = (tag, options) => {
+      lastTag = String(tag);
+      return create(tag, options);
+    };
     document.addEventListener('securitypolicyviolation', (e) => console.error(
       `CSP: ${e.violatedDirective} blocked ${e.blockedURI || '(inline)'} `
-      + `at ${e.sourceFile}:${e.lineNumber} ${(e.sample || '').slice(0, 80)}`,
+      + `at ${e.sourceFile}:${e.lineNumber} after createElement(${lastTag}) `
+      + `${(e.sample || '').slice(0, 80)}`,
     ));
   }, needsStun(NAME));
   livePages.add(page);
@@ -118,13 +133,29 @@ const newPage = async () => {
   // Public brokers are unreachable in offline test runs; that console noise is expected.
   page.on(
     'console',
-    (m) => m.type() === 'error' && !isExpectedNoise(m.text()) && page.errors.push(m.text()),
+    (m) => m.type() === 'error' && !isExpectedNoise(m.text(), NAME) && page.errors.push(m.text()),
   );
   return page;
 };
 
+/** WebKit hides a page's address behind a `.local` name that a second page can only look up
+ *  where the system allows it (Playwright's WebKit on a Mac does not), and STUN may give
+ *  nothing: then no two pages connect, whatever the app does. Say so instead of failing. */
+let canConnect;
+async function needPairing() {
+  if (NAME !== 'webkit') return;
+  canConnect ??= pairedRooms().then(
+    (pages) => Promise.all(pages.map((p) => p.context().close())).then(() => true),
+    () => false,
+  );
+  if (!(await canConnect)) {
+    skip('two WebKit pages cannot connect on this machine (see "two rooms in one page" instead)');
+  }
+}
+
 // ---- 1. Real WebRTC through the Room API (manual pairing, chat, history, files) --------------
 await check('manual pairing, chat and file transfer over real WebRTC', async () => {
+  await needPairing();
   const [a, b] = [await newPage(), await newPage()];
   await Promise.all([a, b].map((p) => p.goto(`${base}/test/e2e/blank.html`)));
   const boot = ({ name, secretB64 }) => async ({ name, secretB64 }) => {
@@ -224,6 +255,7 @@ await check('UI: create room, send message, persists after reload', async () => 
 // ---- 3. UI manual pairing between two browsers
 // ------------------------------------------------------
 await check('UI: pair two browsers with codes, chat both ways, share a file', async () => {
+  await needPairing();
   const [a, b] = [await newPage(), await newPage()];
   await b.addInitScript(toneMicrophone); // Bob "speaks" all the time
   await Promise.all([a, b].map((p) => p.goto(`${base}/index.html`)));
@@ -512,6 +544,7 @@ async function pairedRooms() {
 }
 
 await check('audio/video call: media flows both ways, mute and camera, leave', async () => {
+  await needPairing();
   const [a, b] = await pairedRooms();
   if (needsMediaProbe(NAME) && !(await hasFakeMedia(a))) {
     await Promise.all([a, b].map((p) => p.context().close()));
@@ -568,6 +601,110 @@ await check('audio/video call: media flows both ways, mute and camera, leave', a
   await b.waitForFunction(() => window.room.call.participants.length === 0);
   assert.deepEqual([...a.errors, ...b.errors], []);
   await Promise.all([a, b].map((p) => p.context().close()));
+});
+
+// ---- 3c. The engine itself: two rooms in ONE page (no second page to find, so this runs in
+// every browser, WebKit included). Every step is tried and reported, so one run shows
+// everything that does not work in a browser, not just the first thing.
+await check('two rooms in one page: text, edit, reaction, image, delete', async () => {
+  const page = await newPage();
+  await page.goto(`${base}/test/e2e/blank.html`);
+  const results = await page.evaluate(async () => {
+    const results = [];
+    const step = async (name, fn) => {
+      try { results.push({ name, ok: true, detail: (await fn()) ?? '' }); } catch (err) {
+        results.push({ name, ok: false, detail: `${err?.name}: ${err?.message}` });
+      }
+    };
+    const until = async (fn, ms = 20000) => {
+      const t0 = performance.now();
+      while (!fn()) {
+        if (performance.now() - t0 > ms) throw new Error('timed out');
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    };
+    const { Room } = await import('/src/chat/room.js');
+    const { DEFAULTS } = await import('/src/config.js');
+    const { MemoryKV } = await import('/src/store/kv.js');
+    const { loadIdentity } = await import('/src/crypto/identity.js');
+    const { decodeCode } = await import('/src/net/handshake.js');
+    const open = async (name, secret) => {
+      const kv = new MemoryKV();
+      return Room.open({
+        identity: await loadIdentity(kv), label: name, kv, iceServers: () => [], secret,
+        settings: { ...DEFAULTS, name, brokersEnabled: false, imagePreviews: 'auto',
+          gatherTimeoutMs: 1500 },
+      });
+    };
+    const find = (room, id) => room.log.timeline().find((e) => e.id === id);
+    let a; let b;
+    await step('pair two rooms with a code', async () => {
+      const { newRoomSecret } = await import('/src/crypto/room-keys.js');
+      a = await open('Ada', newRoomSecret());
+      const { code } = await a.createInvite();
+      b = await open('Bob', decodeCode(code).roomSecret);
+      const reply = await b.answerOffer(decodeCode(code));
+      await a.acceptAnswer(decodeCode(reply.code));
+      await until(() => [a, b].every((r) => r.peerList.some((p) => p.state === 'p2p')));
+    });
+    if (!results[0].ok) return results;
+    let hello;
+    await step('text arrives', async () => {
+      hello = await a.sendText('hello Bob');
+      await until(() => b.log.has(hello.id));
+    });
+    await step('edit arrives', async () => {
+      await a.editMessage(hello.id, 'hello Bob (edited)');
+      await until(() => b.log.textOf(find(b, hello.id)) === 'hello Bob (edited)');
+    });
+    await step('reaction arrives', async () => {
+      await b.react(hello.id, '👍');
+      await until(() => a.log.overlay().reactions.get(hello.id)?.has('👍'));
+    });
+    const noise = new File(['x'], 'x'); // replaced below; keeps `file` defined if the step fails
+    let file = noise;
+    let shared;
+    await step('image: the sender makes thumbnail and preview', async () => {
+      const canvas = document.createElement('canvas');
+      [canvas.width, canvas.height] = [1200, 800];
+      const context = canvas.getContext('2d');
+      const pixels = context.createImageData(1200, 800);
+      for (let i = 0; i < pixels.data.length; i += 4) {
+        pixels.data[i] = (i * 7) & 255;
+        pixels.data[i + 1] = (i * 13) & 255;
+        pixels.data[i + 2] = (i * 29) & 255;
+        pixels.data[i + 3] = 255;
+      }
+      context.putImageData(pixels, 0, 0);
+      const png = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+      file = new File([png], 'noise.png', { type: 'image/png' });
+      shared = await a.shareFile(file);
+      if (!shared.body.img) throw new Error('no thumbnail: the image went as a plain file');
+      return `${shared.body.img.w}x${shared.body.img.h}, ${Object.keys(shared.body.img).join(',')}`;
+    });
+    await step('image: the other side fetches the preview', async () => {
+      await until(() => b.log.has(shared.id));
+      const blob = await b.previewBlob(find(b, shared.id));
+      if (!blob?.size) throw new Error('no preview came');
+      const bitmap = await createImageBitmap(blob);
+      return `${blob.type}, ${blob.size} bytes, ${bitmap.width}x${bitmap.height}`;
+    });
+    await step('image: the original downloads', async () => {
+      const blob = await b.downloadFile(find(b, shared.id));
+      if (blob.size !== file.size) throw new Error(`${blob.size} bytes instead of ${file.size}`);
+    });
+    await step('delete arrives', async () => {
+      await a.deleteMessage(hello.id);
+      await until(() => b.log.isGone(hello.id));
+    });
+    return results;
+  });
+  for (const { ok, name, detail } of results) {
+    console.log(`     ${ok ? 'ok  ' : 'FAIL'} ${name}${detail ? ` - ${detail}` : ''}`);
+  }
+  assert.deepEqual(results.filter((r) => !r.ok).map((r) => r.name), []);
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
 });
 
 // ---- 4. Lab page finishes without failures that are not network related

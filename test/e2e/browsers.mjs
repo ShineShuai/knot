@@ -1,0 +1,57 @@
+// Which browser the end-to-end tests run in, and how each one is set up. Pure data and small
+// functions, so Node's unit tests can check them without any browser installed.
+//   E2E_BROWSER=chromium|firefox|webkit   (default chromium; webkit is Safari's engine)
+export const BROWSERS = ['chromium', 'firefox', 'webkit'];
+
+export function browserName(env = process.env) {
+  const name = env.E2E_BROWSER || 'chromium';
+  if (!BROWSERS.includes(name)) {
+    throw new Error(`E2E_BROWSER must be one of ${BROWSERS.join(', ')} (got "${name}")`);
+  }
+  return name;
+}
+
+/** Options for `<browser>.launch()`. Fake camera and microphone, no permission prompt, and
+ *  two pages of one machine may reach each other. Playwright's WebKit takes none of this:
+ *  whether it offers capture devices is found out at run time (see run.mjs). */
+export function launchOptions(name) {
+  if (name === 'chromium') {
+    return {
+      args: [
+        '--no-sandbox',
+        '--allow-loopback-in-peer-connection',
+        '--disable-features=WebRtcHideLocalIpsWithMdns',
+        '--use-fake-device-for-media-stream', // a test-pattern camera and a beeping microphone
+        '--use-fake-ui-for-media-stream', // and no permission prompt
+      ],
+    };
+  }
+  if (name === 'firefox') {
+    return {
+      firefoxUserPrefs: {
+        'media.navigator.streams.fake': true,
+        'media.navigator.permission.disabled': true,
+        'media.peerconnection.ice.loopback': true,
+        'media.peerconnection.ice.obfuscate_host_addresses': false,
+      },
+    };
+  }
+  return {};
+}
+
+/** Options for `browser.newContext()`. Only Chromium knows the clipboard permissions: the
+ *  others refuse a context that asks for them. */
+export function contextOptions(name) {
+  return {
+    serviceWorkers: 'block',
+    ...(name === 'chromium' ? { permissions: ['clipboard-read', 'clipboard-write'] } : {}),
+  };
+}
+
+/** Console errors that are expected in a test run: the public brokers cannot be reached from
+ *  the sandbox (each browser words that its own way), and nobody serves a favicon. */
+export const isExpectedNoise = (text) => /WebSocket|wss?:\/\/|favicon/i.test(text);
+
+/** Is this a browser that cannot be asked for its fake camera and microphone up front? Its
+ *  call checks then run only if the browser turns out to offer capture devices. */
+export const needsMediaProbe = (name) => name !== 'chromium';

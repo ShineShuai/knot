@@ -9,11 +9,18 @@ signaling brokers are blocked (manual QR / text pairing).
 
     node tools/serve.mjs 8080        # then open http://localhost:8080
     npm test                         # unit tests (Node 22+)
-    PLAYWRIGHT_MODULE=/path/to/node_modules/playwright npm run test:e2e   # fake camera + mic
+    PLAYWRIGHT_MODULE=/path/to/node_modules/playwright npm run test:e2e   # Chromium, fake camera + mic
+    npx playwright install firefox webkit        # once; WebKit is Safari's engine
+    PLAYWRIGHT_MODULE=... npm run test:e2e:all   # every installed browser, one after the other
+    PLAYWRIGHT_MODULE=... npm run test:e2e:webkit   # or :firefox; or E2E_BROWSER=... test:e2e
 
-CI (`.github/workflows/ci.yml`): unit tests and the headless-Chromium tests run on every
-push and pull request. Only a push to `main` whose unit and browser tests both pass is
-published to GitHub Pages (one-time: Settings > Pages > Source: GitHub Actions).
+CI (`.github/workflows/ci.yml`): unit tests and the browser tests run on every push and pull
+request, in Chromium, Firefox and WebKit. Only Chromium blocks a deploy for now (`continue-on-error`
+on the others, see the comment in the file); a push to `main` whose unit tests and Chromium
+tests pass is published to GitHub Pages (one-time: Settings > Pages > Source: GitHub Actions).
+The other browsers have no flag-switched fake camera: a call check there runs only if the browser
+offers capture devices and is reported as skipped otherwise; the speaking outline is only
+required in Chromium.
 
 Any static host works for deployment (HTTPS required outside localhost). Host it
 on two or three origins and also hand out the folder as a ZIP: after one visit
@@ -94,7 +101,7 @@ if no broker is reachable; with brokers, reconnection is automatic).
       ui/diagnostics.js    browser feature checks and recent errors, as copyable text
       update.js            notices a newer published build (build.json)
     lab/                   network lab page
-    test/                  unit tests (+ fakes) and real-Chromium e2e
+    test/                  unit tests (+ fakes) and real-browser e2e (browsers.mjs: Chromium, Firefox, WebKit)
 
 ## Design notes
 
@@ -310,6 +317,8 @@ if no broker is reachable; with brokers, reconnection is automatic).
   through brokers or a new code.
 * Files: whole file in memory (default cap 100 MB), no resume.
 * One tab per room should be open; multi-tab coordination is not implemented.
-* Verified: unit tests, real WebRTC in headless Chromium. Not verified: real
+* Verified: unit tests, real WebRTC in headless Chromium. The Firefox and WebKit runs are wired
+  (`test/e2e/browsers.mjs`, CI matrix) but were never executed by their author: no such browser
+  was available. Not verified: real
   public brokers, Firefox/Safari (reported: image previews and message deletion fail in Safari;
   use Settings > Diagnostics there), phones, mainland China networks.

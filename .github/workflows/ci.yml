@@ -28,8 +28,15 @@ jobs:
       - run: npm test
 
   e2e:
-    name: browser tests (headless Chromium)
+    name: browser tests (${{ matrix.browser }})
     runs-on: ubuntu-latest
+    # Chromium decides; Firefox and WebKit (Safari's engine) report, and do not block a deploy
+    # yet. Once they are green for a while, delete the next line to make them count too.
+    continue-on-error: ${{ matrix.browser != 'chromium' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -41,10 +48,11 @@ jobs:
           cd "$RUNNER_TEMP/pw"
           npm init -y > /dev/null
           npm install playwright
-          npx playwright install --with-deps chromium
+          npx playwright install --with-deps ${{ matrix.browser }}
       - run: npm run test:e2e
         env:
           PLAYWRIGHT_MODULE: ${{ runner.temp }}/pw/node_modules/playwright
+          E2E_BROWSER: ${{ matrix.browser }}
 
   deploy:
     name: deploy to GitHub Pages

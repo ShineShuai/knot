@@ -1,43 +1,79 @@
-// End-to-end tests in real Chromium (real WebRTC, real IndexedDB, real UI).
+// End-to-end tests in real browsers (real WebRTC, real IndexedDB, real UI): Chromium by
+// default, or Firefox / WebKit (Safari's engine) with E2E_BROWSER=firefox|webkit.
 //   PLAYWRIGHT_MODULE=/path/to/node_modules/playwright node test/e2e/run.mjs
+// Checks that need fake capture devices run in every browser that offers them; the others
+// are reported as skipped, never silently passed.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { startServer } from '../../tools/serve.mjs';
+import {
+  browserName, contextOptions, isExpectedNoise, launchOptions, needsMediaProbe,
+} from './browsers.mjs';
 
-const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE ?? 'playwright');
+const NAME = browserName();
+const STRICT = NAME === 'chromium'; // its fake devices are switched on by flags: no excuses
+const playwright = createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE ?? 'playwright');
 const server = await startServer(0);
 const base = `http://127.0.0.1:${server.address().port}`;
-const browser = await chromium.launch({
-  args: [
-    '--no-sandbox',
-    '--allow-loopback-in-peer-connection',
-    '--disable-features=WebRtcHideLocalIpsWithMdns',
-    '--use-fake-device-for-media-stream', // a test-pattern camera and a beeping microphone
-    '--use-fake-ui-for-media-stream', // and no permission prompt
-  ],
-});
+let browser;
+try {
+  browser = await playwright[NAME].launch(launchOptions(NAME));
+} catch (err) {
+  server.close();
+  if (process.env.E2E_SKIP_MISSING && /Executable doesn't exist/.test(String(err))) {
+    console.log(`skip ${NAME}: not installed (npx playwright install ${NAME})`);
+    process.exit(0);
+  }
+  throw err;
+}
+console.log(`browser: ${NAME} ${browser.version()}`);
 const failures = [];
+/** Init script: the microphone is a steady tone. The fake device only beeps for 20 ms a second,
+ *  which the browser's own noise filter may swallow; a tone from Web Audio is not filtered. */
+const toneMicrophone = () => {
+  const real = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+  navigator.mediaDevices.getUserMedia = async (constraints) => {
+    const stream = await real(constraints);
+    if (!stream.getAudioTracks().length) return stream;
+    const ctx = new AudioContext();
+    const oscillator = ctx.createOscillator();
+    const destination = ctx.createMediaStreamDestination();
+    oscillator.connect(destination);
+    oscillator.start();
+    await ctx.resume();
+    for (const track of stream.getAudioTracks()) { track.stop(); stream.removeTrack(track); }
+    stream.addTrack(destination.stream.getAudioTracks()[0]);
+    return stream;
+  };
+};
+class Skip extends Error {}
+const skip = (why) => { throw new Skip(why); };
 async function check(name, fn) {
   if (process.env.E2E_ONLY && !name.includes(process.env.E2E_ONLY)) return;
   try { await fn(); console.log(`ok   ${name}`); } catch (err) {
+    if (err instanceof Skip) { console.log(`skip ${name}\n     ${err.message}`); return; }
     failures.push(name);
     console.log(`FAIL ${name}\n     ${err.stack ?? err}`);
   }
 }
+/** Does this page get a (fake) microphone and camera? Chromium is set up to; the others only
+ *  sometimes, so a call check asks first and says so when it skips. */
+const hasFakeMedia = (page) => page.evaluate(
+  () => navigator.mediaDevices?.getUserMedia({ audio: true, video: true }).then(
+    (stream) => { stream.getTracks().forEach((track) => track.stop()); return true; },
+    () => false,
+  ) ?? false,
+);
 const newPage = async () => {
-  const context = await browser.newContext(
-    { serviceWorkers: 'block', permissions: ['clipboard-read', 'clipboard-write'] },
-  );
+  const context = await browser.newContext(contextOptions(NAME));
   const page = await context.newPage();
   page.errors = [];
   page.on('pageerror', (e) => page.errors.push(String(e)));
   // Public brokers are unreachable in offline test runs; that console noise is expected.
   page.on(
     'console',
-    (m) => m.type() === 'error' && !/WebSocket connection to/.test(m.text()) && page.errors.push(
-      m.text(),
-    ),
+    (m) => m.type() === 'error' && !isExpectedNoise(m.text()) && page.errors.push(m.text()),
   );
   return page;
 };
@@ -144,6 +180,7 @@ await check('UI: create room, send message, persists after reload', async () => 
 // ------------------------------------------------------
 await check('UI: pair two browsers with codes, chat both ways, share a file', async () => {
   const [a, b] = [await newPage(), await newPage()];
+  await b.addInitScript(toneMicrophone); // Bob "speaks" all the time
   await Promise.all([a, b].map((p) => p.goto(`${base}/index.html`)));
   await a.getByRole('button', { name: 'New room' }).click();
   await a.getByRole('button', { name: 'Create room' }).click();
@@ -257,14 +294,14 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
   await a.locator('.quote', { hasText: 'hi Bob 你好' }).waitFor();
   await a.locator('body').click({ position: { x: 1, y: 1 } }); // leave the message box
   await a.keyboard.down('v');
-  await a.locator('.conninfo', { hasText: /anon-\w+ · / }).waitFor();
+  await a.locator('.conninfo', { hasText: /anon-[\w-]+ · / }).waitFor();
   await a.keyboard.up('v');
   await a.locator('.conninfo').waitFor({ state: 'hidden' });
   a.once('dialog', (dialog) => dialog.accept());
   const mine = a.locator('.msg.own', { hasText: 'hi Bob 你好' });
   await mine.hover();
   await mine.getByRole('button', { name: 'Delete' }).click();
-  await b.locator('.msg.gone', { hasText: /anon-\w+ deleted a message/ }).waitFor();
+  await b.locator('.msg.gone', { hasText: /anon-[\w-]+ deleted a message/ }).waitFor();
   await b.locator('.quote.gone', { hasText: 'Deleted message' }).waitFor();
 
   // The creator owns the room: the member list says so, and offers owner actions.
@@ -313,12 +350,23 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
   await a.keyboard.press('Escape');
 
   const call = a.locator('section.call');
+  if (needsMediaProbe(NAME) && !(await hasFakeMedia(a))) {
+    console.log(`     note: no fake microphone in ${NAME}: the call part of this check is skipped`);
+    assert.deepEqual([...a.errors, ...b.errors], []);
+    await Promise.all([a, b].map((p) => p.context().close()));
+    return;
+  }
   await a.getByRole('button', { name: 'Start an audio call' }).click();
   await a.locator('.call .tile').waitFor();
   await b.locator('.call-banner button').click(); // Bob joins: both are shown, camera or not
   await a.locator('.call .tile').nth(1).waitFor();
-  // The fake microphones beep: Bob's tile gets the speaking outline on Ada's screen.
-  await a.locator('.call .tile:not(.self).speaking').waitFor({ timeout: 15000 });
+  // Bob's microphone is a tone: his tile gets the speaking outline on Ada's screen.
+  const heard = await a.locator('.call .tile:not(.self).speaking')
+    .waitFor({ timeout: STRICT ? 15000 : 8000 }).then(() => true, (err) => {
+      if (STRICT) throw err;
+      return false;
+    });
+  if (!heard) console.log(`     note: no speaking outline seen in ${NAME}`);
   const fits = () => a.locator('.call-grid').evaluate((grid) => {
     const g = grid.getBoundingClientRect();
     return grid.scrollHeight <= grid.clientHeight + 1 && [...grid.children].every((tile) => {
@@ -411,12 +459,19 @@ async function pairedRooms() {
 
 await check('audio/video call: media flows both ways, mute and camera, leave', async () => {
   const [a, b] = await pairedRooms();
+  if (needsMediaProbe(NAME) && !(await hasFakeMedia(a))) {
+    await Promise.all([a, b].map((p) => p.context().close()));
+    skip(`${NAME} offers no fake camera and microphone here`);
+  }
   const joined = await Promise.all(
     [a, b].map((p) => p.evaluate(() => window.room.call.join({ video: true }))),
   );
   assert.deepEqual(joined, [{ audio: true, video: true }, { audio: true, video: true }]);
   // Play the other side's stream in a <video>: decoded frames prove media really arrives.
   const framesDecoded = (p) => p.evaluate(async () => {
+    // Decoded frames; a browser without that counter is timed by its playback position.
+    window.framesOf ??= (v) => (v.getVideoPlaybackQuality
+      ? v.getVideoPlaybackQuality().totalVideoFrames : Math.round(v.currentTime * 30));
     if (!window.probe) {
       const [{ stream }] = window.room.call.participants;
       window.probe = Object.assign(document.createElement('video'), { muted: true });
@@ -424,7 +479,7 @@ await check('audio/video call: media flows both ways, mute and camera, leave', a
       document.body.append(window.probe);
       await window.probe.play();
     }
-    return window.probe.getVideoPlaybackQuality().totalVideoFrames;
+    return window.framesOf(window.probe);
   });
   for (const p of [a, b]) {
     await p.waitForFunction(
@@ -432,7 +487,7 @@ await check('audio/video call: media flows both ways, mute and camera, leave', a
     );
     const first = await framesDecoded(p);
     await p.waitForFunction(
-      (n) => window.probe.getVideoPlaybackQuality().totalVideoFrames > n + 5, first,
+      (n) => window.framesOf(window.probe) > n + 5, first,
       { timeout: 15000 },
     );
     assert.equal(
@@ -448,7 +503,7 @@ await check('audio/video call: media flows both ways, mute and camera, leave', a
   await b.waitForFunction(() => [...window.room.call.members.values()][0].v === true);
   const before = await framesDecoded(b);
   await b.waitForFunction(
-    (n) => window.probe.getVideoPlaybackQuality().totalVideoFrames > n + 5, before,
+    (n) => window.framesOf(window.probe) > n + 5, before,
     { timeout: 15000 },
   );
   await a.evaluate(() => window.room.call.leave());

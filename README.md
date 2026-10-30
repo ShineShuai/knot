@@ -9,10 +9,13 @@ signaling brokers are blocked (manual QR / text pairing).
 
     node tools/serve.mjs 8080        # then open http://localhost:8080
     npm test                         # unit tests (Node 22+)
-    PLAYWRIGHT_MODULE=/path/to/node_modules/playwright npm run test:e2e   # Chromium, fake camera + mic
-    npx playwright install firefox webkit        # once; WebKit is Safari's engine
-    PLAYWRIGHT_MODULE=... npm run test:e2e:all   # every installed browser, one after the other
-    PLAYWRIGHT_MODULE=... npm run test:e2e:webkit   # or :firefox; or E2E_BROWSER=... test:e2e
+    npm install --no-save playwright && npx playwright install   # once, for the browser tests
+    npm run test:e2e                 # Chromium, with a fake camera and microphone
+    npm run test:e2e:all             # Chromium, Firefox and WebKit (Safari's engine), as installed
+    npm run test:e2e:webkit          # one browser; or :firefox, or E2E_BROWSER=... npm run test:e2e
+
+Playwright is found in this project, the global npm folder or the cache of `npx`;
+`PLAYWRIGHT_MODULE=/full/path/to/playwright` overrides that (a real path, not a placeholder).
 
 CI (`.github/workflows/ci.yml`): unit tests and the browser tests run on every push and pull
 request, in Chromium, Firefox and WebKit. Only Chromium blocks a deploy for now (`continue-on-error`
@@ -318,7 +321,10 @@ if no broker is reachable; with brokers, reconnection is automatic).
 * Files: whole file in memory (default cap 100 MB), no resume.
 * One tab per room should be open; multi-tab coordination is not implemented.
 * Verified: unit tests, real WebRTC in headless Chromium. The Firefox and WebKit runs are wired
-  (`test/e2e/browsers.mjs`, CI matrix) but were never executed by their author: no such browser
-  was available. Not verified: real
+  (`test/e2e/browsers.mjs`, CI matrix); the first CI run found Firefox (synthetic paste and
+  drop events, the frame counter) and WebKit on Linux (no STUN, so two pages on one machine
+  cannot find each other; two CSP violations of unknown origin, now logged with their details;
+  one Ed25519 key-generation failure, now retried and reported with its cause) failing, all
+  fixed or instrumented since and not yet re-run. Not verified: real
   public brokers, Firefox/Safari (reported: image previews and message deletion fail in Safari;
   use Settings > Diagnostics there), phones, mainland China networks.

@@ -5,15 +5,15 @@
 // are reported as skipped, never silently passed.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { createRequire } from 'node:module';
 import { startServer } from '../../tools/serve.mjs';
 import {
-  browserName, contextOptions, isExpectedNoise, launchOptions, needsMediaProbe,
+  browserName, contextOptions, isExpectedNoise, launchOptions, needsMediaProbe, needsStun,
 } from './browsers.mjs';
+import { loadPlaywright } from './playwright.mjs';
 
 const NAME = browserName();
 const STRICT = NAME === 'chromium'; // its fake devices are switched on by flags: no excuses
-const playwright = createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE ?? 'playwright');
+const playwright = loadPlaywright();
 const server = await startServer(0);
 const base = `http://127.0.0.1:${server.address().port}`;
 let browser;
@@ -68,6 +68,15 @@ const hasFakeMedia = (page) => page.evaluate(
 const newPage = async () => {
   const context = await browser.newContext(contextOptions(NAME));
   const page = await context.newPage();
+  // Both settings are read by the pages' own scripts: whether to use STUN, and what a blocked
+  // resource was (the browsers' own CSP messages do not say).
+  await page.addInitScript((stun) => {
+    window.useStun = stun;
+    document.addEventListener('securitypolicyviolation', (e) => console.error(
+      `CSP: ${e.violatedDirective} blocked ${e.blockedURI || '(inline)'} `
+      + `at ${e.sourceFile}:${e.lineNumber} ${(e.sample || '').slice(0, 80)}`,
+    ));
+  }, needsStun(NAME));
   page.errors = [];
   page.on('pageerror', (e) => page.errors.push(String(e)));
   // Public brokers are unreachable in offline test runs; that console noise is expected.
@@ -84,7 +93,7 @@ await check('manual pairing, chat and file transfer over real WebRTC', async () 
   await Promise.all([a, b].map((p) => p.goto(`${base}/test/e2e/blank.html`)));
   const boot = ({ name, secretB64 }) => async ({ name, secretB64 }) => {
     const { Room } = await import('/src/chat/room.js');
-    const { DEFAULTS } = await import('/src/config.js');
+    const { DEFAULTS, iceServersFrom } = await import('/src/config.js');
     const { MemoryKV } = await import('/src/store/kv.js');
     const { loadIdentity } = await import('/src/crypto/identity.js');
     const { newRoomSecret } = await import('/src/crypto/room-keys.js');
@@ -98,8 +107,8 @@ await check('manual pairing, chat and file transfer over real WebRTC', async () 
         ...DEFAULTS,
         name,
         brokersEnabled: false,
-        gatherTimeoutMs: 1500,
-      }, iceServers: () => [],
+        gatherTimeoutMs: window.useStun ? 4000 : 1500,
+      }, iceServers: () => (window.useStun ? iceServersFrom(DEFAULTS) : []),
     });
   };
   await a.evaluate(boot({}), { name: 'Ada' });
@@ -256,12 +265,13 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
   assert.match(await b.locator('.imgcard .imgact button').textContent(), /Original/);
 
   // Paste a clipboard file into the composer, then drop two files on the chat.
+  // (A plain Event with the data attached: Firefox and WebKit ignore it in the constructors.)
   await a.evaluate(() => {
     const data = new DataTransfer();
     data.items.add(new File(['pasted'], 'pasted.txt', { type: 'text/plain' }));
-    document.querySelector('.composer textarea').dispatchEvent(
-      new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }),
-    );
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', { value: data });
+    document.querySelector('.composer textarea').dispatchEvent(event);
   });
   await a.locator('.chip', { hasText: 'pasted.txt' }).waitFor(); // staged in the message box
   assert.equal(await b.locator('.file', { hasText: 'pasted.txt' }).count(), 0);
@@ -270,9 +280,9 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
   await a.evaluate(() => {
     const data = new DataTransfer();
     for (const name of ['drop1.txt', 'drop2.txt']) data.items.add(new File([name], name));
-    document.querySelector('.stage').dispatchEvent(
-      new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true }),
-    );
+    const event = new Event('drop', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'dataTransfer', { value: data });
+    document.querySelector('.stage').dispatchEvent(event);
   });
   await a.locator('.chip').nth(1).waitFor();
   await a.locator('.chip', { hasText: 'drop1.txt' }).getByRole('button').click(); // remove one
@@ -423,16 +433,19 @@ async function pairedRooms() {
   await Promise.all([a, b].map((p) => p.goto(`${base}/test/e2e/blank.html`)));
   const open = async ({ name, secretB64 }) => {
     const { Room } = await import('/src/chat/room.js');
-    const { DEFAULTS } = await import('/src/config.js');
+    const { DEFAULTS, iceServersFrom } = await import('/src/config.js');
     const { MemoryKV } = await import('/src/store/kv.js');
     const { loadIdentity } = await import('/src/crypto/identity.js');
     const { newRoomSecret } = await import('/src/crypto/room-keys.js');
     const { fromB64u } = await import('/src/util/bytes.js');
     const kv = new MemoryKV();
+    const stun = window.useStun; // WebKit needs STUN to find the other page
+    const iceServers = () => (stun ? iceServersFrom(DEFAULTS) : []);
+    const gatherTimeoutMs = stun ? 4000 : 1500;
     window.room = await Room.open({
-      identity: await loadIdentity(kv), label: name, kv, iceServers: () => [],
+      identity: await loadIdentity(kv), label: name, kv, iceServers,
       secret: secretB64 ? fromB64u(secretB64) : newRoomSecret(),
-      settings: { ...DEFAULTS, name, brokersEnabled: false, gatherTimeoutMs: 1500 },
+      settings: { ...DEFAULTS, name, brokersEnabled: false, gatherTimeoutMs },
     });
   };
   await a.evaluate(open, { name: 'Ada' });
@@ -469,14 +482,18 @@ await check('audio/video call: media flows both ways, mute and camera, leave', a
   assert.deepEqual(joined, [{ audio: true, video: true }, { audio: true, video: true }]);
   // Play the other side's stream in a <video>: decoded frames prove media really arrives.
   const framesDecoded = (p) => p.evaluate(async () => {
-    // Decoded frames; a browser without that counter is timed by its playback position.
-    window.framesOf ??= (v) => (v.getVideoPlaybackQuality
-      ? v.getVideoPlaybackQuality().totalVideoFrames : Math.round(v.currentTime * 30));
+    // Frames shown so far: counted with requestVideoFrameCallback (Chromium, Firefox and
+    // WebKit all have it; their own decoded-frame counters differ for streams).
+    window.framesOf ??= (v) => (v.requestVideoFrameCallback ? window.frames
+      : v.getVideoPlaybackQuality().totalVideoFrames);
     if (!window.probe) {
       const [{ stream }] = window.room.call.participants;
       window.probe = Object.assign(document.createElement('video'), { muted: true });
       window.probe.srcObject = stream;
       document.body.append(window.probe);
+      window.frames = 0;
+      const count = () => { window.frames++; window.probe.requestVideoFrameCallback(count); };
+      window.probe.requestVideoFrameCallback?.(count);
       await window.probe.play();
     }
     return window.framesOf(window.probe);

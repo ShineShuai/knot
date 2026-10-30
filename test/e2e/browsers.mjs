@@ -52,6 +52,11 @@ export function contextOptions(name) {
  *  the sandbox (each browser words that its own way), and nobody serves a favicon. */
 export const isExpectedNoise = (text) => /WebSocket|wss?:\/\/|favicon/i.test(text);
 
+/** WebKit shows other pages only a made-up `.local` name instead of the machine's address, and
+ *  two pages on one machine cannot look those names up: they need STUN (a real network) to
+ *  find each other, like two people on different networks would. */
+export const needsStun = (name) => name === 'webkit';
+
 /** Is this a browser that cannot be asked for its fake camera and microphone up front? Its
  *  call checks then run only if the browser turns out to offer capture devices. */
 export const needsMediaProbe = (name) => name !== 'chromium';

@@ -4,8 +4,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  BROWSERS, browserName, contextOptions, isExpectedNoise, launchOptions, needsMediaProbe,
+  BROWSERS, browserName, contextOptions, isExpectedNoise, launchOptions, needsMediaProbe, needsStun,
 } from './e2e/browsers.mjs';
+import { candidates, loadPlaywright } from './e2e/playwright.mjs';
 
 test('the browser comes from E2E_BROWSER, Chromium by default, and a typo is an error', () => {
   assert.equal(browserName({}), 'chromium');
@@ -54,4 +55,33 @@ test('CI runs the browser tests in every browser the runner knows, and sets E2E_
   assert.match(ci, /E2E_BROWSER:\s*\$\{\{\s*matrix\.browser\s*\}\}/);
   assert.match(ci, /playwright install --with-deps \$\{\{\s*matrix\.browser\s*\}\}/);
   assert.match(ci, /continue-on-error:\s*\$\{\{\s*matrix\.browser != 'chromium'\s*\}\}/);
+});
+
+test('only WebKit needs STUN for two pages of one machine to find each other', () => {
+  assert.deepEqual(BROWSERS.filter((name) => needsStun(name)), ['webkit']);
+});
+
+test('Playwright is looked for in the usual places; a missing one gets a helpful error', () => {
+  const where = {
+    root: () => '/global/lib', home: '/home/x', exists: () => true, list: () => ['aaa', 'bbb'],
+  };
+  const npx = (dir) => `/home/x/.npm/_npx/${dir}/node_modules/playwright`;
+  assert.deepEqual(candidates({ env: {}, ...where }), [
+    'playwright', '/global/lib/playwright', npx('aaa'), npx('bbb'),
+  ]);
+  assert.equal(candidates({ env: { PLAYWRIGHT_MODULE: '/mine' }, ...where })[0], '/mine');
+  assert.ok(!candidates({ env: {}, ...where, root: () => { throw new Error('no npm'); } })
+    .some((c) => c.startsWith('/global')));
+
+  const fake = { chromium: {} };
+  const load = (spec) => {
+    if (spec === '/global/lib/playwright') return fake;
+    throw new Error('not found');
+  };
+  assert.equal(loadPlaywright({ env: { PLAYWRIGHT_MODULE: '…' }, load, ...where }), fake);
+  const none = () => { throw new Error('x'); };
+  assert.throws(
+    () => loadPlaywright({ env: { PLAYWRIGHT_MODULE: '…' }, load: none, ...where }),
+    /PLAYWRIGHT_MODULE=… is not a Playwright folder[\s\S]*npm install --no-save playwright/,
+  );
 });

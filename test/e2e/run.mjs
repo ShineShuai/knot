@@ -317,6 +317,8 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
   await a.locator('.call .tile').waitFor();
   await b.locator('.call-banner button').click(); // Bob joins: both are shown, camera or not
   await a.locator('.call .tile').nth(1).waitFor();
+  // The fake microphones beep: Bob's tile gets the speaking outline on Ada's screen.
+  await a.locator('.call .tile:not(.self).speaking').waitFor({ timeout: 15000 });
   const fits = () => a.locator('.call-grid').evaluate((grid) => {
     const g = grid.getBoundingClientRect();
     return grid.scrollHeight <= grid.clientHeight + 1 && [...grid.children].every((tile) => {

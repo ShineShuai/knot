@@ -222,3 +222,4 @@ button.icon { padding: .35rem .55rem; line-height: 1; }
 .broker-health .up { color: var(--link); }
 .broker-health .down { color: var(--danger); }
 .storage { margin: 0 0 .4rem; }
+.tile.speaking { outline: 3px solid #58c4ad; outline-offset: -3px; }

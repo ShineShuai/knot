@@ -4,6 +4,7 @@
 // text and files work as always) and "minimize" (a bar under the conversation, audio goes on).
 // It only renders `room.call` and forwards clicks.
 import { h } from './dom.js';
+import { SpeakingMeter } from '../call/speaking.js';
 import { t } from './i18n.js';
 
 const SELF = 'self';
@@ -13,11 +14,13 @@ export class CallPanel {
   #room = null; #offs = []; #tiles = new Map(); #notify;
   #mode = 'full';  // 'full' | 'chat' | 'mini'
   #before = 'full'; // what a minimized window goes back to
-  #openChat; #onMode;
+  #openChat; #onMode; #meter;
 
   /** `openChat(room)`: show that room's conversation; `onMode(mode)`: the layout changed. */
-  constructor({ notify, openChat = () => {}, onMode = () => {} }) {
+  constructor({ notify, openChat = () => {}, onMode = () => {}, speaking = {} }) {
     this.#notify = notify;
+    this.#meter = new SpeakingMeter(speaking);
+    this.#meter.on('change', () => this.#room && this.#draw()); // the highlight and the roster
     this.#openChat = openChat;
     this.#onMode = onMode;
     this.title = h('span', { class: 'call-title' });
@@ -81,6 +84,7 @@ export class CallPanel {
   #hide() {
     for (const off of this.#offs) off();
     this.#offs = [];
+    this.#meter.stop();
     this.#room = null;
     this.#tiles.clear();
     this.grid.replaceChildren();
@@ -159,6 +163,7 @@ export class CallPanel {
       },
       ...call.participants.map((p) => ({ ...p, name: this.#room.nameOf(p.id) })),
     ];
+    this.#listen(people);
     const gone = new Set(this.#tiles.keys());
     for (const person of people) {
       gone.delete(person.id);
@@ -173,10 +178,22 @@ export class CallPanel {
     // out by head count, and the minimized bar names them.
     this.grid.dataset.count = String(people.length);
     const roster = people.map(
-      (p) => `${p.name}${p.a ? '' : ' 🔇'}${p.state === 'connected' ? '' : ' …'}`,
+      (p) => `${p.name}${p.a ? '' : ' 🔇'}${p.state === 'connected' ? '' : ' …'}${
+        this.#meter.isSpeaking(p.id) ? ' 🔊' : ''}`,
     ).join(', ');
     this.roster.textContent = roster;
     this.roster.title = roster;
+  }
+
+  /** Listen to everyone's audio (ours from the microphone) to highlight who is speaking. */
+  #listen(people) {
+    const streams = new Map(people.map(
+      (p) => [p.id, p.id === SELF ? this.#room.call.micStream : p.stream],
+    ));
+    for (const [id, stream] of streams) {
+      if (stream) this.#meter.watch(id, stream); else this.#meter.unwatch(id);
+    }
+    for (const id of this.#meter.ids()) if (!streams.has(id)) this.#meter.unwatch(id);
   }
 
   #button(el, glyph, label, on) {
@@ -206,6 +223,7 @@ export class CallPanel {
     }
     tile.el.classList.toggle('novideo', !(v && stream));
     tile.el.classList.toggle('sharing', !!s);
+    tile.el.classList.toggle('speaking', this.#meter.isSpeaking(id));
     tile.avatar.textContent = initial(name);
     tile.label.textContent = name;
     const quiet = state !== 'connected' ? t('callConnecting') : a ? '' : '🔇';

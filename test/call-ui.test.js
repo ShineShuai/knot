@@ -10,13 +10,13 @@ import { MemoryKV } from '../src/store/kv.js';
 import { mountUi } from '../src/ui/view.js';
 import { newIdentity } from './helpers.js';
 import { FakeLink, until } from './fakes.js';
-import { callParty } from './call-fakes.js';
+import { FakeAudio, callParty } from './call-fakes.js';
 
 const { root: rootA } = installFakeDom();
 const rooms = [];
 test.afterEach(() => { rooms.splice(0).forEach((r) => r.stop()); });
 
-async function person(name, { calls = true, share } = {}) {
+async function person(name, { calls = true, share, speaking } = {}) {
   const settings = {
     ...DEFAULTS, name, brokersEnabled: false, brokers: [], gatherTimeoutMs: 10,
     connectTimeoutMs: 2000, callRetryMs: 20,
@@ -26,7 +26,7 @@ async function person(name, { calls = true, share } = {}) {
     linkFactory: () => new FakeLink(), callEnv: calls ? callParty({ share }).env : undefined,
   });
   const root = new rootA.constructor('div');
-  return { model, root, ui: mountUi(root, model) };
+  return { model, root, ui: mountUi(root, model, { speaking }) };
 }
 const byLabel = (root, label) => root.querySelector(`[aria-label="${label}"]`);
 
@@ -264,4 +264,38 @@ test('ui: everyone in the call is shown, camera or not, also in the minimized ba
   assert.match(a.root.querySelector('.call-roster').textContent, /^You.*Bob/);
   byLabel(b.root, 'Mute microphone').click();
   await until(() => /Bob 🔇/.test(a.root.querySelector('.call-roster').textContent));
+});
+
+test('ui: the person who is speaking is highlighted, and marked in the minimized bar', async () => {
+  FakeAudio.loud.clear();
+  let ms = 0;
+  const ticks = [];
+  const speaking = { Context: FakeAudio, now: () => ms, every: (fn) => (ticks.push(fn), () => {}) };
+  const a = await person('Ada', { speaking });
+  const room = await a.model.addRoom(newRoomSecret(), 'Club');
+  rooms.push(room);
+  a.ui.select(room);
+  byLabel(a.root, 'Start an audio call').click();
+  await until(() => room.call.joined);
+  const me = () => a.root.querySelector('.self');
+  const tick = (at) => { ms = at; ticks.forEach((fn) => fn()); };
+
+  tick(100);
+  assert.equal(me().classList.contains('speaking'), false);
+  FakeAudio.loud.add(room.call.micStream); // Ada talks
+  tick(1000);
+  assert.equal(me().classList.contains('speaking'), true);
+  byLabel(a.root, 'Minimize').click();
+  assert.match(a.root.querySelector('.call-roster').textContent, /You 🔊/);
+
+  FakeAudio.loud.delete(room.call.micStream);
+  tick(1200);
+  assert.equal(me().classList.contains('speaking'), true, 'held for a moment');
+  tick(1600);
+  assert.equal(me().classList.contains('speaking'), false);
+  assert.doesNotMatch(a.root.querySelector('.call-roster').textContent, /🔊/);
+
+  const ctx = FakeAudio.last;
+  find(a.root, 'button', 'Leave call')[0].click();
+  assert.equal(ctx.closed, true, 'the audio context goes with the call');
 });

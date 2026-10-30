@@ -57,6 +57,7 @@ export class Room extends Emitter {
   #epoch = { n: 0, secret: null }; // key rotations: the channel keys depend on it
   #fileHub; #marks; #desk; #pairing; // what the room delegates, see the constructor
   #unlinked = new Set();     // "<member id>|<device key>" of every withdrawn certificate
+  #multi = new Set();        // members seen with a certificate: they use more than one device
 
   static async open(opts) {
     const keys = await deriveRoomKeys(opts.secret);
@@ -86,6 +87,7 @@ export class Room extends Emitter {
     // A linked device writes as the main identity: its counters start high, so their ids
     // cannot collide with the main device's.
     this.hlc = new HLC(Date.now, identity.cert ? LINKED_COUNTER_BASE : 0);
+    if (identity.cert) this.#multi.add(identity.member);
     this.log = new MessageLog(settings.logCap);
     this.previews = new PreviewCache(kv, this.id, settings.previewCacheBytes);
     this.files = new FileTransfer(
@@ -151,14 +153,17 @@ export class Room extends Emitter {
       this.members.get(id) ?? { seen: 0 },
     );
     const owner = (id) => id === this.roster?.owner;
-    const rows = [...this.peers.values()].map(({ id, name, state, via, sas, member }) => ({
+    const rows = [...this.peers.values()].map(({
+      id, name, state, via, sas, member, device,
+    }) => ({
       id, name, via, sas, member: member ?? id, owner: owner(member ?? id),
+      device: this.deviceOf(member ?? id, device),
       state: state === 'p2p' || !viaRelay(id) ? state : 'relay',
     }));
     for (const [id, m] of this.members) {
       if (!this.peers.has(id) && this.#isFresh(m)) rows.push({
         id, name: m.name, state: viaRelay(id) ? 'relay' : 'seen', via: 'broker', sas: null,
-        member: id, owner: owner(id),
+        member: id, owner: owner(id), device: this.deviceOf(id),
       });
     }
     return rows;
@@ -166,7 +171,7 @@ export class Room extends Emitter {
 
   async #load() {
     const stored = await this.#store.loadAll();
-    for (const env of stored) { this.log.add(env); this.hlc.observe(env); }
+    for (const env of stored) { this.log.add(env); this.hlc.observe(env); this.#noteDevice(env); }
     const trimmed = this.log.trim();
     const deleted = stored.filter((e) => !this.log.get(e.id) && !trimmed.includes(e));
     await this.#store.remove([...trimmed, ...deleted]); // deleted messages leave no content
@@ -190,6 +195,22 @@ export class Room extends Emitter {
   /** Is this author id us: this device, or the main identity we write as (or one of its
    *  other devices, which write as the same identity)? */
   isMine(authorId) { return authorId === this.identity.member; }
+
+  /** Which device of `authorId` is meant, for a name tag like "Ada · phone": null while only
+   *  one device of that member is known; else `device` (the name in its certificate), or ''
+   *  for the main device, which has no certificate. */
+  deviceOf(authorId, device = null) {
+    return this.#multi.has(authorId) ? (device ?? '') : null;
+  }
+
+  /** The same for a live connection by its device id (this device included). */
+  peerDevice(id) {
+    if (id === this.identity.id) return this.deviceOf(this.identity.member, this.identity.cert?.n);
+    const entry = this.peers.get(id);
+    return this.deviceOf(entry?.member ?? id, entry?.device);
+  }
+
+  #noteDevice(env) { if (env.cert) this.#multi.add(authorIdOf(env)); }
 
 
 
@@ -468,6 +489,8 @@ export class Room extends Emitter {
       return;
     }
     entry.member = member;
+    entry.device = cert.n;
+    this.#multi.add(member);
     if (this.roster && !entry.synced && this.roster.isMember(member)) this.#markSynced(entry);
     this.#emitPeers();
   }
@@ -520,6 +543,7 @@ export class Room extends Emitter {
     const doomed = env.kind === 'del' ? this.log.get(env.body.id) : null;
     const orphans = env.kind === 'del' ? this.#decorations(env.body.id) : [];
     if (!this.log.add(env)) return false;
+    this.#noteDevice(env);
     this.log.drop([...stale, ...orphans]);
     this.hlc.observe(env);
     const removed = this.log.trim();

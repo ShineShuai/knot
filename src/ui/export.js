@@ -1,8 +1,9 @@
 // Save a room's history: readable text, or the signed envelopes as they are (so anyone can
 // check them). Only what this device holds; shared files themselves are not included.
-import { ADMIN_KINDS } from '../chat/envelope.js';
+import { ADMIN_KINDS, authorIdOf } from '../chat/envelope.js';
 import { noticeLine } from '../chat/notice.js';
 import { VERSION } from '../version.js';
+import { withDevice } from './alias.js';
 import { fmtSize } from './dom.js';
 import { t } from './i18n.js';
 
@@ -24,7 +25,7 @@ export function exportText(room, now = Date.now()) {
   for (const env of room.log.timeline()) {
     const at = `[${stamp(env.ms)}]`;
     if (env.kind === 'gone') {
-      lines.push(`${at} * ${env.by === room.identity.id
+      lines.push(`${at} * ${room.isMine(env.by)
         ? t('youDeleted') : t('deletedBy', { name: env.name })}`);
       continue;
     }
@@ -32,7 +33,8 @@ export function exportText(room, now = Date.now()) {
       lines.push(`${at} * ${noticeLine(room, env, t)}`);
       continue;
     }
-    const who = room.log.isEdited(env) ? `${env.name} (${t('edited')})` : env.name;
+    const name = withDevice(env.name, room.deviceOf(authorIdOf(env), env.cert?.n));
+    const who = room.log.isEdited(env) ? `${name} (${t('edited')})` : name;
     if (env.kind === 'file') {
       lines.push(`${at} ${who}: [${t('exportFile')}] ${env.body.name} (${fmtSize(env.body.size)})`);
     } else {

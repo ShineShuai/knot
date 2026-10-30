@@ -92,6 +92,7 @@ if no broker is reachable; with brokers, reconnection is automatic).
       ui/view.js           the page: room list, the open room, unread, updates
       ui/composer.js       the message box: text, replies, edits, staged files, drop, paste
       ui/messages.js       one message: links, reactions with their palette, files, notices
+      ui/alias.js          a name with its device tag: "Ada · phone"
       ui/image-cards.js    the image cards of the open room, the lightbox
       ui/dialog-kit.js     the dialog frame, copy field, QR, code box with scanner
       ui/room-dialogs.js   new, rename, recovery code, invite, members, export, leave
@@ -292,7 +293,12 @@ if no broker is reachable; with brokers, reconnection is automatic).
   the device itself notices and goes back to its own identity. Limits: a stolen linked device
   can read and write as you until its unlink has reached the others, and unlinking does not
   change room keys (an owner removing a member does, see above); a linked device cannot create
-  rooms or own them; each device keeps its own unread marks and call connections.
+  rooms or own them; each device keeps its own unread marks and call connections. Every device
+  of one identity shows that identity's messages as its own ("You", edit, delete). Once a
+  certificate of someone has been seen (in a message or on a link), their name carries a device
+  tag in messages, the connection bar, calls and exports: "Ada · phone" (the name in the
+  certificate, signed by the main key) or "Ada · main" (no certificate). Someone with one
+  device has no tag.
 * **Delete and quote:** a `del` envelope (signed by the author, naming one of the
   author's own message ids) makes every peer drop that message's content from memory
   and storage and show "<name> deleted a message" in its place; a copy that arrives

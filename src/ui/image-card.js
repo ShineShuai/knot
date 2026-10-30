@@ -70,7 +70,7 @@ export class ImageCard extends Emitter {
     this.#paintNote();
   }
 
-  get #own() { return authorIdOf(this.#env) === this.#room.identity.id; }
+  get #own() { return this.#room.isMine(authorIdOf(this.#env)); }
   get #ref() { return previewRef(this.#env.body); }
 
   /** Best image we have right now. */

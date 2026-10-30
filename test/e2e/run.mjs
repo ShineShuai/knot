@@ -38,6 +38,10 @@ try {
     console.log(`skip ${NAME}: not installed (npx playwright install ${NAME})`);
     process.exit(0);
   }
+  if (process.env.E2E_SKIP_MISSING && /profile folder/.test(String(err))) {
+    console.log(`skip ${NAME}: does not start on this machine (see above); CI runs it`);
+    process.exit(0);
+  }
   throw err;
 }
 console.log(`browser: ${NAME} ${browser.version()}`);

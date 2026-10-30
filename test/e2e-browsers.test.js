@@ -86,16 +86,17 @@ test('Playwright is looked for in the usual places; a missing one gets a helpful
   );
 });
 
-test('WebKit alone gets to ignore the CSP lines of its own media interface', () => {
+test('WebKit alone ignores the CSP lines of its own Web Inspector, never one of ours', () => {
   const plain = "Refused to apply a stylesheet because its hash, its nonce, or 'unsafe-inline'";
-  const where = 'CSP: style-src-attr blocked inline at http://127.0.0.1:1/src/ui/dom.js:6';
-  const video = `${where} after createElement(video) `;
-  const other = `${where} after createElement(img) `;
+  const inspector = 'CSP: style-src-attr blocked inline at web-inspector://bootstrap.js:48 '
+    + 'after createElement(header) ';
+  const ours = 'CSP: style-src-attr blocked inline at http://127.0.0.1:1/src/ui/dom.js:6 '
+    + 'after createElement(img) ';
   assert.equal(isExpectedNoise(plain, 'webkit'), true);
-  assert.equal(isExpectedNoise(video, 'webkit'), true);
-  assert.equal(isExpectedNoise(other, 'webkit'), false, 'a violation of ours must still fail');
+  assert.equal(isExpectedNoise(inspector, 'webkit'), true);
+  assert.equal(isExpectedNoise(ours, 'webkit'), false, 'a violation of ours must still fail');
   for (const name of ['chromium', 'firefox']) {
     assert.equal(isExpectedNoise(plain, name), false);
-    assert.equal(isExpectedNoise(video, name), false);
+    assert.equal(isExpectedNoise(inspector, name), false);
   }
 });

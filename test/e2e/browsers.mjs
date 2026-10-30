@@ -48,20 +48,21 @@ export function contextOptions(name) {
   };
 }
 
-/** WebKit applies the page's CSP to the style of its own media-element interface (a `<video>`
- *  or `<audio>` is enough), and says so in the console. Nothing of ours is blocked: the
- *  detailed message names the element that was being created, the plain one cannot. */
-const WEBKIT_MEDIA_CSP = [
+/** Console lines that are not ours. WebKit's Web Inspector (which Playwright's WebKit has) sets
+ *  inline styles from its own script, and WebKit reports them against the page's CSP: the
+ *  detailed line names that script (`web-inspector://...`), the plain one cannot name anything.
+ *  A violation by one of our files names the file, and still fails the test. */
+const WEBKIT_INSPECTOR_CSP = [
   /^Refused to apply a stylesheet because its hash, its nonce, or 'unsafe-inline'/,
-  /^CSP: style-src(-attr)? blocked inline .* after createElement\((video|audio)\)/,
+  /^CSP: \S+ blocked \S+ at web-inspector:\/\//,
 ];
 
 /** Console errors that are expected in a test run: the public brokers cannot be reached from
  *  the sandbox (each browser words that its own way), nobody serves a favicon, and WebKit's
- *  media interface (see above). */
+ *  Web Inspector (see above). */
 export const isExpectedNoise = (text, name = 'chromium') => (
   /WebSocket|wss?:\/\/|favicon/i.test(text)
-  || (name === 'webkit' && WEBKIT_MEDIA_CSP.some((re) => re.test(text)))
+  || (name === 'webkit' && WEBKIT_INSPECTOR_CSP.some((re) => re.test(text)))
 );
 
 /** WebKit shows other pages only a made-up `.local` name instead of the machine's address, and

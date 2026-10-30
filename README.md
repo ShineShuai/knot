@@ -302,7 +302,10 @@ if no broker is reachable; with brokers, reconnection is automatic).
 * **Glare:** the peer with the smaller id always makes the offer.
 * **Hardening:** CSP without inline code, all text via `textContent`, rate
   limit per link, size/shape validation of every envelope, replay protection for
-  pairing codes (10 min TTL, single use), `wss://` only for brokers.
+  pairing codes (10 min TTL, single use), `wss://` only for brokers. The CSP forbids inline
+  styles, and Safari (WebKit) applies that to styles set from script too, so nothing is sized
+  with `style`: an image card gets its size from the `width` and `height` attributes of its
+  image (set that way, a blocked style left the card with no size in Safari).
 * **China:** no Google/Firebase/CDN dependency, STUN servers reachable from the
   mainland first, runtime ranking of STUN servers, TURN over TLS 443 supported
   through Settings (host it outside the mainland; operating infrastructure
@@ -323,8 +326,10 @@ if no broker is reachable; with brokers, reconnection is automatic).
 * Verified: unit tests, real WebRTC in headless Chromium. The Firefox and WebKit runs are wired
   (`test/e2e/browsers.mjs`, CI matrix); the first CI run found Firefox (synthetic paste and
   drop events, the frame counter) and WebKit on Linux (no STUN, so two pages on one machine
-  cannot find each other; two CSP violations of unknown origin, now logged with their details;
-  one Ed25519 key-generation failure, now retried and reported with its cause) failing, all
-  fixed or instrumented since and not yet re-run. Not verified: real
-  public brokers, Firefox/Safari (reported: image previews and message deletion fail in Safari;
-  use Settings > Diagnostics there), phones, mainland China networks.
+  cannot find each other; CSP violations from the image card's inline styles; one Ed25519
+  key-generation failure, now retried and reported with its cause) failing. WebKit on macOS
+  (Playwright's build) still fails to connect two pages (the ICE log of a failed check is now
+  printed to find out why); Firefox on macOS did not start with Node 26. Not verified: real
+  public brokers, real Safari (reported: image previews and message deletion fail; the card
+  sizing above is the first fix; use Settings > Diagnostics there), phones, mainland China
+  networks.

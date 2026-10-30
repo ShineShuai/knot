@@ -21,6 +21,11 @@ try {
   browser = await playwright[NAME].launch(launchOptions(NAME));
 } catch (err) {
   server.close();
+  if (/profile folder/.test(String(err))) {
+    console.log(`${NAME} could not start with Playwright's temporary profile (not the app).\n`
+      + `Try Node 22 or 24 (this is ${process.version}), or a temp folder of your own:\n`
+      + `    mkdir -p ~/tmp-pw && TMPDIR=$HOME/tmp-pw npm run test:e2e:${NAME}`);
+  }
   if (process.env.E2E_SKIP_MISSING && /Executable doesn't exist/.test(String(err))) {
     console.log(`skip ${NAME}: not installed (npx playwright install ${NAME})`);
     process.exit(0);
@@ -41,7 +46,9 @@ const toneMicrophone = () => {
     const destination = ctx.createMediaStreamDestination();
     oscillator.connect(destination);
     oscillator.start();
-    await ctx.resume();
+    // An audio context may wait for a gesture (Firefox): the tone then stays silent, and the
+    // call must not wait for it.
+    await Promise.race([ctx.resume(), new Promise((resolve) => setTimeout(resolve, 300))]);
     for (const track of stream.getAudioTracks()) { track.stop(); stream.removeTrack(track); }
     stream.addTrack(destination.stream.getAudioTracks()[0]);
     return stream;
@@ -51,10 +58,12 @@ class Skip extends Error {}
 const skip = (why) => { throw new Skip(why); };
 async function check(name, fn) {
   if (process.env.E2E_ONLY && !name.includes(process.env.E2E_ONLY)) return;
+  livePages.clear();
   try { await fn(); console.log(`ok   ${name}`); } catch (err) {
     if (err instanceof Skip) { console.log(`skip ${name}\n     ${err.message}`); return; }
     failures.push(name);
     console.log(`FAIL ${name}\n     ${err.stack ?? err}`);
+    await dumpRtc();
   }
 }
 /** Does this page get a (fake) microphone and camera? Chromium is set up to; the others only
@@ -65,6 +74,13 @@ const hasFakeMedia = (page) => page.evaluate(
     () => false,
   ) ?? false,
 );
+const livePages = new Set(); // the pages of the running check
+async function dumpRtc() { // the ICE log of each page: why two pages did not connect
+  for (const [i, page] of [...livePages].entries()) {
+    const lines = await page.evaluate(() => (window.__rtc ?? []).slice(-24)).catch(() => []);
+    if (lines.length) console.log(`     ICE log of page ${i}:\n       ${lines.join('\n       ')}`);
+  }
+}
 const newPage = async () => {
   const context = await browser.newContext(contextOptions(NAME));
   const page = await context.newPage();
@@ -72,11 +88,31 @@ const newPage = async () => {
   // resource was (the browsers' own CSP messages do not say).
   await page.addInitScript((stun) => {
     window.useStun = stun;
+    const Native = window.RTCPeerConnection;
+    if (Native) { // what ICE did, for the log of a failed check
+      window.__rtc = [];
+      const log = (text) => window.__rtc.push(`${Math.round(performance.now())} ${text}`);
+      window.RTCPeerConnection = class extends Native {
+        constructor(...args) {
+          super(...args);
+          const id = Math.random().toString(36).slice(2, 5);
+          log(`pc ${id} created, ${args[0]?.iceServers?.length ?? 0} ICE servers`);
+          this.addEventListener('icecandidate', (e) => log(
+            `pc ${id} candidate ${e.candidate ? e.candidate.candidate : '(end)'}`));
+          for (const type of ['iceconnectionstatechange', 'connectionstatechange']) {
+            this.addEventListener(type, () => log(
+              `pc ${id} ${type.replace('statechange', '')} `
+              + `${this.iceConnectionState}/${this.connectionState}`));
+          }
+        }
+      };
+    }
     document.addEventListener('securitypolicyviolation', (e) => console.error(
       `CSP: ${e.violatedDirective} blocked ${e.blockedURI || '(inline)'} `
       + `at ${e.sourceFile}:${e.lineNumber} ${(e.sample || '').slice(0, 80)}`,
     ));
   }, needsStun(NAME));
+  livePages.add(page);
   page.errors = [];
   page.on('pageerror', (e) => page.errors.push(String(e)));
   // Public brokers are unreachable in offline test runs; that console noise is expected.
@@ -263,6 +299,11 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
     return img && !img.classList.contains('low') && img.complete && img.naturalWidth > 160;
   });
   assert.match(await b.locator('.imgcard .imgact button').textContent(), /Original/);
+  // The card has its size and shape (it collapsed to nothing in Safari when styles were blocked).
+  const shown = await b.locator('.imgcard img').boundingBox();
+  assert.ok(shown.width >= 100 && shown.height >= 60, `image card ${shown.width}x${shown.height}`);
+  const shape = shown.width / shown.height;
+  assert.ok(Math.abs(shape - 1200 / 800) < 0.05, `the image card has its shape (${shape})`);
 
   // Paste a clipboard file into the composer, then drop two files on the chat.
   // (A plain Event with the data attached: Firefox and WebKit ignore it in the constructors.)

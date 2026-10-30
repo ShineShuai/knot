@@ -46,7 +46,14 @@ export class ImageCard extends Emitter {
     [this.#room, this.#env, this.#host] = [room, env, host];
     const { name, size, img } = env.body;
     this.#thumbUrl = this.#url(thumb);
-    this.#img = h('img', { alt: name, src: this.#thumbUrl, decoding: 'async', class: 'low' });
+    // The size comes from the width and height attributes, not from style: Safari applies the
+    // page's CSP to inline styles, even those set from script, and the card collapsed.
+    const scale = Math.min(1, SHOW.w / img.w, SHOW.h / img.h);
+    const width = Math.max(48, Math.round(img.w * scale));
+    const height = Math.max(1, Math.round((width * img.h) / img.w));
+    this.#img = h('img', {
+      alt: name, src: this.#thumbUrl, decoding: 'async', class: 'low', width, height,
+    });
     this.#note = h('span', { class: 'imgnote', role: 'status' });
     const button = h('button', {
       type: 'button',
@@ -54,15 +61,12 @@ export class ImageCard extends Emitter {
       'aria-label': t('openImage', { name }),
       onclick: () => this.#tap(),
     }, this.#img, this.#note);
-    button.style.aspectRatio = `${img.w} / ${img.h}`; // CSSOM: the CSP forbids style attributes
     this.el = h('figure', { class: 'imgcard' }, button,
       h('figcaption', { class: 'imgcap' },
         h('span', { class: 'file-name' }, name),
         h('span', { class: 'file-size' }, fmtSize(size)),
         img.a ? h('span', { class: 'badge' }, t('animated')) : null,
         this.actions().node));
-    const scale = Math.min(1, SHOW.w / img.w, SHOW.h / img.h);
-    this.el.style.width = `min(${Math.max(48, Math.round(img.w * scale))}px, 70vw)`;
     this.#paintNote();
   }
 

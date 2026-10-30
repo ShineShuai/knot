@@ -1,38 +1,30 @@
-// End-to-end tests in real browsers (real WebRTC, real IndexedDB, real UI): Chromium by
-// default, or Firefox / WebKit (Safari's engine) with E2E_BROWSER=firefox|webkit.
-//   PLAYWRIGHT_MODULE=/path/to/node_modules/playwright node test/e2e/run.mjs
-// Checks that need fake capture devices run in every browser that offers them; the others
-// are reported as skipped, never silently passed.
+// End-to-end tests in real browsers (real WebRTC, real IndexedDB, real UI).
+//   node test/e2e/run.mjs                      Chromium, the full suite
+//   E2E_BROWSER=firefox|webkit node ...        that browser, the engine suite (WebKit is Safari's)
+// The engine suite is the checks of a single page; the full suite adds two pages, and calls with
+// a fake camera and microphone, which only Chromium offers (see browsers.mjs).
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { startServer } from '../../tools/serve.mjs';
 import {
-  browserName, contextOptions, isExpectedNoise, launchOptions, needsMediaProbe, needsStun,
+  browserName, contextOptions, isExpectedNoise, launchOptions, suiteName,
 } from './browsers.mjs';
 import { loadPlaywright } from './playwright.mjs';
 
 const NAME = browserName();
-const STRICT = NAME === 'chromium'; // its fake devices are switched on by flags: no excuses
+const SUITE = suiteName(process.env, NAME);
 const playwright = loadPlaywright();
 const server = await startServer(0);
 const base = `http://127.0.0.1:${server.address().port}`;
 let browser;
 try {
-  try {
-    browser = await playwright[NAME].launch(launchOptions(NAME));
-  } catch (err) {
-    if (!/profile folder/.test(String(err)) || !Object.keys(launchOptions(NAME)).length) throw err;
-    // Does the browser start at all? If it does without our preferences, they are the cause.
-    browser = await playwright[NAME].launch({}).catch(() => { throw err; });
-    console.log(`note: ${NAME} starts only without our preferences (fake camera and microphone):`
-      + ' its call checks will be skipped');
-  }
+  browser = await playwright[NAME].launch(launchOptions(NAME));
 } catch (err) {
   server.close();
   if (/profile folder/.test(String(err))) {
-    console.log(`${NAME} does not start with Playwright's temporary profile, with or without our `
-      + `settings (so not because of the app).\nTry another Node (this is ${process.version}; `
-      + `22 or 24), then \`npx playwright install --force ${NAME}\`.`);
+    console.log(`${NAME} does not start with Playwright's temporary profile (not the app).\n`
+      + `Try another Node (this is ${process.version}; 22 or 24), then `
+      + `\`npx playwright install --force ${NAME}\`.`);
   }
   if (process.env.E2E_SKIP_MISSING && /Executable doesn't exist/.test(String(err))) {
     console.log(`skip ${NAME}: not installed (npx playwright install ${NAME})`);
@@ -44,7 +36,7 @@ try {
   }
   throw err;
 }
-console.log(`browser: ${NAME} ${browser.version()}`);
+console.log(`browser: ${NAME} ${browser.version()}, ${SUITE} suite`);
 const failures = [];
 /** Init script: the microphone is a steady tone. The fake device only beeps for 20 ms a second,
  *  which the browser's own noise filter may swallow; a tone from Web Audio is not filtered. */
@@ -58,34 +50,27 @@ const toneMicrophone = () => {
     const destination = ctx.createMediaStreamDestination();
     oscillator.connect(destination);
     oscillator.start();
-    // An audio context may wait for a gesture (Firefox): the tone then stays silent, and the
-    // call must not wait for it.
+    // An audio context may wait for a gesture: the tone then stays silent, and the call must
+    // not wait for it.
     await Promise.race([ctx.resume(), new Promise((resolve) => setTimeout(resolve, 300))]);
     for (const track of stream.getAudioTracks()) { track.stop(); stream.removeTrack(track); }
     stream.addTrack(destination.stream.getAudioTracks()[0]);
     return stream;
   };
 };
-class Skip extends Error {}
-const skip = (why) => { throw new Skip(why); };
-async function check(name, fn) {
+/** A check of the full suite. E2E_ONLY=<part of a name> runs just that one. */
+async function check(name, fn, { single = false } = {}) {
   if (process.env.E2E_ONLY && !name.includes(process.env.E2E_ONLY)) return;
+  if (SUITE === 'engine' && !single) return;
   livePages.clear();
   try { await fn(); console.log(`ok   ${name}`); } catch (err) {
-    if (err instanceof Skip) { console.log(`skip ${name}\n     ${err.message}`); return; }
     failures.push(name);
     console.log(`FAIL ${name}\n     ${err.stack ?? err}`);
     await dumpRtc();
   }
 }
-/** Does this page get a (fake) microphone and camera? Chromium is set up to; the others only
- *  sometimes, so a call check asks first and says so when it skips. */
-const hasFakeMedia = (page) => page.evaluate(
-  () => navigator.mediaDevices?.getUserMedia({ audio: true, video: true }).then(
-    (stream) => { stream.getTracks().forEach((track) => track.stop()); return true; },
-    () => false,
-  ) ?? false,
-);
+/** A check of a single page: it is also part of the engine suite, which runs in any browser. */
+const single = (name, fn) => check(name, fn, { single: true });
 const livePages = new Set(); // the pages of the running check
 async function dumpRtc() { // the ICE log of each page: why two pages did not connect
   for (const [i, page] of [...livePages].entries()) {
@@ -96,10 +81,9 @@ async function dumpRtc() { // the ICE log of each page: why two pages did not co
 const newPage = async () => {
   const context = await browser.newContext(contextOptions(NAME));
   const page = await context.newPage();
-  // Both settings are read by the pages' own scripts: whether to use STUN, and what a blocked
-  // resource was (the browsers' own CSP messages do not say).
-  await page.addInitScript((stun) => {
-    window.useStun = stun;
+  // What a blocked resource was (the browsers' own CSP messages do not say), and what ICE did
+  // (for the log of a failed check).
+  await page.addInitScript(() => {
     const Native = window.RTCPeerConnection;
     if (Native) { // what ICE did, for the log of a failed check
       window.__rtc = [];
@@ -130,7 +114,7 @@ const newPage = async () => {
       + `at ${e.sourceFile}:${e.lineNumber} after createElement(${lastTag}) `
       + `${(e.sample || '').slice(0, 80)}`,
     ));
-  }, needsStun(NAME));
+  });
   livePages.add(page);
   page.errors = [];
   page.on('pageerror', (e) => page.errors.push(String(e)));
@@ -142,29 +126,13 @@ const newPage = async () => {
   return page;
 };
 
-/** WebKit hides a page's address behind a `.local` name that a second page can only look up
- *  where the system allows it (Playwright's WebKit on a Mac does not), and STUN may give
- *  nothing: then no two pages connect, whatever the app does. Say so instead of failing. */
-let canConnect;
-async function needPairing() {
-  if (NAME !== 'webkit') return;
-  canConnect ??= pairedRooms().then(
-    (pages) => Promise.all(pages.map((p) => p.context().close())).then(() => true),
-    () => false,
-  );
-  if (!(await canConnect)) {
-    skip('two WebKit pages cannot connect on this machine (see "two rooms in one page" instead)');
-  }
-}
-
 // ---- 1. Real WebRTC through the Room API (manual pairing, chat, history, files) --------------
 await check('manual pairing, chat and file transfer over real WebRTC', async () => {
-  await needPairing();
   const [a, b] = [await newPage(), await newPage()];
   await Promise.all([a, b].map((p) => p.goto(`${base}/test/e2e/blank.html`)));
   const boot = ({ name, secretB64 }) => async ({ name, secretB64 }) => {
     const { Room } = await import('/src/chat/room.js');
-    const { DEFAULTS, iceServersFrom } = await import('/src/config.js');
+    const { DEFAULTS } = await import('/src/config.js');
     const { MemoryKV } = await import('/src/store/kv.js');
     const { loadIdentity } = await import('/src/crypto/identity.js');
     const { newRoomSecret } = await import('/src/crypto/room-keys.js');
@@ -178,8 +146,8 @@ await check('manual pairing, chat and file transfer over real WebRTC', async () 
         ...DEFAULTS,
         name,
         brokersEnabled: false,
-        gatherTimeoutMs: window.useStun ? 4000 : 1500,
-      }, iceServers: () => (window.useStun ? iceServersFrom(DEFAULTS) : []),
+        gatherTimeoutMs: 1500,
+      }, iceServers: () => [],
     });
   };
   await a.evaluate(boot({}), { name: 'Ada' });
@@ -234,7 +202,7 @@ await check('manual pairing, chat and file transfer over real WebRTC', async () 
 
 // ---- 2. UI smoke: create a room, chat, reload, data persists
 // --------------------------------------
-await check('UI: create room, send message, persists after reload', async () => {
+await single('UI: create room, send message, persists after reload', async () => {
   const page = await newPage();
   await page.goto(`${base}/index.html`);
   await page.getByRole('button', { name: 'New room' }).click();
@@ -259,7 +227,6 @@ await check('UI: create room, send message, persists after reload', async () => 
 // ---- 3. UI manual pairing between two browsers
 // ------------------------------------------------------
 await check('UI: pair two browsers with codes, chat both ways, share a file', async () => {
-  await needPairing();
   const [a, b] = [await newPage(), await newPage()];
   await b.addInitScript(toneMicrophone); // Bob "speaks" all the time
   await Promise.all([a, b].map((p) => p.goto(`${base}/index.html`)));
@@ -437,23 +404,12 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
   await a.keyboard.press('Escape');
 
   const call = a.locator('section.call');
-  if (needsMediaProbe(NAME) && !(await hasFakeMedia(a))) {
-    console.log(`     note: no fake microphone in ${NAME}: the call part of this check is skipped`);
-    assert.deepEqual([...a.errors, ...b.errors], []);
-    await Promise.all([a, b].map((p) => p.context().close()));
-    return;
-  }
   await a.getByRole('button', { name: 'Start an audio call' }).click();
   await a.locator('.call .tile').waitFor();
   await b.locator('.call-banner button').click(); // Bob joins: both are shown, camera or not
   await a.locator('.call .tile').nth(1).waitFor();
   // Bob's microphone is a tone: his tile gets the speaking outline on Ada's screen.
-  const heard = await a.locator('.call .tile:not(.self).speaking')
-    .waitFor({ timeout: STRICT ? 15000 : 8000 }).then(() => true, (err) => {
-      if (STRICT) throw err;
-      return false;
-    });
-  if (!heard) console.log(`     note: no speaking outline seen in ${NAME}`);
+  await a.locator('.call .tile:not(.self).speaking').waitFor({ timeout: 15000 });
   const fits = () => a.locator('.call-grid').evaluate((grid) => {
     const g = grid.getBoundingClientRect();
     return grid.scrollHeight <= grid.clientHeight + 1 && [...grid.children].every((tile) => {
@@ -510,19 +466,16 @@ async function pairedRooms() {
   await Promise.all([a, b].map((p) => p.goto(`${base}/test/e2e/blank.html`)));
   const open = async ({ name, secretB64 }) => {
     const { Room } = await import('/src/chat/room.js');
-    const { DEFAULTS, iceServersFrom } = await import('/src/config.js');
+    const { DEFAULTS } = await import('/src/config.js');
     const { MemoryKV } = await import('/src/store/kv.js');
     const { loadIdentity } = await import('/src/crypto/identity.js');
     const { newRoomSecret } = await import('/src/crypto/room-keys.js');
     const { fromB64u } = await import('/src/util/bytes.js');
     const kv = new MemoryKV();
-    const stun = window.useStun; // WebKit needs STUN to find the other page
-    const iceServers = () => (stun ? iceServersFrom(DEFAULTS) : []);
-    const gatherTimeoutMs = stun ? 4000 : 1500;
     window.room = await Room.open({
-      identity: await loadIdentity(kv), label: name, kv, iceServers,
+      identity: await loadIdentity(kv), label: name, kv, iceServers: () => [],
       secret: secretB64 ? fromB64u(secretB64) : newRoomSecret(),
-      settings: { ...DEFAULTS, name, brokersEnabled: false, gatherTimeoutMs },
+      settings: { ...DEFAULTS, name, brokersEnabled: false, gatherTimeoutMs: 1500 },
     });
   };
   await a.evaluate(open, { name: 'Ada' });
@@ -548,12 +501,7 @@ async function pairedRooms() {
 }
 
 await check('audio/video call: media flows both ways, mute and camera, leave', async () => {
-  await needPairing();
   const [a, b] = await pairedRooms();
-  if (needsMediaProbe(NAME) && !(await hasFakeMedia(a))) {
-    await Promise.all([a, b].map((p) => p.context().close()));
-    skip(`${NAME} offers no fake camera and microphone here`);
-  }
   const joined = await Promise.all(
     [a, b].map((p) => p.evaluate(() => window.room.call.join({ video: true }))),
   );
@@ -610,7 +558,7 @@ await check('audio/video call: media flows both ways, mute and camera, leave', a
 // ---- 3c. The engine itself: two rooms in ONE page (no second page to find, so this runs in
 // every browser, WebKit included). Every step is tried and reported, so one run shows
 // everything that does not work in a browser, not just the first thing.
-await check('two rooms in one page: text, edit, reaction, image, delete', async () => {
+await single('two rooms in one page: text, edit, reaction, image, delete', async () => {
   const page = await newPage();
   await page.goto(`${base}/test/e2e/blank.html`);
   const results = await page.evaluate(async () => {
@@ -713,7 +661,7 @@ await check('two rooms in one page: text, edit, reaction, image, delete', async 
 
 // ---- 4. Lab page finishes without failures that are not network related
 // -------------------------------
-await check('lab page runs the loopback pairing', async () => {
+await single('lab page runs the loopback pairing', async () => {
   const page = await newPage();
   await page.goto(`${base}/lab/lab.html`);
   await page.waitForFunction(() => window.labDone, null, { timeout: 30000 });

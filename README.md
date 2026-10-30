@@ -10,20 +10,24 @@ signaling brokers are blocked (manual QR / text pairing).
     node tools/serve.mjs 8080        # then open http://localhost:8080
     npm test                         # unit tests (Node 22+)
     npm install --no-save playwright && npx playwright install   # once, for the browser tests
-    npm run test:e2e                 # Chromium, with a fake camera and microphone
-    npm run test:e2e:all             # Chromium, Firefox and WebKit (Safari's engine), as installed
-    npm run test:e2e:webkit          # one browser; or :firefox, or E2E_BROWSER=... npm run test:e2e
+    npm run test:e2e                 # Chromium: the full suite (fake camera and microphone)
+    npm run test:e2e:all             # that, then the engine suite in Firefox and WebKit (Safari's), as installed
+    npm run test:e2e:webkit          # one browser's engine suite; or :firefox
 
 Playwright is found in this project, the global npm folder or the cache of `npx`;
 `PLAYWRIGHT_MODULE=/full/path/to/playwright` overrides that (a real path, not a placeholder).
 
+The browser tests have two suites (`test/e2e/browsers.mjs`). *Full* (Chromium only, which has a
+fake camera and microphone): real WebRTC between two pages, calls, layout. *Engine* (any
+browser): the checks of a single page, namely the UI, two rooms paired inside one page (text,
+edit, reaction, image thumbnail and preview, original, delete) and the lab page. `E2E_SUITE`
+overrides the default (full in Chromium, engine elsewhere).
+
 CI (`.github/workflows/ci.yml`): unit tests and the browser tests run on every push and pull
-request, in Chromium, Firefox and WebKit. Only Chromium blocks a deploy for now (`continue-on-error`
-on the others, see the comment in the file); a push to `main` whose unit tests and Chromium
-tests pass is published to GitHub Pages (one-time: Settings > Pages > Source: GitHub Actions).
-The other browsers have no flag-switched fake camera: a call check there runs only if the browser
-offers capture devices and is reported as skipped otherwise; the speaking outline is only
-required in Chromium.
+request: the full suite in Chromium, the engine suite in Firefox and WebKit. Only Chromium blocks
+a deploy for now (`continue-on-error` on the others, see the comment in the file); a push to
+`main` whose unit tests and Chromium tests pass is published to GitHub Pages (one-time:
+Settings > Pages > Source: GitHub Actions).
 
 Any static host works for deployment (HTTPS required outside localhost). Host it
 on two or three origins and also hand out the folder as a ZIP: after one visit
@@ -104,7 +108,7 @@ if no broker is reachable; with brokers, reconnection is automatic).
       ui/diagnostics.js    browser feature checks and recent errors, as copyable text
       update.js            notices a newer published build (build.json)
     lab/                   network lab page
-    test/                  unit tests (+ fakes) and real-browser e2e (browsers.mjs: Chromium, Firefox, WebKit)
+    test/                  unit tests (+ fakes) and real-browser e2e (full suite: Chromium; engine suite: also Firefox, WebKit)
 
 ## Design notes
 
@@ -324,13 +328,10 @@ if no broker is reachable; with brokers, reconnection is automatic).
   through brokers or a new code.
 * Files: whole file in memory (default cap 100 MB), no resume.
 * One tab per room should be open; multi-tab coordination is not implemented.
-* Verified: unit tests, and the browser tests in Chromium and Firefox (CI) and WebKit (CI on
-  Linux, and Playwright's WebKit 27.2 on macOS). In WebKit on macOS two pages cannot connect
-  (only `.local` host candidates it cannot resolve, and STUN gives no public address), so the
-  two-page checks are skipped there; the check "two rooms in one page" (text, edit, reaction,
-  image thumbnail and preview, original, delete) passes there and in CI. Playwright's Firefox
-  does not start on one macOS machine (Node 26.10: "Could not find profile folder", also after
-  a forced reinstall); `npm run test:e2e:all` skips it. Not verified: real public brokers,
-  phones, mainland China networks. Safari: image previews and message deletion were reported
-  failing on some macOS/Safari versions and working on others (maybe version-related, not
-  investigated further); Settings > Diagnostics shows what a given Safari supports.
+* Verified: unit tests; the full browser suite in Chromium and the engine suite in Firefox (CI)
+  and WebKit (CI on Linux, Playwright's WebKit 27.2 on macOS). Playwright's Firefox does not
+  start on one macOS machine (Node 26.10: "Could not find profile folder", also after a forced
+  reinstall); `npm run test:e2e:all` skips it. Not verified: real public brokers, phones,
+  mainland China networks. Safari: image previews and message deletion were reported failing on
+  some macOS/Safari versions and working on others (maybe version-related, not investigated
+  further); Settings > Diagnostics shows what a given Safari supports.

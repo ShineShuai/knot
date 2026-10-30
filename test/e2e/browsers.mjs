@@ -11,32 +11,20 @@ export function browserName(env = process.env) {
   return name;
 }
 
-/** Options for `<browser>.launch()`. Fake camera and microphone, no permission prompt, and
- *  two pages of one machine may reach each other. Playwright's WebKit takes none of this:
- *  whether it offers capture devices is found out at run time (see run.mjs). */
+/** Options for `<browser>.launch()`. Chromium gets a fake camera and microphone and no
+ *  permission prompt (the full suite makes calls); Firefox and WebKit run the engine suite,
+ *  which needs none. */
 export function launchOptions(name) {
-  if (name === 'chromium') {
-    return {
-      args: [
-        '--no-sandbox',
-        '--allow-loopback-in-peer-connection',
-        '--disable-features=WebRtcHideLocalIpsWithMdns',
-        '--use-fake-device-for-media-stream', // a test-pattern camera and a beeping microphone
-        '--use-fake-ui-for-media-stream', // and no permission prompt
-      ],
-    };
-  }
-  if (name === 'firefox') {
-    return {
-      firefoxUserPrefs: {
-        'media.navigator.streams.fake': true,
-        'media.navigator.permission.disabled': true,
-        'media.peerconnection.ice.loopback': true,
-        'media.peerconnection.ice.obfuscate_host_addresses': false,
-      },
-    };
-  }
-  return {};
+  if (name !== 'chromium') return {};
+  return {
+    args: [
+      '--no-sandbox',
+      '--allow-loopback-in-peer-connection',
+      '--disable-features=WebRtcHideLocalIpsWithMdns',
+      '--use-fake-device-for-media-stream', // a test-pattern camera and a beeping microphone
+      '--use-fake-ui-for-media-stream', // and no permission prompt
+    ],
+  };
 }
 
 /** Options for `browser.newContext()`. Only Chromium knows the clipboard permissions: the
@@ -65,11 +53,21 @@ export const isExpectedNoise = (text, name = 'chromium') => (
   || (name === 'webkit' && WEBKIT_INSPECTOR_CSP.some((re) => re.test(text)))
 );
 
-/** WebKit shows other pages only a made-up `.local` name instead of the machine's address, and
- *  two pages on one machine cannot look those names up: they need STUN (a real network) to
- *  find each other, like two people on different networks would. */
-export const needsStun = (name) => name === 'webkit';
+export const SUITES = ['full', 'engine'];
 
-/** Is this a browser that cannot be asked for its fake camera and microphone up front? Its
- *  call checks then run only if the browser turns out to offer capture devices. */
-export const needsMediaProbe = (name) => name !== 'chromium';
+/** Which checks run. `engine`: those of a single page (the UI, two rooms paired inside one
+ *  page, the lab page): they need no camera and no second page, so they run in any browser.
+ *  `full` adds real WebRTC between two pages and calls with a fake camera and microphone, which
+ *  only Chromium offers. Default: full in Chromium, engine elsewhere (E2E_SUITE overrides). */
+export function suiteName(env = process.env, name = browserName(env)) {
+  const suite = env.E2E_SUITE || (name === 'chromium' ? 'full' : 'engine');
+  if (!SUITES.includes(suite)) {
+    throw new Error(`E2E_SUITE must be one of ${SUITES.join(', ')} (got "${suite}")`);
+  }
+  if (suite === 'full' && name !== 'chromium') {
+    throw new Error(
+      `The full suite needs Chromium's fake camera and microphone: ${name} runs the engine suite`,
+    );
+  }
+  return suite;
+}

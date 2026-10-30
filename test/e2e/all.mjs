@@ -1,5 +1,6 @@
-// Runs the end-to-end tests in every browser that is installed, one after the other. A browser
-// that is not installed, or does not start on this machine, is skipped (and said so).
+// Runs the end-to-end tests in every browser that is installed, one after the other: the full
+// suite in Chromium, the engine suite in Firefox and WebKit. A browser that is not installed, or
+// does not start on this machine, is skipped (and said so).
 //   npx playwright install firefox webkit   (once; Chromium is probably there already)
 //   PLAYWRIGHT_MODULE=... npm run test:e2e:all
 import { spawnSync } from 'node:child_process';

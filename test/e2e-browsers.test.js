@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  BROWSERS, browserName, contextOptions, isExpectedNoise, launchOptions, needsMediaProbe, needsStun,
+  BROWSERS, browserName, contextOptions, isExpectedNoise, launchOptions, suiteName,
 } from './e2e/browsers.mjs';
 import { candidates, loadPlaywright } from './e2e/playwright.mjs';
 
@@ -15,24 +15,25 @@ test('the browser comes from E2E_BROWSER, Chromium by default, and a typo is an 
   assert.throws(() => browserName({ E2E_BROWSER: 'safari' }), /one of chromium, firefox, webkit/);
 });
 
-test('each browser gets only the options it understands', () => {
-  const chromium = launchOptions('chromium');
-  assert.ok(chromium.args.includes('--use-fake-device-for-media-stream'));
-  assert.equal(chromium.firefoxUserPrefs, undefined);
-
-  const { firefoxUserPrefs, args } = launchOptions('firefox');
-  assert.equal(args, undefined, 'Chromium flags mean nothing to Firefox');
-  assert.equal(firefoxUserPrefs['media.navigator.streams.fake'], true);
-  assert.equal(firefoxUserPrefs['media.navigator.permission.disabled'], true);
-
+test('Chromium gets the fake camera and microphone; the engine suite needs nothing', () => {
+  assert.ok(launchOptions('chromium').args.includes('--use-fake-device-for-media-stream'));
+  assert.deepEqual(launchOptions('firefox'), {});
   assert.deepEqual(launchOptions('webkit'), {});
   assert.deepEqual(contextOptions('chromium').permissions, ['clipboard-read', 'clipboard-write']);
   for (const name of ['firefox', 'webkit']) {
     assert.equal(contextOptions(name).permissions, undefined, `${name} refuses clipboard grants`);
     assert.equal(contextOptions(name).serviceWorkers, 'block');
   }
-  assert.equal(needsMediaProbe('chromium'), false);
-  assert.equal(needsMediaProbe('webkit'), true);
+});
+
+test('the suite: full in Chromium, engine elsewhere, and the full one only in Chromium', () => {
+  assert.equal(suiteName({}, 'chromium'), 'full');
+  assert.equal(suiteName({}, 'firefox'), 'engine');
+  assert.equal(suiteName({}, 'webkit'), 'engine');
+  assert.equal(suiteName({ E2E_SUITE: 'engine' }, 'chromium'), 'engine');
+  assert.equal(suiteName({ E2E_BROWSER: 'webkit' }), 'engine');
+  assert.throws(() => suiteName({ E2E_SUITE: 'full' }, 'webkit'), /fake camera and microphone/);
+  assert.throws(() => suiteName({ E2E_SUITE: 'all' }, 'chromium'), /one of full, engine/);
 });
 
 test('unreachable brokers are noise in any browser; other errors are not', () => {
@@ -55,10 +56,6 @@ test('CI runs the browser tests in every browser the runner knows, and sets E2E_
   assert.match(ci, /E2E_BROWSER:\s*\$\{\{\s*matrix\.browser\s*\}\}/);
   assert.match(ci, /playwright install --with-deps \$\{\{\s*matrix\.browser\s*\}\}/);
   assert.match(ci, /continue-on-error:\s*\$\{\{\s*matrix\.browser != 'chromium'\s*\}\}/);
-});
-
-test('only WebKit needs STUN for two pages of one machine to find each other', () => {
-  assert.deepEqual(BROWSERS.filter((name) => needsStun(name)), ['webkit']);
 });
 
 test('Playwright is looked for in the usual places; a missing one gets a helpful error', () => {

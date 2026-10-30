@@ -55,7 +55,26 @@ test('streams: same track is one analyser, a new track replaces it, none is igno
   meter.watch('a', stream(track2)); // the other side renegotiated
   assert.equal(FakeAudio.last.sources, 2);
   meter.watch('video-only', stream({ kind: 'video' }));
-  assert.deepEqual(meter.ids(), ['a']);
+  assert.deepEqual(meter.ids(), ['a', 'video-only']); // waiting for its audio
+  meter.tick(1);
+  assert.equal(FakeAudio.last.sources, 2);
+});
+
+test('a remote stream whose audio track arrives later is picked up at the next tick', () => {
+  FakeAudio.loud.clear();
+  const { meter } = meterAt();
+  const tracks = [];
+  const remote = { getTracks: () => tracks };
+  meter.watch('bob', remote);
+  meter.watch('bob', remote); // the same stream again: still just waiting
+  meter.tick(10);
+  assert.equal(meter.isSpeaking('bob'), false);
+
+  tracks.push(audio()); // negotiation finished: the track is added to the stream
+  FakeAudio.loud.add(remote);
+  meter.tick(20);
+  assert.equal(meter.isSpeaking('bob'), true);
+  assert.equal(FakeAudio.last.sources, 1);
 });
 
 test('unwatching a speaker ends the highlight; the last one stops the timer', () => {

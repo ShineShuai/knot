@@ -1,43 +1,127 @@
-// End-to-end tests in real Chromium (real WebRTC, real IndexedDB, real UI).
-//   PLAYWRIGHT_MODULE=/path/to/node_modules/playwright node test/e2e/run.mjs
+// End-to-end tests in real browsers (real WebRTC, real IndexedDB, real UI).
+//   node test/e2e/run.mjs                      Chromium, the full suite
+//   E2E_BROWSER=firefox|webkit node ...        that browser, the engine suite (WebKit is Safari's)
+// The engine suite is the checks of a single page; the full suite adds two pages, and calls with
+// a fake camera and microphone, which only Chromium offers (see browsers.mjs).
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { createRequire } from 'node:module';
 import { startServer } from '../../tools/serve.mjs';
+import {
+  browserName, contextOptions, isExpectedNoise, launchOptions, suiteName,
+} from './browsers.mjs';
+import { loadPlaywright } from './playwright.mjs';
 
-const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE ?? 'playwright');
+const NAME = browserName();
+const SUITE = suiteName(process.env, NAME);
+const playwright = loadPlaywright();
 const server = await startServer(0);
 const base = `http://127.0.0.1:${server.address().port}`;
-const browser = await chromium.launch({
-  args: [
-    '--no-sandbox',
-    '--allow-loopback-in-peer-connection',
-    '--disable-features=WebRtcHideLocalIpsWithMdns',
-    '--use-fake-device-for-media-stream', // a test-pattern camera and a beeping microphone
-    '--use-fake-ui-for-media-stream', // and no permission prompt
-  ],
-});
+let browser;
+try {
+  browser = await playwright[NAME].launch(launchOptions(NAME));
+} catch (err) {
+  server.close();
+  if (/profile folder/.test(String(err))) {
+    console.log(`${NAME} does not start with Playwright's temporary profile (not the app).\n`
+      + `Try another Node (this is ${process.version}; 22 or 24), then `
+      + `\`npx playwright install --force ${NAME}\`.`);
+  }
+  if (process.env.E2E_SKIP_MISSING && /Executable doesn't exist/.test(String(err))) {
+    console.log(`skip ${NAME}: not installed (npx playwright install ${NAME})`);
+    process.exit(0);
+  }
+  if (process.env.E2E_SKIP_MISSING && /profile folder/.test(String(err))) {
+    console.log(`skip ${NAME}: does not start on this machine (see above); CI runs it`);
+    process.exit(0);
+  }
+  throw err;
+}
+console.log(`browser: ${NAME} ${browser.version()}, ${SUITE} suite`);
 const failures = [];
-async function check(name, fn) {
+/** Init script: the microphone is a steady tone. The fake device only beeps for 20 ms a second,
+ *  which the browser's own noise filter may swallow; a tone from Web Audio is not filtered. */
+const toneMicrophone = () => {
+  const real = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+  navigator.mediaDevices.getUserMedia = async (constraints) => {
+    const stream = await real(constraints);
+    if (!stream.getAudioTracks().length) return stream;
+    const ctx = new AudioContext();
+    const oscillator = ctx.createOscillator();
+    const destination = ctx.createMediaStreamDestination();
+    oscillator.connect(destination);
+    oscillator.start();
+    // An audio context may wait for a gesture: the tone then stays silent, and the call must
+    // not wait for it.
+    await Promise.race([ctx.resume(), new Promise((resolve) => setTimeout(resolve, 300))]);
+    for (const track of stream.getAudioTracks()) { track.stop(); stream.removeTrack(track); }
+    stream.addTrack(destination.stream.getAudioTracks()[0]);
+    return stream;
+  };
+};
+/** A check of the full suite. E2E_ONLY=<part of a name> runs just that one. */
+async function check(name, fn, { single = false } = {}) {
   if (process.env.E2E_ONLY && !name.includes(process.env.E2E_ONLY)) return;
+  if (SUITE === 'engine' && !single) return;
+  livePages.clear();
   try { await fn(); console.log(`ok   ${name}`); } catch (err) {
     failures.push(name);
     console.log(`FAIL ${name}\n     ${err.stack ?? err}`);
+    await dumpRtc();
+  }
+}
+/** A check of a single page: it is also part of the engine suite, which runs in any browser. */
+const single = (name, fn) => check(name, fn, { single: true });
+const livePages = new Set(); // the pages of the running check
+async function dumpRtc() { // the ICE log of each page: why two pages did not connect
+  for (const [i, page] of [...livePages].entries()) {
+    const lines = await page.evaluate(() => (window.__rtc ?? []).slice(-24)).catch(() => []);
+    if (lines.length) console.log(`     ICE log of page ${i}:\n       ${lines.join('\n       ')}`);
   }
 }
 const newPage = async () => {
-  const context = await browser.newContext(
-    { serviceWorkers: 'block', permissions: ['clipboard-read', 'clipboard-write'] },
-  );
+  const context = await browser.newContext(contextOptions(NAME));
   const page = await context.newPage();
+  // What a blocked resource was (the browsers' own CSP messages do not say), and what ICE did
+  // (for the log of a failed check).
+  await page.addInitScript(() => {
+    const Native = window.RTCPeerConnection;
+    if (Native) { // what ICE did, for the log of a failed check
+      window.__rtc = [];
+      const log = (text) => window.__rtc.push(`${Math.round(performance.now())} ${text}`);
+      window.RTCPeerConnection = class extends Native {
+        constructor(...args) {
+          super(...args);
+          const id = Math.random().toString(36).slice(2, 5);
+          log(`pc ${id} created, ${args[0]?.iceServers?.length ?? 0} ICE servers`);
+          this.addEventListener('icecandidate', (e) => log(
+            `pc ${id} candidate ${e.candidate ? e.candidate.candidate : '(end)'}`));
+          for (const type of ['iceconnectionstatechange', 'connectionstatechange']) {
+            this.addEventListener(type, () => log(
+              `pc ${id} ${type.replace('statechange', '')} `
+              + `${this.iceConnectionState}/${this.connectionState}`));
+          }
+        }
+      };
+    }
+    const create = document.createElement.bind(document);
+    let lastTag = ''; // the element being made when a violation is reported (they are sync)
+    document.createElement = (tag, options) => {
+      lastTag = String(tag);
+      return create(tag, options);
+    };
+    document.addEventListener('securitypolicyviolation', (e) => console.error(
+      `CSP: ${e.violatedDirective} blocked ${e.blockedURI || '(inline)'} `
+      + `at ${e.sourceFile}:${e.lineNumber} after createElement(${lastTag}) `
+      + `${(e.sample || '').slice(0, 80)}`,
+    ));
+  });
+  livePages.add(page);
   page.errors = [];
   page.on('pageerror', (e) => page.errors.push(String(e)));
   // Public brokers are unreachable in offline test runs; that console noise is expected.
   page.on(
     'console',
-    (m) => m.type() === 'error' && !/WebSocket connection to/.test(m.text()) && page.errors.push(
-      m.text(),
-    ),
+    (m) => m.type() === 'error' && !isExpectedNoise(m.text(), NAME) && page.errors.push(m.text()),
   );
   return page;
 };
@@ -118,7 +202,7 @@ await check('manual pairing, chat and file transfer over real WebRTC', async () 
 
 // ---- 2. UI smoke: create a room, chat, reload, data persists
 // --------------------------------------
-await check('UI: create room, send message, persists after reload', async () => {
+await single('UI: create room, send message, persists after reload', async () => {
   const page = await newPage();
   await page.goto(`${base}/index.html`);
   await page.getByRole('button', { name: 'New room' }).click();
@@ -144,6 +228,7 @@ await check('UI: create room, send message, persists after reload', async () => 
 // ------------------------------------------------------
 await check('UI: pair two browsers with codes, chat both ways, share a file', async () => {
   const [a, b] = [await newPage(), await newPage()];
+  await b.addInitScript(toneMicrophone); // Bob "speaks" all the time
   await Promise.all([a, b].map((p) => p.goto(`${base}/index.html`)));
   await a.getByRole('button', { name: 'New room' }).click();
   await a.getByRole('button', { name: 'Create room' }).click();
@@ -217,14 +302,20 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
     return img && !img.classList.contains('low') && img.complete && img.naturalWidth > 160;
   });
   assert.match(await b.locator('.imgcard .imgact button').textContent(), /Original/);
+  // The card has its size and shape (it collapsed to nothing in Safari when styles were blocked).
+  const shown = await b.locator('.imgcard img').boundingBox();
+  assert.ok(shown.width >= 100 && shown.height >= 60, `image card ${shown.width}x${shown.height}`);
+  const shape = shown.width / shown.height;
+  assert.ok(Math.abs(shape - 1200 / 800) < 0.05, `the image card has its shape (${shape})`);
 
   // Paste a clipboard file into the composer, then drop two files on the chat.
+  // (A plain Event with the data attached: Firefox and WebKit ignore it in the constructors.)
   await a.evaluate(() => {
     const data = new DataTransfer();
     data.items.add(new File(['pasted'], 'pasted.txt', { type: 'text/plain' }));
-    document.querySelector('.composer textarea').dispatchEvent(
-      new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }),
-    );
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', { value: data });
+    document.querySelector('.composer textarea').dispatchEvent(event);
   });
   await a.locator('.chip', { hasText: 'pasted.txt' }).waitFor(); // staged in the message box
   assert.equal(await b.locator('.file', { hasText: 'pasted.txt' }).count(), 0);
@@ -233,9 +324,9 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
   await a.evaluate(() => {
     const data = new DataTransfer();
     for (const name of ['drop1.txt', 'drop2.txt']) data.items.add(new File([name], name));
-    document.querySelector('.stage').dispatchEvent(
-      new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true }),
-    );
+    const event = new Event('drop', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'dataTransfer', { value: data });
+    document.querySelector('.stage').dispatchEvent(event);
   });
   await a.locator('.chip').nth(1).waitFor();
   await a.locator('.chip', { hasText: 'drop1.txt' }).getByRole('button').click(); // remove one
@@ -257,14 +348,14 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
   await a.locator('.quote', { hasText: 'hi Bob 你好' }).waitFor();
   await a.locator('body').click({ position: { x: 1, y: 1 } }); // leave the message box
   await a.keyboard.down('v');
-  await a.locator('.conninfo', { hasText: /anon-\w+ · / }).waitFor();
+  await a.locator('.conninfo', { hasText: /anon-[\w-]+ · / }).waitFor();
   await a.keyboard.up('v');
   await a.locator('.conninfo').waitFor({ state: 'hidden' });
   a.once('dialog', (dialog) => dialog.accept());
   const mine = a.locator('.msg.own', { hasText: 'hi Bob 你好' });
   await mine.hover();
   await mine.getByRole('button', { name: 'Delete' }).click();
-  await b.locator('.msg.gone', { hasText: /anon-\w+ deleted a message/ }).waitFor();
+  await b.locator('.msg.gone', { hasText: /anon-[\w-]+ deleted a message/ }).waitFor();
   await b.locator('.quote.gone', { hasText: 'Deleted message' }).waitFor();
 
   // The creator owns the room: the member list says so, and offers owner actions.
@@ -317,7 +408,7 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
   await a.locator('.call .tile').waitFor();
   await b.locator('.call-banner button').click(); // Bob joins: both are shown, camera or not
   await a.locator('.call .tile').nth(1).waitFor();
-  // The fake microphones beep: Bob's tile gets the speaking outline on Ada's screen.
+  // Bob's microphone is a tone: his tile gets the speaking outline on Ada's screen.
   await a.locator('.call .tile:not(.self).speaking').waitFor({ timeout: 15000 });
   const fits = () => a.locator('.call-grid').evaluate((grid) => {
     const g = grid.getBoundingClientRect();
@@ -417,14 +508,21 @@ await check('audio/video call: media flows both ways, mute and camera, leave', a
   assert.deepEqual(joined, [{ audio: true, video: true }, { audio: true, video: true }]);
   // Play the other side's stream in a <video>: decoded frames prove media really arrives.
   const framesDecoded = (p) => p.evaluate(async () => {
+    // Frames shown so far: counted with requestVideoFrameCallback (Chromium, Firefox and
+    // WebKit all have it; their own decoded-frame counters differ for streams).
+    window.framesOf ??= (v) => (v.requestVideoFrameCallback ? window.frames
+      : v.getVideoPlaybackQuality().totalVideoFrames);
     if (!window.probe) {
       const [{ stream }] = window.room.call.participants;
       window.probe = Object.assign(document.createElement('video'), { muted: true });
       window.probe.srcObject = stream;
       document.body.append(window.probe);
+      window.frames = 0;
+      const count = () => { window.frames++; window.probe.requestVideoFrameCallback(count); };
+      window.probe.requestVideoFrameCallback?.(count);
       await window.probe.play();
     }
-    return window.probe.getVideoPlaybackQuality().totalVideoFrames;
+    return window.framesOf(window.probe);
   });
   for (const p of [a, b]) {
     await p.waitForFunction(
@@ -432,7 +530,7 @@ await check('audio/video call: media flows both ways, mute and camera, leave', a
     );
     const first = await framesDecoded(p);
     await p.waitForFunction(
-      (n) => window.probe.getVideoPlaybackQuality().totalVideoFrames > n + 5, first,
+      (n) => window.framesOf(window.probe) > n + 5, first,
       { timeout: 15000 },
     );
     assert.equal(
@@ -448,7 +546,7 @@ await check('audio/video call: media flows both ways, mute and camera, leave', a
   await b.waitForFunction(() => [...window.room.call.members.values()][0].v === true);
   const before = await framesDecoded(b);
   await b.waitForFunction(
-    (n) => window.probe.getVideoPlaybackQuality().totalVideoFrames > n + 5, before,
+    (n) => window.framesOf(window.probe) > n + 5, before,
     { timeout: 15000 },
   );
   await a.evaluate(() => window.room.call.leave());
@@ -457,9 +555,113 @@ await check('audio/video call: media flows both ways, mute and camera, leave', a
   await Promise.all([a, b].map((p) => p.context().close()));
 });
 
+// ---- 3c. The engine itself: two rooms in ONE page (no second page to find, so this runs in
+// every browser, WebKit included). Every step is tried and reported, so one run shows
+// everything that does not work in a browser, not just the first thing.
+await single('two rooms in one page: text, edit, reaction, image, delete', async () => {
+  const page = await newPage();
+  await page.goto(`${base}/test/e2e/blank.html`);
+  const results = await page.evaluate(async () => {
+    const results = [];
+    const step = async (name, fn) => {
+      try { results.push({ name, ok: true, detail: (await fn()) ?? '' }); } catch (err) {
+        results.push({ name, ok: false, detail: `${err?.name}: ${err?.message}` });
+      }
+    };
+    const until = async (fn, ms = 20000) => {
+      const t0 = performance.now();
+      while (!fn()) {
+        if (performance.now() - t0 > ms) throw new Error('timed out');
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    };
+    const { Room } = await import('/src/chat/room.js');
+    const { DEFAULTS } = await import('/src/config.js');
+    const { MemoryKV } = await import('/src/store/kv.js');
+    const { loadIdentity } = await import('/src/crypto/identity.js');
+    const { decodeCode } = await import('/src/net/handshake.js');
+    const open = async (name, secret) => {
+      const kv = new MemoryKV();
+      return Room.open({
+        identity: await loadIdentity(kv), label: name, kv, iceServers: () => [], secret,
+        settings: { ...DEFAULTS, name, brokersEnabled: false, imagePreviews: 'auto',
+          gatherTimeoutMs: 1500 },
+      });
+    };
+    const find = (room, id) => room.log.timeline().find((e) => e.id === id);
+    let a; let b;
+    await step('pair two rooms with a code', async () => {
+      const { newRoomSecret } = await import('/src/crypto/room-keys.js');
+      a = await open('Ada', newRoomSecret());
+      const { code } = await a.createInvite();
+      b = await open('Bob', decodeCode(code).roomSecret);
+      const reply = await b.answerOffer(decodeCode(code));
+      await a.acceptAnswer(decodeCode(reply.code));
+      await until(() => [a, b].every((r) => r.peerList.some((p) => p.state === 'p2p')));
+    });
+    if (!results[0].ok) return results;
+    let hello;
+    await step('text arrives', async () => {
+      hello = await a.sendText('hello Bob');
+      await until(() => b.log.has(hello.id));
+    });
+    await step('edit arrives', async () => {
+      await a.editMessage(hello.id, 'hello Bob (edited)');
+      await until(() => b.log.textOf(find(b, hello.id)) === 'hello Bob (edited)');
+    });
+    await step('reaction arrives', async () => {
+      await b.react(hello.id, '👍');
+      await until(() => a.log.overlay().reactions.get(hello.id)?.has('👍'));
+    });
+    const noise = new File(['x'], 'x'); // replaced below; keeps `file` defined if the step fails
+    let file = noise;
+    let shared;
+    await step('image: the sender makes thumbnail and preview', async () => {
+      const canvas = document.createElement('canvas');
+      [canvas.width, canvas.height] = [1200, 800];
+      const context = canvas.getContext('2d');
+      const pixels = context.createImageData(1200, 800);
+      for (let i = 0; i < pixels.data.length; i += 4) {
+        pixels.data[i] = (i * 7) & 255;
+        pixels.data[i + 1] = (i * 13) & 255;
+        pixels.data[i + 2] = (i * 29) & 255;
+        pixels.data[i + 3] = 255;
+      }
+      context.putImageData(pixels, 0, 0);
+      const png = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+      file = new File([png], 'noise.png', { type: 'image/png' });
+      shared = await a.shareFile(file);
+      if (!shared.body.img) throw new Error('no thumbnail: the image went as a plain file');
+      return `${shared.body.img.w}x${shared.body.img.h}, ${Object.keys(shared.body.img).join(',')}`;
+    });
+    await step('image: the other side fetches the preview', async () => {
+      await until(() => b.log.has(shared.id));
+      const blob = await b.previewBlob(find(b, shared.id));
+      if (!blob?.size) throw new Error('no preview came');
+      const bitmap = await createImageBitmap(blob);
+      return `${blob.type}, ${blob.size} bytes, ${bitmap.width}x${bitmap.height}`;
+    });
+    await step('image: the original downloads', async () => {
+      const blob = await b.downloadFile(find(b, shared.id));
+      if (blob.size !== file.size) throw new Error(`${blob.size} bytes instead of ${file.size}`);
+    });
+    await step('delete arrives', async () => {
+      await a.deleteMessage(hello.id);
+      await until(() => b.log.isGone(hello.id));
+    });
+    return results;
+  });
+  for (const { ok, name, detail } of results) {
+    console.log(`     ${ok ? 'ok  ' : 'FAIL'} ${name}${detail ? ` - ${detail}` : ''}`);
+  }
+  assert.deepEqual(results.filter((r) => !r.ok).map((r) => r.name), []);
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
+});
+
 // ---- 4. Lab page finishes without failures that are not network related
 // -------------------------------
-await check('lab page runs the loopback pairing', async () => {
+await single('lab page runs the loopback pairing', async () => {
   const page = await newPage();
   await page.goto(`${base}/lab/lab.html`);
   await page.waitForFunction(() => window.labDone, null, { timeout: 30000 });

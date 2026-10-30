@@ -27,10 +27,17 @@ export class Identity {
 export async function loadIdentity(kv) {
   let pair = await kv.get('identity');
   if (!pair) {
+    const generate = () => crypto.subtle.generateKey(ALG, false, ['sign', 'verify']);
     try {
-      pair = await crypto.subtle.generateKey(ALG, false, ['sign', 'verify']);
+      pair = await generate();
     } catch {
-      throw new Error('This browser lacks Ed25519 in WebCrypto. Please update it.');
+      try { // seen once on a freshly started WebKit: the first call failed, the next worked
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        pair = await generate();
+      } catch (err) {
+        throw new Error(`This browser lacks Ed25519 in WebCrypto. Please update it. (${err.name})`,
+          { cause: err });
+      }
     }
     await kv.put('identity', pair);
   }

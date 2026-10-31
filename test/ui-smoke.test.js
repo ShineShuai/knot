@@ -132,10 +132,10 @@ test('ui: pasting a recovery code reopens the room and waits for a member', asyn
   const code = await room.newRecoveryCode();
   const b = await person('Ada, new phone');
   b.ui.openJoin(code);
-  await until(() => b.model.rooms.size === 1, 3000);
+  // The room is listed before the recovery code is armed (an async key derivation in between).
+  await until(() => [...b.model.rooms.values()].some((r) => r.recovering), 3000);
   const [recovered] = [...b.model.rooms.values()];
   rooms.push(recovered);
-  assert.equal(recovered.recovering, true);
   assert.equal(recovered.isOwner, false); // not until a member shows them the chain
   assert.match(b.root.querySelector('dialog').textContent, /Looking for a member/);
   b.ui.openJoin('knot-rk1-AAAA');

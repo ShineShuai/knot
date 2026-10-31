@@ -2,15 +2,15 @@
 // Output: ephemeral public key (32) || iv (12) || ciphertext. Only the holder of the
 // matching private key can open it; who sent it is proven separately (a signature).
 import { concat, randomBytes, utf8 } from '../util/bytes.js';
-import { hasNative, softNacl } from './curves.js';
+import { hasNative, nacl } from './curves.js';
 
 const ALG = { name: 'X25519' };
 
 /** `privateKey` is a CryptoKey, or without WebCrypto X25519 the 32-byte scalar. */
 export async function newBoxKey() {
-  if (!(await hasNative(ALG.name))) {
+  if (!(await hasNative(ALG.name))) { // LEGACY-CURVES
     const privateKey = randomBytes(32);
-    return { privateKey, pub: (await softNacl()).scalarMult.base(privateKey) };
+    return { privateKey, pub: nacl.scalarMult.base(privateKey) };
   }
   const pair = await crypto.subtle.generateKey(ALG, false, ['deriveBits']);
   const pub = new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey));
@@ -18,8 +18,8 @@ export async function newBoxKey() {
 }
 
 async function sharedSecret(privateKey, peerPub) {
-  if (privateKey instanceof Uint8Array) {
-    const bits = (await softNacl()).scalarMult(privateKey, peerPub);
+  if (privateKey instanceof Uint8Array) { // LEGACY-CURVES
+    const bits = nacl.scalarMult(privateKey, peerPub);
     if (bits.every((b) => b === 0)) throw new Error('Weak public key'); // WebCrypto refuses too
     return bits;
   }

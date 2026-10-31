@@ -1,8 +1,10 @@
 // Long-lived device identity: an Ed25519 key pair kept in IndexedDB as a non-extractable
-// CryptoKey. Where WebCrypto lacks Ed25519 (iOS 16) it is a 32-byte seed signed with TweetNaCl:
-// readable by any script of this origin, so weaker. The peer id is a hash of the public key.
+// CryptoKey. LEGACY-CURVES: where WebCrypto lacks Ed25519 (iOS 16) it is a 32-byte seed signed
+// with TweetNaCl, kept encrypted in IndexedDB (soft-key.js) and in memory while the page runs:
+// weaker. It moves into WebCrypto once the browser can. The peer id is a hash of the public key.
 import { concat, fromB64u, randomBytes, toB64u, sha256 } from '../util/bytes.js';
-import { hasNative, softNacl, yieldToUi } from './curves.js';
+import { hasNative, nacl, yieldToUi } from './curves.js';
+import { openSeed, sealSeed } from './soft-key.js';
 
 const ALG = 'Ed25519';
 
@@ -22,7 +24,7 @@ export class Identity {
   }
   async sign(data) {
     if (this.privateKey instanceof Uint8Array) {
-      return (await softNacl()).sign.detached(data, this.privateKey);
+      return nacl.sign.detached(data, this.privateKey);
     }
     return new Uint8Array(await crypto.subtle.sign(ALG, this.privateKey, data));
   }
@@ -30,19 +32,37 @@ export class Identity {
 
 /** Load the stored identity or create one. `kv` is a store from store/kv.js. */
 export async function loadIdentity(kv) {
-  let pair = await kv.get('identity');
-  if (pair?.seed) return identityFromSeed(pair.seed); // made where WebCrypto lacks Ed25519
-  if (!pair) {
-    if (!(await hasNative(ALG))) {
+  let stored = await kv.get('identity');
+  if (stored?.seed) await kv.put('identity', stored = await sealSeed(stored.seed)); // LEGACY-CURVES
+  if (stored?.wrap) return loadSealed(kv, stored);
+  if (!stored) {
+    if (!(await hasNative(ALG))) { // LEGACY-CURVES
       const seed = randomBytes(32);
-      await kv.put('identity', { seed });
+      await kv.put('identity', await sealSeed(seed));
       return identityFromSeed(seed);
     }
-    pair = await crypto.subtle.generateKey(ALG, false, ['sign', 'verify']);
-    await kv.put('identity', pair);
+    stored = await crypto.subtle.generateKey(ALG, false, ['sign', 'verify']);
+    await kv.put('identity', stored);
   }
-  const pub = new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey));
-  return new Identity(pair.privateKey, pub, await peerIdOf(pub));
+  const pub = new Uint8Array(await crypto.subtle.exportKey('raw', stored.publicKey));
+  return new Identity(stored.privateKey, pub, await peerIdOf(pub));
+}
+
+/** LEGACY-CURVES: an identity made where WebCrypto lacks Ed25519. If the browser has caught up
+ *  (an OS update), the key moves into WebCrypto, non-extractable, and the seed is dropped. */
+async function loadSealed(kv, stored) {
+  const seed = await openSeed(stored);
+  const key = await identityFromSeed(seed);
+  if (!(await hasNative(ALG))) return key;
+  try {
+    const der = concat(PKCS8_PREFIX, seed);
+    const privateKey = await crypto.subtle.importKey('pkcs8', der, ALG, false, ['sign']);
+    const publicKey = await crypto.subtle.importKey('raw', key.pub, ALG, true, ['verify']);
+    await kv.put('identity', { privateKey, publicKey });
+    return new Identity(privateKey, key.pub, key.id);
+  } catch {
+    return key; // stays as it was; tried again at the next start
+  }
 }
 
 const PKCS8_PREFIX = Uint8Array.from(
@@ -53,7 +73,7 @@ const PKCS8_PREFIX = Uint8Array.from(
  *  same key on any device, so the code can be written down. */
 export async function identityFromSeed(seed) {
   if (!(await hasNative(ALG))) {
-    const { secretKey } = (await softNacl()).sign.keyPair.fromSeed(seed);
+    const { secretKey } = nacl.sign.keyPair.fromSeed(seed);
     const pub = secretKey.slice(32);
     return new Identity(secretKey, pub, await peerIdOf(pub));
   }
@@ -72,7 +92,6 @@ async function verifySoft(pub, sig, data) {
   let s = 0n;
   for (let i = 63; i >= 32; i--) s = (s << 8n) | BigInt(sig[i]);
   if (s >= L) return false;
-  const nacl = await softNacl();
   await yieldToUi(); // a batch of these must not freeze the page
   return nacl.sign.detached.verify(data, sig, pub);
 }

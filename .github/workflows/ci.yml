@@ -26,7 +26,7 @@ jobs:
         with:
           node-version: 22
       - run: npm test
-      - run: npm run test:soft
+      - run: npm run test:soft # LEGACY-CURVES
 
   e2e:
     name: browser tests (${{ matrix.browser }})

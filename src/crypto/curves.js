@@ -1,6 +1,12 @@
+// LEGACY-CURVES: review and removal plan: LEGACY_CURVES_REVIEW_BY in config.js.
 // Curve25519 for the Ed25519 identity and the X25519 sealed boxes. WebCrypto does it where the
 // browser has it (Safari 17, Firefox 129, Chrome 137); older ones (iOS 16, which some iPads
-// cannot leave) use TweetNaCl, pure JS, fetched only when needed. Same wire formats either way.
+// cannot leave) use the bundled TweetNaCl, pure JS. Same wire formats either way. It is
+// imported statically, not on demand: it must arrive with the app (flaky networks, offline).
+import nacl from '../vendor/nacl-fast.js';
+
+export { nacl };
+
 const USAGES = { Ed25519: ['sign', 'verify'], X25519: ['deriveBits'] };
 const probes = new Map();
 let forced = false;
@@ -22,16 +28,6 @@ export function hasNative(name) {
   if (forced) return Promise.resolve(false);
   if (!probes.has(name)) probes.set(name, probe(name));
   return probes.get(name);
-}
-
-let loading;
-/** TweetNaCl, loaded on first use. */
-export function softNacl() {
-  loading ??= import('../vendor/nacl-fast.js').then((m) => m.default, (err) => {
-    loading = undefined; // offline just now: try again next time
-    throw err;
-  });
-  return loading;
 }
 
 /** Let the page draw between two heavy synchronous steps (pure-JS crypto on a slow device). */

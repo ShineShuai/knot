@@ -1,10 +1,11 @@
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { forceSoftCurves, hasNative, softNacl } from '../src/crypto/curves.js';
+import { forceSoftCurves, hasNative, nacl } from '../src/crypto/curves.js';
 import { identityFromSeed, loadIdentity, verifySignature } from '../src/crypto/identity.js';
 import { newBoxKey, openBox, sealBox } from '../src/crypto/box.js';
 import { MemoryKV } from '../src/store/kv.js';
-import { fromB64u, randomBytes, toB64u, utf8 } from '../src/util/bytes.js';
+import { randomBytes, utf8 } from '../src/util/bytes.js';
+import { openSeed, sealSeed } from '../src/crypto/soft-key.js';
 
 const hex = (s) => Uint8Array.from(s.match(/../g) ?? [], (b) => parseInt(b, 16));
 // Restore what the process started with (`npm run test:soft` preloads the forced mode).
@@ -44,7 +45,6 @@ test('X25519 without WebCrypto: RFC 7748 section 6.1', async () => {
     'de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f',
     '4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742',
   ].map(hex);
-  const nacl = await softNacl();
   assert.deepEqual(nacl.scalarMult.base(alice), alicePub);
   assert.deepEqual(nacl.scalarMult(alice, bobPub), shared);
 });
@@ -99,21 +99,50 @@ test('soft box refuses an all-zero (weak) public key', async () => {
   await assert.rejects(soft(() => openBox(key.privateKey, bad, utf8.encode('c'))), /Weak/);
 });
 
-test('soft identity is stored as a seed and comes back as the same identity', async () => {
+test('soft identity is stored sealed, not as a bare seed, and comes back the same', async () => {
   await soft(async () => {
     const kv = new MemoryKV();
     const first = await loadIdentity(kv);
-    assert.equal((await kv.get('identity')).seed.length, 32);
+    const stored = await kv.get('identity');
+    assert.equal(stored.seed, undefined);
+    assert.equal(stored.wrap.extractable, false);
+    assert.equal(stored.ct.length, 32 + 16); // seed + GCM tag
+    assert.notDeepEqual(stored.ct.subarray(0, 32), first.privateKey.subarray(0, 32));
     assert.equal((await loadIdentity(kv)).id, first.id);
     const sig = await first.sign(utf8.encode('m'));
     assert.ok(await verifySignature(first.pub, sig, utf8.encode('m')));
-    assert.equal(toB64u(fromB64u(first.id)), first.id);
   });
-  // The same browser later gains WebCrypto (an iOS update): the identity stays.
+});
+
+test('sealSeed round-trips and a wrong key does not open it', async () => {
+  const seed = randomBytes(32);
+  const sealed = await sealSeed(seed);
+  assert.deepEqual(await openSeed(sealed), seed);
+  await assert.rejects(openSeed({ ...sealed, wrap: (await sealSeed(seed)).wrap }));
+});
+
+test('a bare seed stored by an earlier build is sealed on load', async () => {
+  const seed = randomBytes(32);
+  const kv = new MemoryKV();
+  await kv.put('identity', { seed });
+  const id = await soft(() => loadIdentity(kv));
+  assert.equal(id.id, (await soft(() => identityFromSeed(seed))).id);
+  assert.equal((await kv.get('identity')).seed, undefined);
+  assert.ok((await kv.get('identity')).wrap);
+});
+
+test('when the browser gains WebCrypto Ed25519, the key moves in and keeps its id', async () => {
+  const kv = new MemoryKV();
+  const before = await soft(() => loadIdentity(kv));
+  const sig = await before.sign(utf8.encode('m'));
   await native(async () => {
-    const kv = new MemoryKV();
-    await soft(() => loadIdentity(kv));
-    const before = await soft(() => loadIdentity(kv));
-    assert.equal((await loadIdentity(kv)).id, before.id);
+    const after = await loadIdentity(kv);
+    assert.equal(after.id, before.id);
+    assert.ok(after.privateKey instanceof CryptoKey);
+    assert.equal(after.privateKey.extractable, false);
+    assert.deepEqual(await after.sign(utf8.encode('m')), sig);
+    const stored = await kv.get('identity');
+    assert.ok(stored.privateKey && stored.publicKey && !stored.wrap);
+    assert.equal((await loadIdentity(kv)).id, before.id); // and again from the stored pair
   });
 });

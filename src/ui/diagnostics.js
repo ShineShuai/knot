@@ -57,6 +57,7 @@ export async function featureLines(env = globalThis, kv = null) {
     ['WebRTC', yes(env.RTCPeerConnection)],
     ['WebCrypto Ed25519', ed],
     ['WebCrypto X25519', x],
+    // LEGACY-CURVES
     ['Curve25519 used', ed === 'yes' && x === 'yes' ? 'WebCrypto' : 'JS fallback (slower)'],
     ['createImageBitmap', yes(typeof env.createImageBitmap === 'function')],
     ['image encoding', await attempt(canvas)],

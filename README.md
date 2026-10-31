@@ -1,7 +1,7 @@
 # knot - serverless peer-to-peer chat room
 
 Browser-only chat: WebRTC data channels between devices, no application server,
-no build step, no dependencies. Messages are signed, rooms are end-to-end sealed
+no build step, no dependencies (one vendored fallback, see below). Messages are signed, rooms are end-to-end sealed
 wherever a third party is involved, and the app still works when public
 signaling brokers are blocked (manual QR / text pairing).
 
@@ -60,6 +60,8 @@ if no broker is reachable; with brokers, reconnection is automatic).
       main.js              boot
       util/                bytes (base64url, binary writer/reader), hlc, rate limiter
       crypto/identity.js   Ed25519 device key (non-extractable, IndexedDB)
+      crypto/curves.js     WebCrypto or TweetNaCl for Ed25519 / X25519 (feature-probed)
+      vendor/nacl-fast.js  TweetNaCl 0.14.5, public domain; loaded only without WebCrypto curves
       crypto/room-keys.js  room secret -> HKDF -> topic id + AES-GCM key
       crypto/delegation.js certificates of linked devices
       net/sdp.js           SDP <-> compact SdpInfo (data-channel-only)
@@ -115,6 +117,12 @@ if no broker is reachable; with brokers, reconnection is automatic).
 
 ## Design notes
 
+* **Old browsers:** WebCrypto got Ed25519 and X25519 in Safari 17 / iOS 17, Firefox 129 and
+  Chrome 137 (every iOS browser is WebKit, so iOS 16 has neither). Without them the app signs,
+  verifies and seals with the vendored TweetNaCl: same formats, so old and new devices talk to
+  each other. Costs: slower (tens of ms per signature on an old iPad) and the identity is a
+  seed in IndexedDB that scripts of this origin can read, not a non-extractable key.
+  `npm run test:soft` runs the unit tests this way. Settings > Diagnostics shows which is used.
 * **Identity:** each device has an Ed25519 key; peer id = first 8 bytes of
   SHA-256(public key). Handshakes are signed, so the identity vouches for the
   DTLS fingerprint. Chat messages are signed and carry their author; any peer

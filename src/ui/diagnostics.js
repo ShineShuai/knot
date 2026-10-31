@@ -50,11 +50,14 @@ export async function featureLines(env = globalThis, kv = null) {
     await kv.delete('diag');
     return back?.byteLength === 3 ? 'yes' : 'wrong data back';
   };
+  const ed = subtle ? await key('Ed25519', ['sign', 'verify']) : 'NO';
+  const x = subtle ? await key({ name: 'X25519' }, ['deriveBits']) : 'NO';
   const rows = [
     ['secure context', yes(env.isSecureContext)],
     ['WebRTC', yes(env.RTCPeerConnection)],
-    ['WebCrypto Ed25519', subtle ? await key('Ed25519', ['sign', 'verify']) : 'NO'],
-    ['WebCrypto X25519', subtle ? await key({ name: 'X25519' }, ['deriveBits']) : 'NO'],
+    ['WebCrypto Ed25519', ed],
+    ['WebCrypto X25519', x],
+    ['Curve25519 used', ed === 'yes' && x === 'yes' ? 'WebCrypto' : 'JS fallback (slower)'],
     ['createImageBitmap', yes(typeof env.createImageBitmap === 'function')],
     ['image encoding', await attempt(canvas)],
     ['IndexedDB buffers', kv ? await attempt(store) : 'n/a'],

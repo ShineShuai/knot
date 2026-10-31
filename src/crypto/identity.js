@@ -1,6 +1,8 @@
-// Long-lived device identity: an Ed25519 key pair kept in IndexedDB as a
-// non-extractable CryptoKey. The peer id is a short hash of the public key.
-import { concat, fromB64u, toB64u, sha256 } from '../util/bytes.js';
+// Long-lived device identity: an Ed25519 key pair kept in IndexedDB as a non-extractable
+// CryptoKey. Where WebCrypto lacks Ed25519 (iOS 16) it is a 32-byte seed signed with TweetNaCl:
+// readable by any script of this origin, so weaker. The peer id is a hash of the public key.
+import { concat, fromB64u, randomBytes, toB64u, sha256 } from '../util/bytes.js';
+import { hasNative, softNacl, yieldToUi } from './curves.js';
 
 const ALG = 'Ed25519';
 
@@ -11,7 +13,7 @@ export async function peerIdOf(pub) {
 export class Identity {
   /** `id` names this key (it is what links and the network know us by). `member`: who we speak
    *  as in rooms: ourselves, unless this is a linked device (`cert`: see delegation.js). */
-  constructor(privateKey, pub, id) {
+  constructor(privateKey, pub, id) { // privateKey: CryptoKey, or the 64-byte NaCl key
     this.privateKey = privateKey;
     this.pub = pub;
     this.id = id;
@@ -19,6 +21,9 @@ export class Identity {
     this.cert = null;
   }
   async sign(data) {
+    if (this.privateKey instanceof Uint8Array) {
+      return (await softNacl()).sign.detached(data, this.privateKey);
+    }
     return new Uint8Array(await crypto.subtle.sign(ALG, this.privateKey, data));
   }
 }
@@ -26,19 +31,14 @@ export class Identity {
 /** Load the stored identity or create one. `kv` is a store from store/kv.js. */
 export async function loadIdentity(kv) {
   let pair = await kv.get('identity');
+  if (pair?.seed) return identityFromSeed(pair.seed); // made where WebCrypto lacks Ed25519
   if (!pair) {
-    const generate = () => crypto.subtle.generateKey(ALG, false, ['sign', 'verify']);
-    try {
-      pair = await generate();
-    } catch {
-      try { // seen once on a freshly started WebKit: the first call failed, the next worked
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        pair = await generate();
-      } catch (err) {
-        throw new Error(`This browser lacks Ed25519 in WebCrypto. Please update it. (${err.name})`,
-          { cause: err });
-      }
+    if (!(await hasNative(ALG))) {
+      const seed = randomBytes(32);
+      await kv.put('identity', { seed });
+      return identityFromSeed(seed);
     }
+    pair = await crypto.subtle.generateKey(ALG, false, ['sign', 'verify']);
     await kv.put('identity', pair);
   }
   const pub = new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey));
@@ -52,6 +52,11 @@ const PKCS8_PREFIX = Uint8Array.from(
 /** The identity a 32-byte seed stands for. Used for recovery codes: the same seed gives the
  *  same key on any device, so the code can be written down. */
 export async function identityFromSeed(seed) {
+  if (!(await hasNative(ALG))) {
+    const { secretKey } = (await softNacl()).sign.keyPair.fromSeed(seed);
+    const pub = secretKey.slice(32);
+    return new Identity(secretKey, pub, await peerIdOf(pub));
+  }
   const der = concat(PKCS8_PREFIX, seed);
   const key = await crypto.subtle.importKey('pkcs8', der, ALG, true, ['sign']);
   const pub = fromB64u((await crypto.subtle.exportKey('jwk', key)).x);
@@ -59,9 +64,22 @@ export async function identityFromSeed(seed) {
 }
 
 const verifyKeys = new Map();
+const L = (1n << 252n) + 27742317777372353535851937790883648493n; // order of the base point
+
+/** As WebCrypto: S must be below L, or `sig` has a twin that verifies too. */
+async function verifySoft(pub, sig, data) {
+  if (sig.length !== 64) return false;
+  let s = 0n;
+  for (let i = 63; i >= 32; i--) s = (s << 8n) | BigInt(sig[i]);
+  if (s >= L) return false;
+  const nacl = await softNacl();
+  await yieldToUi(); // a batch of these must not freeze the page
+  return nacl.sign.detached.verify(data, sig, pub);
+}
 
 export async function verifySignature(pub, sig, data) {
   try {
+    if (!(await hasNative(ALG))) return await verifySoft(pub, sig, data);
     const cacheKey = toB64u(pub);
     if (!verifyKeys.has(cacheKey)) {
       verifyKeys.set(cacheKey, await crypto.subtle.importKey('raw', pub, ALG, false, ['verify']));

@@ -53,6 +53,7 @@ export const DEFAULTS = Object.freeze({
   messagesPerSecond: 20,
   callMaxParticipants: 6, // a mesh: every extra person adds a stream to send and to receive
   callRetryMs: 1000, // first pause before a dropped call connection is offered again
+  callAloneMs: 5 * 60 * 1000, // leave a call this long after the last other person left (0: never)
 });
 
 export async function loadSettings(kv) {

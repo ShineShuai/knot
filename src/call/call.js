@@ -50,6 +50,7 @@ export class CallManager extends Emitter {
   #audio = null; #video = null; #screen = null; #localStream = null;
   #mic = { track: null, stream: null };
   #generation = 0; #joining = false; #adapting = false;
+  #aloneSince = null; // when the last other person left (null: not alone, or not in the call)
   #sentVideo = null; #stopAdapt = null; #group = new QualityGroup();
   #send; #opts; #media; #now; #every;
 
@@ -127,7 +128,7 @@ export class CallManager extends Emitter {
       this.#audio = audio;
       this.#setVideo(camera);
       this.joined = true;
-      this.#stopAdapt = this.#every(() => this.adapt(), ADAPT_MS);
+      this.#stopAdapt = this.#every(() => { this.checkAlone(); return this.adapt(); }, ADAPT_MS);
       this.#broadcast(this.#state());
       this.#reconcile();
       this.emit('change');
@@ -140,6 +141,7 @@ export class CallManager extends Emitter {
     this.#generation++;
     if (!this.joined) return;
     this.joined = false;
+    this.#aloneSince = null;
     this.#stopAdapt?.();
     this.#stopAdapt = null;
     this.#broadcast({ k: 'out' });
@@ -251,6 +253,17 @@ export class CallManager extends Emitter {
   }
 
   #broadcast(frame) { for (const id of this.#up) this.#send(id, frame); }
+
+  /** Leave once nobody else has been in the call for `callAloneMs` (a timer calls this) and
+   *  emit 'alone': nobody is left to hear us, yet the devices and the uplink stay held. */
+  checkAlone() {
+    if (!this.joined || this.members.size) { this.#aloneSince = null; return; }
+    const limit = this.#opts.settings.callAloneMs;
+    this.#aloneSince ??= this.#now();
+    if (!(limit > 0) || this.#now() - this.#aloneSince < limit) return;
+    this.leave();
+    this.emit('alone');
+  }
 
   // ---- peers (called by the room) ------------------------------------------------------
 

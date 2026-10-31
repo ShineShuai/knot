@@ -441,3 +441,61 @@ test('connections that share an uplink step down one at a time', async () => {
   await step(8000); // the other one, now
   assert.deepEqual(rungs(), [2, 2]);
 });
+
+test('alone in the call for callAloneMs: we leave, release the devices and say so', async () => {
+  const [a] = await party(1, { extra: { callAloneMs: 60_000 } });
+  const { call } = a.room;
+  let said = 0;
+  call.on('alone', () => said++);
+  await call.join({ video: true });
+  call.checkAlone(); // the timer's first look: the clock starts here
+  a.clock.t = 59_999;
+  call.checkAlone();
+  assert.equal(call.joined, true);
+  assert.equal(said, 0);
+  a.clock.t = 60_000;
+  call.checkAlone();
+  assert.equal(call.joined, false);
+  assert.equal(said, 1);
+  assert.ok(a.media.tracks.every((t) => t.stopped));
+  call.checkAlone(); // not in a call: nothing more to do
+  assert.equal(said, 1);
+});
+
+test('the alone clock restarts whenever someone else is in the call', async () => {
+  const [a, b] = await party(2, { extra: { callAloneMs: 60_000 } });
+  await Promise.all([a.room.call.join(), b.room.call.join()]);
+  await until(() => connected(a, 1) && connected(b, 1));
+  a.clock.t = 50_000;
+  a.room.call.checkAlone(); // not alone: no clock
+  b.room.call.leave();
+  await until(() => a.room.call.members.size === 0);
+  a.clock.t = 100_000;
+  a.room.call.checkAlone(); // alone from here on
+  a.clock.t = 159_999;
+  a.room.call.checkAlone();
+  assert.equal(a.room.call.joined, true);
+  await b.room.call.join(); // company again: the clock is dropped
+  await until(() => a.room.call.members.has(b.id));
+  a.clock.t = 170_000;
+  a.room.call.checkAlone();
+  b.room.call.leave();
+  await until(() => a.room.call.members.size === 0);
+  a.clock.t = 200_000;
+  a.room.call.checkAlone();
+  a.clock.t = 229_999; // 60 s after 170 s would be 230 s, 60 s after the new start is 260 s
+  a.room.call.checkAlone();
+  assert.equal(a.room.call.joined, true);
+  a.clock.t = 260_000;
+  a.room.call.checkAlone();
+  assert.equal(a.room.call.joined, false);
+});
+
+test('callAloneMs: 0 keeps a lone call open', async () => {
+  const [a] = await party(1, { extra: { callAloneMs: 0 } });
+  await a.room.call.join();
+  a.room.call.checkAlone();
+  a.clock.t = 24 * 3600_000;
+  a.room.call.checkAlone();
+  assert.equal(a.room.call.joined, true);
+});

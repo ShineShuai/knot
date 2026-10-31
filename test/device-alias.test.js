@@ -95,3 +95,13 @@ test('the connection bar has one entry per person, with their devices and connec
     'Ada · mac · direct',
   ]);
 });
+
+test('our own other devices are "You" in the connection bar', () => {
+  const row = (device, state, mine) => ({
+    member: 'A', name: 'Ada', device, state, sas: null, mine,
+  });
+  assert.deepEqual(peerEntries([row('phone', 'p2p', true)]).map((e) => e.text),
+    ['You · phone · direct']);
+  assert.deepEqual(peerEntries([row('phone', 'p2p', true), row('mac', 'relay', true)])
+    .map((e) => e.text), ['You · phone direct | mac relay']);
+});

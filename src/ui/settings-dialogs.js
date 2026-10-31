@@ -15,36 +15,43 @@ export class SettingsDialogs {
    *  list of linked devices with "Unlink". */
   async devices() {
     const { model } = this.ui;
-    const linked = await model.linkedDevices();
-    const parts = [];
-    if (model.isLinked) {
-      parts.push(h('p', {}, t('linkedTo', { id: model.identity.member.slice(0, 4) })),
-        h('p', { class: 'muted' }, t('deviceAliasHelp')), this.#deviceList());
-    } else {
-      parts.push(h('h3', {}, t('devices')), linked.length ? h('div', {},
-        h('p', { class: 'muted' }, t('deviceAliasHelp')), this.#deviceList())
-        : h('p', { class: 'muted' }, t('devicesNone')),
-      h('h3', {}, t('linkNew')), h('p', {}, t('linkNewHelp')), this.#linkNewDevice());
-      parts.push(h('h3', {}, t('linkThis')), h('p', {}, t('linkThisHelp')), this.#linkThisDevice());
-    }
+    const holder = h('div'); // the list of devices; drawn again when a device is added
+    const refresh = () => holder.replaceChildren(...this.#devicesSection());
+    refresh();
+    const parts = model.isLinked
+      ? [h('p', {}, t('linkedTo', { id: model.identity.member.slice(0, 4) })), holder,
+        this.#separate()]
+      : [h('h3', {}, t('devices')), holder,
+        h('h3', {}, t('linkNew')), h('p', {}, t('linkNewHelp')), this.#linkNewDevice(refresh),
+        h('h3', {}, t('linkThis')), h('p', {}, t('linkThisHelp')), this.#linkThisDevice()];
     this.ui.kit.open(t('devices'), ...parts);
+  }
+
+  /** The devices with their aliases: edited here, applied by Save; Cancel (or the close button)
+   *  drops the edits. */
+  #devicesSection() {
+    const { model } = this.ui;
+    if (!model.isLinked && model.deviceRows().length < 2) {
+      return [h('p', { class: 'muted' }, t('devicesNone'))];
+    }
+    const list = this.#deviceList();
+    return [h('p', { class: 'muted' }, t('deviceAliasHelp')), list.node,
+      h('div', { class: 'actions' },
+        h('button', { class: 'primary', onclick: list.save }, t('save')),
+        h('button', { onclick: () => this.ui.dialog.close() }, t('cancel')))];
   }
 
   /** All devices of this identity, each with an alias to edit and, except the main device
    *  and this one, an Unlink: any device may do either to any other. */
   #deviceList() {
     const { model } = this.ui;
-    return h('ul', { class: 'devices-list' }, ...model.deviceRows().map((row) => {
+    const fields = [];
+    const node = h('ul', { class: 'devices-list' }, ...model.deviceRows().map((row) => {
       const input = h('input', {
         type: 'text', class: 'device-alias', maxLength: ALIAS_MAX, value: row.alias,
         placeholder: row.main ? t('deviceMain') : '', 'aria-label': t('deviceAlias'),
       });
-      input.addEventListener('change', async () => {
-        try { input.value = await model.setDeviceAlias(row.pub, input.value); } catch (err) {
-          input.value = row.alias;
-          this.ui.notify(t('badSettings', { why: err.message }));
-        }
-      });
+      fields.push({ row, input });
       return h('li', {}, input,
         row.self ? h('span', { class: 'muted' }, t('deviceThis')) : null,
         !row.main && !row.self ? h('button', {
@@ -56,10 +63,31 @@ export class SettingsDialogs {
           },
         }, t('devicesUnlink')) : null);
     }));
+    const save = async () => {
+      try {
+        for (const { row, input } of fields) {
+          if (input.value.trim() !== row.alias) await model.setDeviceAlias(row.pub, input.value);
+        }
+        this.ui.notify(t('devicesSaved'));
+        this.ui.dialog.close();
+      } catch (err) { this.ui.notify(t('badSettings', { why: err.message })); }
+    };
+    return { node, save };
+  }
+
+  /** A linked device leaves the main device and becomes a device of its own. */
+  #separate() {
+    return h('p', {}, h('button', {
+      class: 'ghost',
+      onclick: async () => {
+        if (!confirm(t('leaveLinkConfirm'))) return;
+        try { await this.ui.model.leaveLink(); } catch (err) { this.ui.notify(err.message); }
+      },
+    }, t('leaveLink')));
   }
 
   /** Main device: paste or scan the new device's code, show the answer. */
-  #linkNewDevice() {
+  #linkNewDevice(onLinked) {
     const result = h('div', { class: 'link-result' });
     const input = this.ui.kit.codeInput(t('linkRequestPlaceholder'), async (text) => {
       try {
@@ -69,6 +97,8 @@ export class SettingsDialogs {
             h('strong', { class: 'sas' }, sas)),
           this.ui.kit.copyField(code, 4), this.ui.kit.qr(code),
         );
+        input.area.value = ''; // the next code must not be pasted behind this one
+        onLinked?.(); // the new device is in the list now
       } catch (err) { this.ui.notify(err.message); }
     });
     return h('div', {}, input.node,
@@ -230,6 +260,7 @@ export class SettingsDialogs {
         'div',
         { class: 'actions' },
         h('button', { class: 'primary', onclick: save }, t('saveSettings')),
+        h('button', { onclick: () => this.ui.dialog.close() }, t('cancel')),
         h('a', { class: 'button', href: 'lab/lab.html' }, t('lab')),
       ),
     );

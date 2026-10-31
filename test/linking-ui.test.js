@@ -55,6 +55,8 @@ test('ui: link a phone with two codes, check the digits, then unlink it', async 
   const grant = shown(main)[0].value;
   const digits = dialog(main).querySelector('.sas').textContent;
   assert.match(digits, /^\d{3} \d{3}$/);
+  assert.equal(dialog(main).querySelectorAll('.device-alias').length, 2, 'listed at once');
+  assert.equal(editable(main)[0].value, '', 'the box is free for the next code');
 
   editable(phone).at(-1).value = grant; // and hands the answer back (its last box)
   button(phone, 'Connect').click();
@@ -90,4 +92,40 @@ test('ui: a bad code from the other device is refused', async () => {
   button(phone, 'Connect').click();
   await until(() => /not a valid code/.test(phone.root.querySelector('.toast').textContent));
   assert.equal(find(dialog(phone), 'button', 'Link').length, 0);
+});
+
+async function linkViaUi(main, phone) {
+  await openDevices(main);
+  await openDevices(phone);
+  button(phone, 'Create code').click();
+  await until(() => shown(phone).length === 1);
+  editable(main)[0].value = shown(phone)[0].value;
+  button(main, 'Create link code').click();
+  await until(() => shown(main).length === 1);
+  editable(phone).at(-1).value = shown(main)[0].value;
+  button(phone, 'Connect').click();
+  await until(() => find(dialog(phone), 'button', 'Link').length);
+  button(phone, 'Link').click();
+  await until(() => phone.kv.get('delegate'));
+}
+
+test('ui: aliases change with Save, not with Cancel; Settings can be cancelled', async () => {
+  const [main, phone] = [await person('Ada'), await person('')];
+  location.reload = () => {};
+  await linkViaUi(main, phone);
+  const field = () => dialog(main).querySelectorAll('.device-alias')
+    .find((i) => i.value.startsWith('device-'));
+  await openDevices(main);
+  field().value = 'tablet';
+  button(main, 'Cancel').click();
+  assert.ok(main.model.deviceRows().every((r) => r.alias !== 'tablet'), 'Cancel drops it');
+  await openDevices(main);
+  assert.ok(field(), 'the field shows what is saved');
+  field().value = 'tablet';
+  button(main, 'Save').click();
+  await until(() => main.model.deviceRows().some((r) => r.alias === 'tablet'));
+  await until(() => /saved/i.test(main.root.querySelector('.toast').textContent));
+  find(main.root, 'button', 'Settings')[0].click();
+  assert.ok(button(main, 'Cancel'), 'Settings has Save and Cancel');
+  assert.ok(button(main, 'Save'));
 });

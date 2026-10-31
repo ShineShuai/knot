@@ -21,7 +21,10 @@ const MAX_AGE_MS = 10 * 60 * 1000;
 const MAX_ROOMS = 200;
 const B64U = /^[A-Za-z0-9_-]+$/;
 const text = (...parts) => utf8.encode(parts.join('|'));
-const codeIn = (prefix, input) => new RegExp(`${prefix}([A-Za-z0-9_-]+)`).exec(input ?? '')?.[1];
+/** The code in a text, the last one if there are several (the one just added). */
+const codeIn = (prefix, input) => (
+  [...(input ?? '').matchAll(new RegExp(`${prefix}([A-Za-z0-9_-]+)`, 'g'))].pop()?.[1]
+);
 
 /** The new device asks. `boxPub`: the public half of a one-time key (crypto/box.js). */
 export async function makeLinkRequest(identity, { name, boxPub, now = Date.now() }) {

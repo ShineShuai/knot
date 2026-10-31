@@ -155,17 +155,22 @@ export class Room extends Emitter {
       this.members.get(id) ?? { seen: 0 },
     );
     const owner = (id) => id === this.roster?.owner;
-    const rows = [...this.peers.values()].map(({
-      id, name, state, via, sas, member, device, alias,
-    }) => ({
-      id, name, via, sas, member: member ?? id, owner: owner(member ?? id),
-      device: this.deviceOf(member ?? id, alias ?? device),
-      state: state === 'p2p' || !viaRelay(id) ? state : 'relay',
-    }));
+    const rows = [...this.peers.values()].map((p) => {
+      const seen = this.members.get(p.id); // what its presence said, before any link was up
+      const who = p.member ?? seen?.member ?? p.id;
+      return {
+        id: p.id, name: p.name, via: p.via, sas: p.sas, member: who, owner: owner(who),
+        mine: who === this.identity.member,
+        device: this.deviceOf(who, p.alias ?? seen?.alias ?? p.device ?? seen?.device),
+        state: p.state === 'p2p' || !viaRelay(p.id) ? p.state : 'relay',
+      };
+    });
     for (const [id, m] of this.members) {
       if (!this.peers.has(id) && this.#isFresh(m)) rows.push({
         id, name: m.name, state: viaRelay(id) ? 'relay' : 'seen', via: 'broker', sas: null,
-        member: id, owner: owner(id), device: this.deviceOf(id),
+        member: m.member ?? id, owner: owner(m.member ?? id),
+        mine: (m.member ?? id) === this.identity.member,
+        device: this.deviceOf(m.member ?? id, m.alias ?? m.device),
       });
     }
     return rows;
@@ -893,12 +898,19 @@ export class Room extends Emitter {
   // ---- automatic pairing through brokers
   // --------------------------------------------------------------------
 
-  #announce() { this.#channel?.announce({ pub: this.identity.pub, name: this.#name }); }
+  #announce() {
+    this.#channel?.announce({
+      pub: this.identity.pub, name: this.#name, cert: this.identity.cert,
+      alias: this.identity.alias,
+    });
+  }
 
-  async #onPresence({ id, pub, name }) {
-    if (this.roster?.revoked.has(id)) return;
+  async #onPresence({ id, pub, name, member, device, alias }) {
+    if (this.roster?.revoked.has(member ?? id)) return;
+    if (member && this.#isUnlinked({ d: toB64u(pub) }, member)) return; // a withdrawn device
+    if (member || alias) this.#multi.add(member ?? id);
     const isNew = !this.members.has(id);
-    this.members.set(id, { pub, name, seen: Date.now() });
+    this.members.set(id, { pub, name, seen: Date.now(), member, device, alias });
     if (isNew) { this.#emitPeers(); this.#announceSoon(); }
     const state = this.peers.get(id)?.state;
     // Glare rule: the peer with the smaller id always makes the offer.

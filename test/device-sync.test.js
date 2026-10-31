@@ -14,7 +14,11 @@ import { newRoomSecret } from '../src/crypto/room-keys.js';
 import { MemoryKV } from '../src/store/kv.js';
 import { newIdentity } from './helpers.js';
 import { FakeBroker, FakeLink, until } from './fakes.js';
-import { link, makeRoom } from './room-kit.js';
+import { readLinkRequest } from '../src/chat/devices.js';
+import { RoomChannel } from '../src/net/room-channel.js';
+import { deriveRoomKeys } from '../src/crypto/room-keys.js';
+import { peerEntries } from '../src/ui/alias.js';
+import { link, linkIdentity, makeRoom } from './room-kit.js';
 
 const PUB = 'A'.repeat(43);
 const sync = async (settings = { ...DEFAULTS }, id = 'dev1') => {
@@ -224,6 +228,10 @@ test('room items: well-formed ones only; a read mark never moves back', async ()
     [readKey('G'.repeat(16))]: room({ ms: -1, c: 0 }),
   });
   assert.deepEqual(Object.keys(taken).sort(), [readKey(id), roomKey(id)].sort());
+  const mixed = { [roomKey(id)]: null, [roomKey('C'.repeat(16))]: { s: 'x', l: 'bad', o: null } };
+  assert.deepEqual(Object.keys(await s.set(mixed, { lenient: true })), [roomKey(id)], 'lenient');
+  await assert.rejects(s.set(mixed), /invalid/);
+  await s.set({ [roomKey(id)]: { s: secret, l: 'Club', o: null } });
   assert.deepEqual(await s.set({ [readKey(id)]: { ms: 5, c: 0 } }), {}, 'older: ignored');
   const older = { v: { ms: 4, c: 9 }, ms: 99, c: 0, by: 'z' }; // a newer write of an older mark
   assert.deepEqual(await s.merge({ [readKey(id)]: older }), {});
@@ -329,7 +337,7 @@ async function linkPhone(main, alias, broker) {
   const { code, read } = await first.startLinking(alias);
   await (await read((await main.linkDevice(code)).code)).apply();
   const phone = await open(await applyDelegation(id, kv), kv, '', net, broker.ws());
-  return { phone, pub: toB64u(id.pub) };
+  return { phone, pub: toB64u(id.pub), id, kv };
 }
 
 test('a new device that links to a main device with no rooms stays in step with it', async () => {
@@ -388,4 +396,151 @@ test('a device cannot be linked to itself; an old self-link is dropped at start'
   const later = await open(again, kv, 'Ada');
   assert.equal(later.isLinked, false);
   assert.ok((await later.linkDevice(await requestFrom('Two'))).code, 'it can link devices again');
+});
+
+// ---- reloads and restarts in the middle of linking ---------------------------------------------
+
+test('a code pasted behind an older one is the one that counts', async () => {
+  const [one, two] = [await requestFrom('Old'), await requestFrom('Newest')];
+  assert.equal((await readLinkRequest(`${one}\n${two}`)).name, 'Newest');
+  assert.equal((await readLinkRequest(`${two} and then ${one}`)).name, 'Old', 'the last one');
+  assert.equal((await readLinkRequest(`text ${one} text`)).name, 'Old');
+});
+
+test('a reload while a device is being linked leaves nothing or a complete link', async () => {
+  const main = await open(await newIdentity(), new MemoryKV(), 'Ada');
+  await main.updateSettings({ name: 'Ada main' });
+  const club = await main.addRoom(newRoomSecret(), 'Club');
+  const [id, kv] = [await newIdentity(), new MemoryKV()];
+  const first = await open(id, kv, '', {});
+  const { code, read } = await first.startLinking('Pixel');
+  const grant = await read((await main.linkDevice(code)).code);
+  const put = kv.put.bind(kv); // the page goes away after the certificate, before the rest
+  kv.put = async (key, value) => (key === 'sync' ? Promise.reject(new Error('page closed'))
+    : put(key, value));
+  await assert.rejects(grant.apply(), /page closed/);
+  kv.put = put;
+  assert.ok((await kv.get('delegate')).grant, 'the rest waits beside the certificate');
+  const phone = await open(await applyDelegation(id, kv), kv, '', {});
+  assert.equal(phone.isLinked, true);
+  assert.equal(phone.settings.name, 'Ada main');
+  assert.ok(phone.rooms.has(club.id), 'it has the rooms');
+  assert.equal(phone.deviceRows().length, 2);
+  assert.equal((await kv.get('delegate')).grant, undefined, 'and the work is marked done');
+});
+
+test('a reload before the answer is applied: the device asks again, one entry', async () => {
+  const main = await open(await newIdentity(), new MemoryKV(), 'Ada');
+  const [id, kv] = [await newIdentity(), new MemoryKV()];
+  const first = await open(id, kv, '', {});
+  const lost = await first.startLinking('Pixel'); // its one-time key is gone after a reload
+  const [a, b] = [await main.linkDevice(lost.code), await main.linkDevice(
+    (await (await open(id, kv, '', {})).startLinking('Pixel')).code,
+  )];
+  assert.equal(main.deviceRows().length, 2, 'one entry for the device');
+  assert.equal(a.name, b.name, 'with the same alias');
+});
+
+test('a main device that stopped while linking still knows its devices after', async () => {
+  const [mainId, mainKv] = [await newIdentity(), new MemoryKV()];
+  const main = await open(mainId, mainKv, 'Ada');
+  const put = mainKv.put.bind(mainKv);
+  mainKv.put = async (key, value) => (key === 'linked' ? Promise.reject(new Error('gone'))
+    : put(key, value));
+  await assert.rejects(main.linkDevice(await requestFrom('Pixel')), /gone/);
+  mainKv.put = put;
+  main.stop();
+  const again = await open(mainId, mainKv, 'Ada');
+  assert.equal(again.deviceRows().length, 2);
+  assert.equal(again.paired, true);
+  assert.ok((await again.linkDevice(await requestFrom('Two'))).code, 'and can link more');
+});
+
+// ---- leaving and being withdrawn ---------------------------------------------------------------
+
+test('a withdrawn device starts over as a device of its own, which can link others', async () => {
+  const broker = new FakeBroker();
+  const main = await open(await newIdentity(), new MemoryKV(), 'Ada', net, broker.ws());
+  const one = await linkPhone(main, 'One', broker);
+  await until(() => main.paired && one.phone.paired, 8000);
+  let heard = 0;
+  one.phone.on('unlinked', () => heard++);
+  await main.unlinkDevice(one.pub);
+  await until(() => heard === 1, 8000); // it hears it even when it shares no room
+  assert.ok(!(await one.kv.get('delegate')), 'no longer linked');
+  assert.ok(!(await one.kv.get('sync')));
+  assert.equal(main.deviceRows().length, 1);
+  // after the restart (a new key; the old one stays withdrawn)
+  const restarted = await open(await newIdentity(), one.kv, '', net, broker.ws());
+  assert.equal(restarted.isLinked, false);
+  assert.ok((await restarted.linkDevice(await requestFrom('Other'))).code, 'it links others');
+  assert.ok((await (await restarted.startLinking('x')).code), 'and can be linked');
+});
+
+test('a linked device can leave the main device on its own', async () => {
+  const broker = new FakeBroker();
+  const main = await open(await newIdentity(), new MemoryKV(), 'Ada', net, broker.ws());
+  const one = await linkPhone(main, 'One', broker);
+  await until(() => main.paired && one.phone.paired, 8000);
+  let heard = 0;
+  one.phone.on('unlinked', () => heard++);
+  await one.phone.leaveLink();
+  assert.equal(heard, 1);
+  assert.ok(!(await one.kv.get('delegate')));
+  await until(() => main.deviceRows().length === 1, 8000);
+  assert.equal(main.paired, false);
+  await assert.rejects(main.leaveLink(), /not linked/);
+});
+
+// ---- presence ----------------------------------------------------------------------------------
+
+test('presence names the main identity of a linked device if its certificate fits', async () => {
+  const broker = new FakeBroker();
+  const [main, phone, stranger] = [await newIdentity(), await newIdentity(), await newIdentity()];
+  await linkIdentity(main, phone, 'Pixel');
+  const keys = await deriveRoomKeys(newRoomSecret());
+  const channel = (selfId) => new RoomChannel({
+    roomId: keys.id, aes: keys.aes, selfId, WS: broker.ws(), brokers: ['wss://fake'],
+    topicPrefix: 'knot-test',
+  });
+  const [listener, sender] = [channel('listener'), channel(phone.id)];
+  const heard = [];
+  listener.on('presence', (p) => heard.push(p));
+  [listener, sender].forEach((c) => c.start());
+  const say = (who, cert, alias) => until(() => {
+    sender.announce({ pub: who.pub, name: 'Ada', cert, alias });
+    return heard.some((p) => p.id === who.id);
+  });
+  await say(phone, phone.cert, 'tablet');
+  const ok = heard.find((p) => p.id === phone.id);
+  assert.equal(ok.member, main.id);
+  assert.equal(ok.device, 'Pixel');
+  assert.equal(ok.alias, 'tablet');
+  await say(stranger, phone.cert); // somebody else's certificate
+  assert.equal(heard.find((p) => p.id === stranger.id).member, undefined);
+  [listener, sender].forEach((c) => c.stop());
+});
+
+test('a person\'s devices are one entry in the bar even before their links are up', async () => {
+  const broker = new FakeBroker();
+  const [main, phone] = [await newIdentity(), await newIdentity()];
+  await linkIdentity(main, phone, 'Pixel');
+  const secret = newRoomSecret();
+  const bob = await makeRoom({ secret, name: 'Bob', broker });
+  bob.start();
+  const keys = await deriveRoomKeys(secret);
+  const channel = (selfId) => new RoomChannel({
+    roomId: keys.id, aes: keys.aes, selfId, WS: broker.ws(), brokers: ['wss://fake'],
+    topicPrefix: DEFAULTS.topicPrefix,
+  });
+  const senders = [[channel(main.id), main, undefined], [channel(phone.id), phone, phone.cert]];
+  senders.forEach(([c]) => c.start());
+  const entries = () => peerEntries(bob.peerList);
+  await until(() => {
+    senders.forEach(([c, who, cert]) => c.announce({ pub: who.pub, name: 'Ada', cert }));
+    return bob.peerList.length === 2;
+  });
+  assert.equal(entries().length, 1, 'one person');
+  assert.match(entries()[0].text, /^Ada · (main|Pixel) \S+ \| (main|Pixel) \S+$/);
+  senders.forEach(([c]) => c.stop());
 });

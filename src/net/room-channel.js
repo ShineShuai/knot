@@ -7,6 +7,7 @@
 import { Emitter } from '../util/emitter.js';
 import { fromB64u, fromUtf8, toB64u, utf8 } from '../util/bytes.js';
 import { peerIdOf } from '../crypto/identity.js';
+import { verifyCert } from '../crypto/delegation.js';
 import { open, seal } from '../crypto/room-keys.js';
 import { MqttClient } from './mqtt.js';
 import { DOWN_RETRY_MS } from './broker-health.js';
@@ -44,11 +45,13 @@ export class RoomChannel extends Emitter {
 
   // ---- sending ---------------------------------------------------------------
 
-  announce({ pub, name }) {
-    return this.#publish(
-      `${this.base}/p`,
-      utf8.encode(JSON.stringify({ pub: toB64u(pub), name })),
-    );
+  /** Say we are here. A linked device adds its certificate (so others see whose device it is
+   *  before any link is up) and a device with an alias of its own adds that. */
+  announce({ pub, name, cert, alias }) {
+    const body = {
+      pub: toB64u(pub), name, ...(cert ? { cert } : {}), ...(alias ? { al: alias } : {}),
+    };
+    return this.#publish(`${this.base}/p`, utf8.encode(JSON.stringify(body)));
   }
   sendSignal(peerId, bytes) { return this.#publish(`${this.base}/s/${peerId}`, bytes); }
   sendRelay(bytes) { return this.#publish(`${this.base}/m`, bytes); }
@@ -77,13 +80,16 @@ export class RoomChannel extends Emitter {
 
   async #onPresence(plain) {
     try {
-      const { pub, name } = JSON.parse(fromUtf8(plain));
+      const { pub, name, cert, al } = JSON.parse(fromUtf8(plain));
       const bytes = fromB64u(pub);
       const id = await peerIdOf(bytes);
-      if (id !== this.selfId) this.emit(
-        'presence',
-        { id, pub: bytes, name: String(name).slice(0, 32) },
-      );
+      // whose device this is: only if the certificate is valid and is for exactly this key
+      const member = cert && cert.d === pub ? await verifyCert(cert) : null;
+      const alias = typeof al === 'string' && al.length > 0 && al.length <= 16 ? al : undefined;
+      if (id !== this.selfId) this.emit('presence', {
+        id, pub: bytes, name: String(name).slice(0, 32),
+        ...(member ? { member, device: cert.n } : {}), ...(alias ? { alias } : {}),
+      });
     } catch { /* malformed presence from a room member: ignore */ }
   }
 

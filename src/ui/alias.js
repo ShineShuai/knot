@@ -11,6 +11,8 @@ export const peerLabel = (room, id) => withDevice(room.nameOf(id), room.peerDevi
 
 const stateText = (state) => t(state === 'p2p' ? 'direct' : state);
 const tag = (row) => (row.device ?? '') || t('deviceMain');
+/** Our own other devices are "You", not our name. */
+const who = (row) => (row.mine ? t('you') : row.name);
 
 /** The connection bar: one entry per person, however many of their devices are connected.
  *  "Bob · direct", or "Ada · main direct | mac relay". `rows`: Room.peerList. Each entry is
@@ -21,8 +23,8 @@ export function peerEntries(rows) {
   return [...groups.values()].map((list) => {
     const [first] = list;
     const text = list.length === 1
-      ? `${withDevice(first.name, first.device)} · ${stateText(first.state)}`
-      : `${first.name} · ${list.map((r) => `${tag(r)} ${stateText(r.state)}`).join(' | ')}`;
+      ? `${withDevice(who(first), first.device)} · ${stateText(first.state)}`
+      : `${who(first)} · ${list.map((r) => `${tag(r)} ${stateText(r.state)}`).join(' | ')}`;
     const title = list.filter((r) => r.sas).map(
       (r) => `${list.length > 1 ? `${tag(r)}: ` : ''}${t('verify')} ${r.sas}`,
     ).join('\n');

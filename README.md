@@ -292,23 +292,31 @@ if no broker is reachable; with brokers, reconnection is automatic).
   *request* (its key, a one-time sealing key, a name, signed with its key); the main device
   answers with a *grant* (the certificate and every room's secret, owner id and key epoch,
   sealed to that one-time key, signed by the main key). Both screens show six digits derived
-  from all keys; if they differ, a code was swapped. A device is never linked to itself (another
-  tab of the same browser profile): the main device refuses a code made by itself, a device
+  from all keys; if they differ, a code was swapped. The one-time key of a request lives in memory only: after a
+  reload the new device asks again and the main device keeps one entry for it. The grant is
+  stored with the certificate in one write and finished at every start until done, so a reload
+  in the middle leaves either no link or a complete one. A device is never linked to itself
+  (another tab of the same browser profile): the main device refuses a code made by itself, a device
   refuses a grant from itself, and a certificate of a key for itself (an old mistake that left
   the main device unable to link anything) is dropped at start. Rooms joined later reach the
   other devices by themselves (see *Shared state* below). *Unlink* (any device, for any linked device but itself; the main device cannot
   be unlinked; Settings > Linked devices) is a signed `unlink` envelope in every room, kept
   forever like membership changes: peers drop that device's links and refuse everything it
   writes with that certificate, including history that arrives later; the device itself
-  notices and goes back to its own identity. The unlinked device is also dropped from our
-  channel (below) at once. Limits: a stolen linked device can read and write as you, and
+  notices and goes back to its own identity. The unlinked device is told first (through our channel, if no
+  room reaches it), then dropped from the channel. A linked device can also *separate* itself
+  (Settings > Linked devices): it withdraws itself the same way. A withdrawn or separated
+  device restarts with a **new key** (the old one stays withdrawn in the rooms that saw the
+  unlink, so it could never be linked to the same main device again) and keeps the history
+  of its rooms; it is a device of its own again and can link others. Limits: a stolen linked device can read and write as you, and
   unlink your other linked devices, until the main device unlinks it; unlinking does not
   change room keys (an owner removing a member does, see above); each device keeps its own
   call connections. Every device
   of one identity shows that identity's messages as its own ("You", edit, delete). Once a
   certificate or alias of someone has been seen (in a message or on a link), their name
   carries a device tag in messages, calls and exports: "Ada · phone" or
-  "Ada · main". Someone with one device has no tag. The connection bar has one entry per person, with
+  "Ada · main". Someone with one device has no tag. Presence carries the certificate and alias too, so
+  devices that are only seen on a broker are grouped and tagged as well. The connection bar has one entry per person, with
   their devices and connections: "Bob · direct", "Ada · main direct | mac relay". The tag is the device's *alias*: it starts
   as the name given when linking (suggested from the device kind: iPhone, iPad, Android, Mac,
   Windows, Linux; numbered if taken; the main device is "main") and can be changed in

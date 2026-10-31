@@ -6,7 +6,7 @@
 // settings-dialogs.js).
 import { searchLog } from '../chat/search.js';
 import { h } from './dom.js';
-import { peerLabel, withDevice } from './alias.js';
+import { peerEntries, peerLabel } from './alias.js';
 import { setLanguage, t } from './i18n.js';
 import { VERSION } from '../version.js';
 import { dragHasFiles } from './attach.js';
@@ -298,12 +298,8 @@ class Ui {
 
     const drawPeers = () => {
       peers.replaceChildren(
-        ...room.peerList.map(
-          (p) => h(
-            'li',
-            { class: `peer ${p.state}`, title: p.sas ? `${t('verify')} ${p.sas}` : '' },
-            `${withDevice(p.name, p.device)} · ${t(p.state === 'p2p' ? 'direct' : p.state)}`,
-          ),
+        ...peerEntries(room.peerList).map(
+          (e) => h('li', { class: `peer ${e.state}`, title: e.title }, e.text),
         )
       );
     };

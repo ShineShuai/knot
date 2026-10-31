@@ -88,6 +88,7 @@ if no broker is reachable; with brokers, reconnection is automatic).
       store/instance-lock.js  one running tab per browser profile (Web Locks)
       call/call.js         CallManager: mesh call of one room, presence + signaling frames
       call/call-link.js    one audio+video RTCPeerConnection to one participant
+      call/quality.js      video quality policy: ladder, ceilings, stats reader, controller
       call/media.js        microphone / camera / screen access (swappable in tests)
       qr/qr.js             QR encoder (verified against OpenCV in tests)
       ui/                  DOM helpers, i18n (en/zh/de), views, camera scanner
@@ -183,7 +184,7 @@ if no broker is reachable; with brokers, reconnection is automatic).
   first, then the text. The message box grows with its text up to a cap.
 * **Calls:** audio and video for up to `callMaxParticipants` (6) people, in a mesh: everyone
   in the call holds one media connection to everyone else, so there is no media server (and
-  no per-person cost beyond bandwidth: video bitrate per stream shrinks as people join).
+  no per-person cost beyond bandwidth: video quality per stream shrinks as people join).
   Who is in the call, and the SDP of each media connection, travel as `{t:'call'}` frames
   over the room's authenticated direct chat links, never over the brokers and never in the
   message log. Only members (peers the room has accepted) can send them, and each media
@@ -193,7 +194,19 @@ if no broker is reachable; with brokers, reconnection is automatic).
   is `replaceTrack` (off stops the capture, so the light goes out): neither renegotiates.
   A connection that dies is offered again with growing pauses. Camera and microphone are
   asked for only when you join (or turn the camera on); a refused device still lets you
-  listen. One call at a time per device; it keeps running while you read another room
+  listen. **Video quality** favours audio first, then smooth motion (no queueing, so no added
+  delay), then sharpness. The camera is captured at up to 720p/30; each connection encodes
+  only what it can carry and the receiver shows (`call/quality.js`, no renegotiation, only
+  `setParameters`): a ladder of rungs (180p/15 fps/100 kb/s up to 720p/30/1.8 Mb/s; a screen
+  share has its own, sharper and slower) capped by the head count, by the receiver's tile
+  (`want` frames: tile height in pixels, 0 for a hidden tile or a page out of sight for 5 s)
+  and by what the connection proved (`getStats` every 2 s: loss, round-trip time, the
+  browser's own limit/estimate where it reports them). Down is fast (two bad samples, or one
+  severe: two rungs), up is slow (one rung after 8 s calm, longer after a failed try). If even
+  the lowest rung does not fit, video pauses for that peer (their tile says so), audio goes
+  on, and video is tried again after a pause. Cameras degrade by resolution first, screens by
+  frame rate (`degradationPreference`, where the browser has it). One call at a time per
+  device; it keeps running while you read another room
   ("minimize"). Texting and files work during a call: the chat button (💬) puts the room's
   conversation next to the video (call at the side on a desktop, on top on a phone) with the
   usual message box, drop, paste and reactions, and counts what arrives while the call covers

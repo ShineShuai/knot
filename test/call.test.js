@@ -8,7 +8,7 @@ import { validSdp } from '../src/call/call-link.js';
 import { MemoryKV } from '../src/store/kv.js';
 import { newIdentity } from './helpers.js';
 import { FakeLink, until } from './fakes.js';
-import { callParty, sending } from './call-fakes.js';
+import { callParty, sending, videoEncoding } from './call-fakes.js';
 
 const rooms = [];
 test.afterEach(() => { rooms.splice(0).forEach((r) => r.stop()); });
@@ -102,17 +102,117 @@ test('leaving closes the connections and releases the devices', async () => {
   await until(() => connected(a, 1) && connected(b, 1));
 });
 
-test('three people form a mesh and share the video bandwidth', async () => {
+test('three people form a mesh; each stream starts at a steady, shared-uplink rung', async () => {
   const people = await party(3);
   await Promise.all(people.map((p) => p.room.call.join({ video: true })));
   await until(() => people.every((p) => connected(p, 2)));
   for (const p of people) {
     assert.equal(p.made.length, 2);
     for (const rtc of p.made) {
-      const video = rtc.getTransceivers().find((t) => t.receiver.track.kind === 'video');
-      assert.equal(video.sender.params.encodings[0].maxBitrate, 450_000);
+      const params = videoEncoding(rtc);
+      const [encoding] = params.encodings;
+      assert.equal(encoding.active, true);
+      assert.equal(encoding.maxBitrate, 500_000); // 360p at 30 fps to begin with
+      assert.equal(encoding.maxFramerate, 30);
+      assert.equal(encoding.scaleResolutionDownBy, 2); // 720 captured, 360 sent
+      assert.equal(params.degradationPreference, 'maintain-framerate'); // keep motion smooth
     }
   }
+});
+
+test('the receiver says how big it shows our video; we send no more than that', async () => {
+  const [a, b] = await party(2);
+  await a.room.call.join({ video: true });
+  await b.room.call.join({ video: true });
+  await until(() => connected(a, 1) && connected(b, 1));
+  const encoding = () => videoEncoding(a.made[0]).encodings[0];
+  const writes = () => a.made[0].getTransceivers()[1].sender.writes;
+
+  b.room.call.setWant(a.id, 180); // a thumbnail
+  await until(() => encoding().maxBitrate === 100_000);
+  assert.equal(encoding().scaleResolutionDownBy, 4);
+  assert.equal(encoding().maxFramerate, 15);
+
+  b.room.call.setWant(a.id, 0); // not shown: no video at all
+  await until(() => encoding().active === false);
+
+  b.room.call.setWant(a.id, 1080); // full screen: video resumes where the link has proven itself
+  await until(() => encoding().active === true && encoding().maxBitrate === 500_000);
+  assert.equal(encoding().scaleResolutionDownBy, 2); // more only once measurements allow it
+
+  const before = writes();
+  b.room.call.setWant(a.id, 1080); // saying it again changes nothing
+  b.room.call.setWant(a.id, 99_999); // nonsense is clamped, not trusted blindly
+  a.room.call.onFrame(b.id, { k: 'want', h: -5 });
+  a.room.call.onFrame(b.id, { k: 'want', h: 'tall' });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(writes(), before);
+});
+
+test('a shared screen has its own profile: sharp text first, frame rate second', async () => {
+  const [a, b] = await party(2);
+  await a.room.call.join({ video: true });
+  await b.room.call.join();
+  await until(() => connected(a, 1) && connected(b, 1));
+  await a.room.call.setScreen(true);
+  const params = () => videoEncoding(a.made[0]);
+  await until(() => params().degradationPreference === 'maintain-resolution');
+  const [encoding] = params().encodings;
+  assert.equal(encoding.maxFramerate, 8); // 720p at 8 fps to begin with
+  assert.equal(encoding.maxBitrate, 500_000);
+  await a.room.call.setScreen(false);
+  await until(() => params().degradationPreference === 'maintain-framerate');
+});
+
+const stats = ({ loss = 0, rtt = 0.05, available } = {}) => [
+  { type: 'outbound-rtp', kind: 'video', bytesSent: 1000, timestamp: 0 },
+  { type: 'remote-inbound-rtp', kind: 'video', fractionLost: loss, roundTripTime: rtt },
+  ...(available ? [{
+    type: 'candidate-pair', nominated: true, state: 'succeeded',
+    availableOutgoingBitrate: available,
+  }] : []),
+];
+
+test('a connection that cannot carry video drops it, says so, and tries again later', async () => {
+  const [a, b] = await party(2);
+  await a.room.call.join({ video: true });
+  await b.room.call.join();
+  await until(() => connected(a, 1) && connected(b, 1));
+  const encoding = () => videoEncoding(a.made[0]).encodings[0];
+  const { clock } = a;
+
+  a.made[0].stats = stats({ loss: 0.3 }); // heavy loss: two rungs down at once
+  clock.t = 10_000;
+  await a.room.call.adapt();
+  await until(() => encoding().maxBitrate === 100_000);
+  assert.equal(b.room.call.participants[0].paused, false);
+
+  clock.t = 14_000; // still bad at the lowest rung: audio only
+  await a.room.call.adapt();
+  await until(() => encoding().active === false);
+  await until(() => b.room.call.participants[0].paused === true);
+  assert.equal(a.room.call.joined, true);
+
+  a.made[0].stats = stats(); // the network recovers
+  clock.t = 20_000; // too soon to try again
+  await a.room.call.adapt();
+  assert.equal(encoding().active, false);
+  clock.t = 30_000;
+  await a.room.call.adapt();
+  await until(() => encoding().active === true);
+  await until(() => b.room.call.participants[0].paused === false);
+});
+
+test('a calm connection climbs one rung at a time, never past what the people allow', async () => {
+  const [a, b] = await party(2);
+  await a.room.call.join({ video: true });
+  await b.room.call.join();
+  await until(() => connected(a, 1) && connected(b, 1));
+  const encoding = () => videoEncoding(a.made[0]).encodings[0];
+  a.made[0].stats = stats({ available: 5_000_000 });
+  for (let t = 2000; t <= 40_000; t += 2000) { a.clock.t = t; await a.room.call.adapt(); }
+  await until(() => encoding().maxBitrate === 1_800_000); // 720p, the top for two
+  assert.equal(encoding().maxFramerate, 30);
 });
 
 test('a call has a size limit', async () => {

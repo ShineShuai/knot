@@ -7,7 +7,7 @@
 import { searchLog } from '../chat/search.js';
 import { h } from './dom.js';
 import { peerLabel, withDevice } from './alias.js';
-import { t } from './i18n.js';
+import { setLanguage, t } from './i18n.js';
 import { VERSION } from '../version.js';
 import { dragHasFiles } from './attach.js';
 import { CallPanel } from './call-view.js';
@@ -76,6 +76,11 @@ class Ui {
     document.addEventListener('visibilitychange', () => this.#markViewed());
     window.addEventListener('focus', () => this.#markViewed());
     this.model.on('rooms', () => { this.#renderRail(); this.#watchRooms(); });
+    this.model.on('settings', (keys) => { // another device of ours changed them
+      if (!keys.includes('language')) return;
+      setLanguage(this.model.settings.language);
+      this.relocalize();
+    });
     this.#watchRooms();
     document.addEventListener('paste', (e) => this.composer.onPaste(e));
     for (const type of ['dragover', 'drop']) { // a file dropped beside the chat must not open

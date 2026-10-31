@@ -16,6 +16,15 @@ const signingBytes = (e) => utf8.encode(
   JSON.stringify([e.v, e.id, e.room, e.kind, e.name, e.ms, e.c, e.body, e.pub]),
 );
 
+const aliasBytes = (id, n) => utf8.encode(['knot/alias', id, n].join('|'));
+export const ALIAS_MAX = 16;
+/** A device alias: short text without control characters ("phone", "Mac 2"). */
+export const isAlias = (s) => typeof s === 'string' && s.length <= ALIAS_MAX
+  && !/[\u0000-\u001f\u007f]/.test(s);
+/** The device name an envelope shows: the author's chosen alias, else the one in the
+ *  certificate; undefined for the main device with its default. */
+export const deviceNameOf = (env) => env.al?.n ?? env.cert?.n;
+
 /** Metadata for a shared file. Key order matters for the signature; build it only here.
  *  Images carry `img` = { w, h, t: inline thumbnail, tm: its mime, a?: animated,
  *  p?: { id, size, mime, sha256 } of a separately fetched preview }. */
@@ -100,7 +109,11 @@ export async function createEnvelope(identity, hlc, roomId, kind, body, name) {
     pub: toB64u(identity.pub),
   };
   const signed = { ...env, sig: toB64u(await identity.sign(signingBytes(env))) };
-  return identity.cert ? { ...signed, cert: identity.cert } : signed;
+  // The alias is signed with the device's own key, bound to this envelope's id.
+  const al = identity.alias
+    ? { n: identity.alias, sig: toB64u(await identity.sign(aliasBytes(env.id, identity.alias))) }
+    : null;
+  return { ...signed, ...(identity.cert ? { cert: identity.cert } : {}), ...(al ? { al } : {}) };
 }
 
 const isB64u = (s, length) => typeof s === 'string' && s.length === length && B64U.test(s);
@@ -137,6 +150,8 @@ function wellFormed(e, roomId, { maxText, maxFileBytes, now }) {
   // A linked device's certificate rides along; membership and unlinking stay with the main key.
   if (e.cert !== undefined && (!certShape(e.cert) || ADMIN_KINDS.includes(e.kind)
     || e.kind === 'unlink')) return false;
+  if (e.al !== undefined && !(!!e.al && typeof e.al === 'object' && isAlias(e.al.n)
+    && e.al.n.length > 0 && isB64u(e.al.sig, 86))) return false;
   if (typeof e.pub !== 'string' || e.pub.length !== 43 || !B64U.test(e.pub)) return false;
   if (typeof e.sig !== 'string' || e.sig.length !== 86 || !B64U.test(e.sig)) return false;
   if (e.kind === 'text') return typeof e.body === 'string' && e.body.length > 0 &&
@@ -199,7 +214,8 @@ export async function verifyEnvelope(e, roomId, limits = {}) {
   const author = e.cert ? await verifyCert(e.cert) : await peerIdOf(pub);
   if (!author || (e.cert && e.cert.d !== e.pub)) return false;
   if (e.id !== `${e.ms.toString(36)}-${e.c.toString(36)}-${author}`) return false;
-  return verifySignature(pub, fromB64u(e.sig), signingBytes(e));
+  if (!(await verifySignature(pub, fromB64u(e.sig), signingBytes(e)))) return false;
+  return !e.al || verifySignature(pub, fromB64u(e.al.sig), aliasBytes(e.id, e.al.n));
 }
 
 // id = <ms36>-<counter36>-<peerId>; peer ids are base64url and may themselves contain '-'.

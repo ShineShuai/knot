@@ -1,6 +1,6 @@
 // One message of the conversation as a list item: text with links, replies, files and image
 // cards, reactions with their emoji palette, notices and what is left of a deleted message.
-import { ADMIN_KINDS, authorIdOf, isEmoji } from '../chat/envelope.js';
+import { ADMIN_KINDS, authorIdOf, deviceNameOf, isEmoji } from '../chat/envelope.js';
 import { noticeLine } from '../chat/notice.js';
 import { fmtSize, h, safeFileName } from './dom.js';
 import { t } from './i18n.js';
@@ -52,7 +52,7 @@ export class Messages {
       ]));
     return h('li', { class: `msg ${own ? 'own' : 'other'}`, 'data-id': env.id },
       h('div', { class: 'meta' },
-        withDevice(own ? t('you') : env.name, room.deviceOf(authorIdOf(env), env.cert?.n)),
+        withDevice(own ? t('you') : env.name, room.deviceOf(authorIdOf(env), deviceNameOf(env))),
         ' ', h('time', {}, clock(env.ms)), acts),
       ...parts,
       opts.onShow ? null : this.#renderReactions(room, env, redraw));

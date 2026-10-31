@@ -1,5 +1,6 @@
 // Settings, linked devices and the diagnostics report.
-import { saveSettings } from '../config.js';
+import { suggestAlias } from '../chat/device-sync.js';
+import { ALIAS_MAX } from '../chat/envelope.js';
 import { keepStorage, storageState } from '../store/persist.js';
 import { h } from './dom.js';
 import { diagnosticsReport } from './diagnostics.js';
@@ -17,24 +18,44 @@ export class SettingsDialogs {
     const linked = await model.linkedDevices();
     const parts = [];
     if (model.isLinked) {
-      parts.push(h('p', {}, t('linkedTo', { id: model.identity.member.slice(0, 4) })));
+      parts.push(h('p', {}, t('linkedTo', { id: model.identity.member.slice(0, 4) })),
+        h('p', { class: 'muted' }, t('deviceAliasHelp')), this.#deviceList(false));
     } else {
-      parts.push(h('h3', {}, t('devices')), linked.length ? h('ul', { class: 'devices-list' },
-        ...linked.map((device) => h('li', {},
-          h('span', { class: 'device-name' }, device.n),
-          h('button', {
-            class: 'ghost',
-            onclick: async () => {
-              if (!confirm(t('devicesUnlinkConfirm', { name: device.n }))) return;
-              await model.unlinkDevice(device.d);
-              this.devices();
-            },
-          }, t('devicesUnlink')),
-        ))) : h('p', { class: 'muted' }, t('devicesNone')),
+      parts.push(h('h3', {}, t('devices')), linked.length ? h('div', {},
+        h('p', { class: 'muted' }, t('deviceAliasHelp')), this.#deviceList(true))
+        : h('p', { class: 'muted' }, t('devicesNone')),
       h('h3', {}, t('linkNew')), h('p', {}, t('linkNewHelp')), this.#linkNewDevice());
       parts.push(h('h3', {}, t('linkThis')), h('p', {}, t('linkThisHelp')), this.#linkThisDevice());
     }
     this.ui.kit.open(t('devices'), ...parts);
+  }
+
+  /** All devices of this identity, each with an alias to edit (any device may rename any).
+   *  Only the main device can unlink. */
+  #deviceList(canUnlink) {
+    const { model } = this.ui;
+    return h('ul', { class: 'devices-list' }, ...model.deviceRows().map((row) => {
+      const input = h('input', {
+        type: 'text', class: 'device-alias', maxLength: ALIAS_MAX, value: row.alias,
+        placeholder: row.main ? t('deviceMain') : '', 'aria-label': t('deviceAlias'),
+      });
+      input.addEventListener('change', async () => {
+        try { input.value = await model.setDeviceAlias(row.pub, input.value); } catch (err) {
+          input.value = row.alias;
+          this.ui.notify(t('badSettings', { why: err.message }));
+        }
+      });
+      return h('li', {}, input,
+        row.self ? h('span', { class: 'muted' }, t('deviceThis')) : null,
+        canUnlink && !row.main ? h('button', {
+          class: 'ghost',
+          onclick: async () => {
+            if (!confirm(t('devicesUnlinkConfirm', { name: row.alias }))) return;
+            await model.unlinkDevice(row.pub);
+            this.devices();
+          },
+        }, t('devicesUnlink')) : null);
+    }));
   }
 
   /** Main device: paste or scan the new device's code, show the answer. */
@@ -58,7 +79,8 @@ export class SettingsDialogs {
   #linkThisDevice() {
     const area = h('div', { class: 'link-result' });
     const name = h('input', {
-      type: 'text', maxLength: 32, value: '', placeholder: t('linkDeviceName'),
+      type: 'text', maxLength: ALIAS_MAX, value: suggestAlias() ?? '',
+      placeholder: t('linkDeviceName'),
     });
     const start = h('button', {
       onclick: async () => {
@@ -160,21 +182,17 @@ export class SettingsDialogs {
         const languageChanged = language.value !== s.language;
         // asking for permission needs this click; if it is refused, the setting stays off
         const allowed = !notifications.checked || await this.ui.notifier.enable();
-        Object.assign(
-          s,
-          {
-            name: name.value.trim(),
-            language: language.value,
-            stunServers: stunList,
-            turnServers: turnList,
-            brokers: brokerList,
-            brokersEnabled: useBrokers.checked,
-            relayFallback: relay.checked,
-            notifications: notifications.checked && allowed,
-            imagePreviews: previews.value,
-          },
-        );
-        await saveSettings(this.ui.model.kv, s);
+        await this.ui.model.updateSettings({
+          name: name.value.trim(),
+          language: language.value,
+          stunServers: stunList,
+          turnServers: turnList,
+          brokers: brokerList,
+          brokersEnabled: useBrokers.checked,
+          relayFallback: relay.checked,
+          notifications: notifications.checked && allowed,
+          imagePreviews: previews.value,
+        });
         if (languageChanged) { setLanguage(s.language); this.ui.relocalize(); }
         this.ui.notify(t(allowed ? 'saved' : 'notifyBlocked'));
         this.ui.dialog.close();

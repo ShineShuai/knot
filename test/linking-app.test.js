@@ -48,8 +48,10 @@ test('link a phone to the main device, then unlink it', async () => {
   assert.deepEqual(labels(again), ['Open', 'Owned']);
   const copy = [...again.rooms.values()].find((r) => r.label === 'Owned');
   assert.equal(copy.ownerId, owned.ownerId, 'the owner is still the main identity');
-  assert.equal(copy.isOwner, false, 'the phone can be no owner');
-  await assert.rejects(again.createRoom('Mine'), /main device/);
+  assert.equal(copy.isOwner, true, 'the phone owns it as the main identity does');
+  const mine = await again.createRoom('Mine'); // a linked device creates rooms too
+  assert.equal(mine.ownerId, main.identity.id);
+  assert.equal(mine.isOwner, true);
   await assert.rejects(again.startLinking(), /already linked/);
   await assert.rejects(again.linkDevice(code), /Only the main device/);
 

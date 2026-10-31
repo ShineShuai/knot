@@ -281,21 +281,27 @@ if no broker is reachable; with brokers, reconnection is automatic).
   exactly the key that signed. On every new link the device first sends the certificate
   (`{t:'cert'}`); it must name the key the link was authenticated with, and then the link counts
   as the main identity's (so an owned room admits it without admitting the device key).
-  Membership changes and `unlink` must be signed by the main key itself, never through a
-  certificate, so a linked device can never administer a room or unlink others. Its counters
+  A linked device acts as the main identity in everything: it creates rooms (owned by the
+  identity), answers join requests (grants and denials carry the certificate, and the owner
+  lobby is addressed by the identity, so all its devices answer) and makes membership changes
+  and `unlink`s, which rooms check against the identity (the owner). Only a `recover` is signed
+  by a key of its own, and only the main device can link a new device (it holds the key that
+  signs certificates). Its counters
   start at 500000, so it cannot make the same envelope id as the main device in one
   millisecond. Linking is two codes (QR or pasted text), no server: the new device shows a
   *request* (its key, a one-time sealing key, a name, signed with its key); the main device
   answers with a *grant* (the certificate and every room's secret, owner id and key epoch,
   sealed to that one-time key, signed by the main key). Both screens show six digits derived
   from all keys; if they differ, a code was swapped. Rooms joined later reach the
-  other devices by themselves (see *Shared state* below). *Unlink* (main device, Settings > Linked devices) is a signed `unlink`
-  envelope in every room, kept forever like membership changes: peers drop that device's links
-  and refuse everything it writes with that certificate, including history that arrives later;
-  the device itself notices and goes back to its own identity. Limits: a stolen linked device
-  can read and write as you until its unlink has reached the others, and unlinking does not
-  change room keys (an owner removing a member does, see above); a linked device cannot create
-  rooms or own them; each device keeps its own call connections. Every device
+  other devices by themselves (see *Shared state* below). *Unlink* (any device, for any linked device but itself; the main device cannot
+  be unlinked; Settings > Linked devices) is a signed `unlink` envelope in every room, kept
+  forever like membership changes: peers drop that device's links and refuse everything it
+  writes with that certificate, including history that arrives later; the device itself
+  notices and goes back to its own identity. The unlinked device is also dropped from our
+  channel (below) at once. Limits: a stolen linked device can read and write as you, and
+  unlink your other linked devices, until the main device unlinks it; unlinking does not
+  change room keys (an owner removing a member does, see above); each device keeps its own
+  call connections. Every device
   of one identity shows that identity's messages as its own ("You", edit, delete). Once a
   certificate or alias of someone has been seen (in a message or on a link), their name
   carries a device tag in messages, the connection bar, calls and exports: "Ada · phone" or
@@ -324,6 +330,14 @@ if no broker is reachable; with brokers, reconnection is automatic).
   one device is not unread on the others. Rooms and marks are recorded only while there are
   other devices (linking records the ones that exist), and a leave is announced before the
   links close.
+* **Our devices' channel:** devices that share no room (a new device, a main device without
+  rooms) still find each other: `c:devices` holds the secret of a room that only they know. It
+  is opened like any room (brokers, WebRTC) but is not in the room list and keeps nothing on
+  disk, and only our own devices (the main id, or a valid certificate for it) count there. The
+  main device makes the secret when it first has another device; it reaches the others in the
+  grant and later in the shared state. It does not change when a device is unlinked: the
+  unlinked device is refused (a `d:` record, see above) wherever that is known, which a device
+  that was offline then learns from the other devices when it connects.
 * **One tab per browser profile:** the tabs of a profile share one identity and database, and
   two running at once would clash (same peer id, room list overwritten, equal message stamps).
   The first tab takes a Web Lock; others show a message instead of starting (taken before the

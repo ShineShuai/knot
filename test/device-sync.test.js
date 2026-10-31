@@ -13,7 +13,7 @@ import { toB64u } from '../src/util/bytes.js';
 import { newRoomSecret } from '../src/crypto/room-keys.js';
 import { MemoryKV } from '../src/store/kv.js';
 import { newIdentity } from './helpers.js';
-import { FakeLink, until } from './fakes.js';
+import { FakeBroker, FakeLink, until } from './fakes.js';
 import { link, makeRoom } from './room-kit.js';
 
 const PUB = 'A'.repeat(43);
@@ -96,15 +96,15 @@ test('suggested and unique aliases', () => {
 // ---- two real app models: a main device and a linked phone ------------------------------------
 
 const models = [];
-test.afterEach(() => models.splice(0).forEach((m) => m.rooms.forEach((r) => r.stop())));
+test.afterEach(() => models.splice(0).forEach((m) => m.stop()));
 
-const open = async (identity, kv = new MemoryKV(), name = '') => {
+const open = async (identity, kv = new MemoryKV(), name = '', extra = {}, WS = undefined) => {
   const settings = { // what the browser would load: defaults, then what was saved
     ...DEFAULTS, name, brokersEnabled: false, brokers: [], gatherTimeoutMs: 10,
-    presenceIntervalMs: 60, connectTimeoutMs: 2000, ...((await kv.get('settings')) ?? {}),
+    presenceIntervalMs: 60, connectTimeoutMs: 2000, ...extra, ...((await kv.get('settings')) ?? {}),
   };
   const model = new AppModel({
-    kv, identity, settings, iceServers: () => [], linkFactory: () => new FakeLink(),
+    kv, identity, settings, iceServers: () => [], linkFactory: () => new FakeLink(), WS,
   });
   await model.load();
   models.push(model);
@@ -135,7 +135,7 @@ test('linking hands the settings and the phone\'s alias over', async () => {
   assert.equal(phone.identity.alias, undefined, 'its own name is the default one');
 });
 
-test('at the first link a device takes the main device\'s settings, even over newer ones', async () => {
+test('at the first link a device takes the main device\'s settings, over newer ones', async () => {
   const main = await open(await newIdentity(), new MemoryKV(), 'Ada');
   await main.updateSettings({ name: 'Ada main', language: 'de' });
   const [phoneId, phoneKv] = [await newIdentity(), new MemoryKV()];
@@ -256,20 +256,20 @@ test('a room added on one device appears on the other, also when added while apa
   assert.deepEqual(kept, ['Club', 'Later', 'Live'], 'and kept on disk');
 });
 
-test('a room made by the owner device comes as a copy that is not owned', async () => {
+test('a room made by one device is owned by the identity, so by the other device too', async () => {
   const { main, phone, ra, rb } = await devices();
   await link(ra, rb);
   const owned = await main.createRoom('Team');
   await until(() => phone.rooms.has(owned.id));
   const copy = phone.rooms.get(owned.id);
-  assert.equal(copy.isOwner, false);
+  assert.equal(copy.isOwner, true);
   assert.equal(copy.ownerId, owned.ownerId);
   await phone.renameRoom(owned.id, 'Crew');
   await until(() => owned.label === 'Crew');
-  await phone.removeRoom(owned.id); // leaving cannot take the owner's room away
+  await phone.removeRoom(owned.id); // leaving an owned room stays on the device that leaves
   await phone.removeRoom(ra.id);
   await until(() => !main.rooms.has(ra.id));
-  assert.ok(main.rooms.has(owned.id), 'an owned room stays where it is owned');
+  assert.ok(main.rooms.has(owned.id), 'an owned room is not taken away from afar');
   assert.equal((await main.kv.get('rooms')).some((r) => r.label === 'Crew'), true);
 });
 
@@ -316,4 +316,55 @@ test('items that do not fit are ignored: a wrong room secret, a bad frame', asyn
   ra.emit('sync', { [roomKey('A'.repeat(16))]: { v: { s: 1 }, ...stamp } }, null, null);
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(main.rooms.size, 1);
+});
+
+// ---- no room needed: devices meet in a channel of their own -----------------------------------
+
+const net = { brokersEnabled: true, brokers: ['wss://fake'] };
+
+/** Link a new device `alias` to `main` by the real flow; resolves to the reloaded device. */
+async function linkPhone(main, alias, broker) {
+  const [id, kv] = [await newIdentity(), new MemoryKV()];
+  const first = await open(id, kv, '', net, broker.ws());
+  const { code, read } = await first.startLinking(alias);
+  await (await read((await main.linkDevice(code)).code)).apply();
+  const phone = await open(await applyDelegation(id, kv), kv, '', net, broker.ws());
+  return { phone, pub: toB64u(id.pub) };
+}
+
+test('a new device that links to a main device with no rooms stays in step with it', async () => {
+  const broker = new FakeBroker();
+  const main = await open(await newIdentity(), new MemoryKV(), 'Ada', net, broker.ws());
+  await main.updateSettings({ name: 'Ada main' });
+  const { phone } = await linkPhone(main, 'Pixel', broker);
+  assert.equal(main.rooms.size + phone.rooms.size, 0, 'no room anywhere');
+  assert.equal(phone.settings.name, 'Ada main', 'its first state is the main device\'s');
+  await main.updateSettings({ name: 'Ada 2', imagePreviews: 'off' });
+  const arrived = () => phone.settings.name === 'Ada 2' && phone.settings.imagePreviews === 'off';
+  await until(arrived, 8000);
+  await phone.updateSettings({ relayFallback: false });
+  await until(() => main.settings.relayFallback === false, 8000);
+  const club = await main.addRoom(newRoomSecret(), 'Club'); // the first room, made later
+  await until(() => phone.rooms.has(club.id), 8000);
+  const mine = await phone.createRoom('Mine'); // and a linked device may make one
+  await until(() => main.rooms.has(mine.id), 8000);
+  assert.equal(main.rooms.get(mine.id).isOwner, true, 'owned by the identity, so by both');
+  assert.equal(await main.kv.get('rooms').then((r) => r.length), 2);
+});
+
+test('any device unlinks another linked device; the main device stays', async () => {
+  const broker = new FakeBroker();
+  const main = await open(await newIdentity(), new MemoryKV(), 'Ada', net, broker.ws());
+  const [one, two] = [await linkPhone(main, 'One', broker), await linkPhone(main, 'Two', broker)];
+  await until(() => [main, one.phone, two.phone].every((m) => m.deviceRows().length === 3), 8000);
+  const mainPub = toB64u(main.identity.pub);
+  await assert.rejects(one.phone.unlinkDevice(mainPub), /cannot be unlinked/);
+  await assert.rejects(one.phone.unlinkDevice(one.pub), /cannot be unlinked/);
+  await one.phone.unlinkDevice(two.pub); // the first phone unlinks the second
+  assert.equal(one.phone.deviceRows().length, 2);
+  await until(() => main.deviceRows().length === 2, 8000);
+  assert.equal(main.deviceRows().some((r) => r.pub === two.pub), false);
+  await main.unlinkDevice(one.pub); // and the main device the first
+  assert.equal(main.deviceRows().length, 1);
+  assert.equal(main.paired, false, 'alone again');
 });

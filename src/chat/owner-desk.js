@@ -57,7 +57,7 @@ export class OwnerDesk {
    *  codes stop working: make a new one (see newRecoveryCode). */
   async removeMember(id) {
     this.#requireOwner();
-    if (id === this.room.identity.id) throw new Error('Transfer the room first, then leave it');
+    if (id === this.room.identity.member) throw new Error('Transfer the room first, then leave it');
     if (!this.room.roster.isMember(id)) throw new Error('Not a member of this room');
     const [n, secret] = [this.hooks.epoch().n + 1, randomBytes(16)];
     const commit = toB64u(await sha256(secret));
@@ -102,7 +102,7 @@ export class OwnerDesk {
       const [n, secret] = [this.hooks.epoch().n + 1, randomBytes(16)];
       const commit = toB64u(await sha256(secret));
       const env = await this.hooks.publish('recover', recoverBody(
-        { to: this.room.identity.id, epoch: { n, commit } }, this.room.roster.head,
+        { to: this.room.identity.member, epoch: { n, commit } }, this.room.roster.head,
       ), key);
       // Members still treat us as a stranger: only admin frames get through until they apply it.
       const frame = JSON.stringify({ t: 'admin', es: [env] });
@@ -152,10 +152,11 @@ export class OwnerDesk {
     }
     if (this.#lobby) return;
     const { identity } = this.room;
-    const keys = await lobbyKeys(await lobbySecretOf(this.hooks.chanSecret()), identity.id);
+    // keyed by the identity, not the device: all our devices answer in the same lobby
+    const keys = await lobbyKeys(await lobbySecretOf(this.hooks.chanSecret()), identity.member);
     this.#lobbyId = keys.id;
     this.#lobby = new RoomChannel({
-      roomId: keys.id, aes: keys.aes, selfId: this.room.identity.id, WS: this.room.WS,
+      roomId: keys.id, aes: keys.aes, selfId: identity.member, WS: this.room.WS,
       brokers: settings.brokers, topicPrefix: settings.topicPrefix, health: this.room.health,
     });
     this.#lobby.on('signal', (bytes) => this.#onJoinRequest(bytes));
@@ -164,7 +165,7 @@ export class OwnerDesk {
 
   async #onJoinRequest(bytes) {
     const req = await readRequest(bytes, this.#lobbyId);
-    if (!req || !this.room.isOwner || req.id === this.room.identity.id) return;
+    if (!req || !this.room.isOwner || req.id === this.room.identity.member) return;
     if (this.room.roster.revoked.has(req.id)) return;
     if (this.room.roster.isMember(req.id)) { // knocked twice
       return void this.#grant(req).catch(() => {});
@@ -176,7 +177,7 @@ export class OwnerDesk {
   }
 
   /** An admin change dropped this requester's open request (they were removed). */
-  dropRequest(id) { this.#joinRequests.delete(id); }
+  dropRequest(id) { if (this.#joinRequests.delete(id)) this.room.emit('requests'); }
 
   /** The channel keys rotated: the lobby moves with them (old join links stop working). */
   async restart() {

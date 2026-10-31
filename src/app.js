@@ -7,13 +7,14 @@ import { saveSettings } from './config.js';
 import { newBoxKey } from './crypto/box.js';
 import { makeLinkGrant, makeLinkRequest, readLinkGrant, readLinkRequest } from './chat/devices.js';
 import {
-  DeviceSync, SHARED, deviceKey, readKey, roomKey, suggestAlias, uniqueAlias,
+  CHANNEL, DeviceSync, SHARED, deviceKey, readKey, roomKey, suggestAlias, uniqueAlias,
 } from './chat/device-sync.js';
 import { ALIAS_MAX, isAlias } from './chat/envelope.js';
 import { deriveRoomKeys, newRoomSecret } from './crypto/room-keys.js';
 import { decodeRecoveryCode } from './chat/recovery.js';
 import { verifyHandshake } from './net/handshake.js';
 import { Room } from './chat/room.js';
+import { MemoryKV } from './store/kv.js';
 import { MessageStore } from './chat/message-store.js';
 
 /** "Room 1", "Room 2", ...: the first one not taken, so two rooms never get the same name. */
@@ -42,6 +43,8 @@ export class AppModel extends Emitter {
   #removed = new Set(); // ids of rooms left in this tab (so saving does not bring them back)
   #saving = Promise.resolve();
   #paired = false; // do we have other devices to keep in step? (linked, or linked to)
+  #deviceRoom = null; // where our devices meet when they share no room (see #syncChannel)
+  #deviceSecret = '';
 
   /** `WS`, `linkFactory`, `callEnv`: injectable network and media pieces (tests); the
    *  defaults are the browser's. */
@@ -71,14 +74,14 @@ export class AppModel extends Emitter {
     // what our other devices changed while this one was closed, then what only this one has
     await this.#applyRoomItems(this.sync.items, {});
     await this.#shareRooms();
+    await this.#syncChannel();
     if (this.rooms.size) await this.#persist(); // writes back what an older version dropped
     this.emit('rooms');
   }
 
   /** Create a brand-new room. We become its owner: nobody gets in without our approval. */
   async createRoom(label) {
-    if (this.isLinked) throw new Error('Create rooms on your main device');
-    return this.addRoom(newRoomSecret(), label, this.identity.id);
+    return this.addRoom(newRoomSecret(), label, this.identity.member);
   }
 
   // ---- settings and aliases shared by all our devices (see chat/device-sync.js) --------------
@@ -138,7 +141,7 @@ export class AppModel extends Emitter {
     const next = item && item !== (this.identity.cert?.n ?? '') ? item : undefined;
     if (next === this.identity.alias) return;
     this.identity.alias = next;
-    for (const room of this.rooms.values()) room.announceAlias();
+    for (const room of this.#allRooms()) room.announceAlias();
   }
 
   /** Main device that linked devices before they shared anything: share what is there. */
@@ -230,7 +233,47 @@ export class AppModel extends Emitter {
   #broadcastSync(items) {
     if (!Object.keys(items).length) return;
     const frame = this.#frame(items);
-    for (const room of this.rooms.values()) room.sendToSiblings(frame);
+    for (const room of this.#allRooms()) room.sendToSiblings(frame);
+  }
+
+  /** The chat rooms, and the channel where our devices meet. */
+  #allRooms() {
+    return this.#deviceRoom ? [...this.rooms.values(), this.#deviceRoom] : [...this.rooms.values()];
+  }
+
+  /** Exchange state with a device of ours that connects in this room. */
+  #wire(room) {
+    room.on('sibling', (entry) => this.#sendSnapshot(room, entry));
+    room.on('sync', (items, entry, epochs) => {
+      this.#receiveSync(items, epochs).catch((err) => console.error('sync failed', err));
+    });
+  }
+
+  /** Our devices find each other in a room that only they know (it is not in the room list and
+   *  keeps nothing), so they stay in step even when they share no chat room, and a new device
+   *  gets everything from the main device. The main device makes the secret; it travels in
+   *  the shared state. */
+  async #syncChannel() {
+    let secret = this.#paired ? this.sync.value(CHANNEL) : null;
+    if (this.#paired && !secret && !this.isLinked) {
+      secret = toB64u(newRoomSecret());
+      this.#broadcastSync(await this.sync.set({ [CHANNEL]: secret }));
+    }
+    if (!secret) secret = '';
+    if (secret === this.#deviceSecret) return;
+    this.#deviceRoom?.stop();
+    [this.#deviceRoom, this.#deviceSecret] = [null, secret];
+    if (!secret) return;
+    const room = await Room.open(this.#options(fromB64u(secret), 'devices', null, new MemoryKV()));
+    if (secret !== this.#deviceSecret) return room.stop(); // changed again meanwhile
+    this.#wire(room);
+    room.start();
+    this.#deviceRoom = room;
+  }
+
+  /** Stop everything (the page is going away; tests). */
+  stop() {
+    for (const room of this.#allRooms()) room.stop();
   }
 
   /** Everything we hold, to a device of ours that just connected (in small frames). */
@@ -241,10 +284,22 @@ export class AppModel extends Emitter {
     }
   }
 
+  /** Another device of ours withdrew a device: refuse it everywhere here, and forget its name. */
+  async #forgetDevice(pub) {
+    for (const room of this.#allRooms()) room.dropDevice(pub);
+    await this.kv.put('linked', (await this.linkedDevices()).filter((x) => x.d !== pub));
+    await this.#refreshPaired();
+    this.emit('devices');
+  }
+
   async #receiveSync(items, epochs) {
     const accepted = await this.sync.merge(items);
     if (!Object.keys(accepted).length) return;
     await this.#applyRoomItems(accepted, cleanEpochs(epochs));
+    for (const [key, item] of Object.entries(accepted)) { // a device of ours was unlinked
+      if (key.startsWith('d:') && item.v === null) await this.#forgetDevice(key.slice(2));
+    }
+    if (CHANNEL in accepted) await this.#syncChannel();
     this.#broadcastSync(accepted);
   }
 
@@ -271,6 +326,7 @@ export class AppModel extends Emitter {
     await this.sync.set({ [deviceKey(toB64u(request.pub))]: alias });
     this.#paired = true;
     await this.#shareRooms();
+    await this.#syncChannel();
     const grant = await makeLinkGrant(
       this.identity, { ...request, name: alias },
       { name: this.settings.name, rooms, sync: this.sync.items },
@@ -284,11 +340,13 @@ export class AppModel extends Emitter {
 
   /** Main device: withdraw a linked device in every room. */
   async unlinkDevice(devicePub) {
+    const row = this.deviceRows().find((r) => r.pub === devicePub);
+    if (!row || row.main || row.self) throw new Error('That device cannot be unlinked here');
+    this.#deviceRoom?.dropDevice(devicePub); // first: it must not hear what follows
     for (const room of this.rooms.values()) await room.unlinkDevice(devicePub).catch(() => {});
-    await this.kv.put('linked', (await this.linkedDevices()).filter((x) => x.d !== devicePub));
     this.#broadcastSync(await this.sync.set({ [deviceKey(devicePub)]: null }));
-    await this.#refreshPaired();
-    this.emit('devices');
+    await this.#forgetDevice(devicePub);
+    await this.#syncChannel();
   }
 
   /** New device: make a code for the main device. `read(text)` then reads the code it answers
@@ -331,6 +389,7 @@ export class AppModel extends Emitter {
     await this.kv.delete('delegate');
     await this.kv.delete('sync');
     this.#paired = false;
+    await this.#syncChannel();
   }
 
   /** Join (or return the existing) room with this secret. `owner`: its owner's id, if it has
@@ -404,13 +463,13 @@ export class AppModel extends Emitter {
     return room;
   }
 
-  #options(secret, label, owner = null) {
+  #options(secret, label, owner = null, kv = this.kv) {
     return {
       identity: this.identity,
       secret,
       label,
       owner,
-      kv: this.kv,
+      kv,
       settings: this.settings,
       WS: this.WS,
       linkFactory: this.linkFactory,
@@ -431,10 +490,7 @@ export class AppModel extends Emitter {
     if (this.rooms.has(room.id)) return this.rooms.get(room.id);
     const synced = this.sync.value(readKey(room.id));
     if (synced) await room.advanceRead(synced); // read on another device of ours already
-    room.on('sibling', (entry) => this.#sendSnapshot(room, entry));
-    room.on('sync', (items, entry, epochs) => {
-      this.#receiveSync(items, epochs).catch((err) => console.error('sync failed', err));
-    });
+    this.#wire(room);
     room.on('read', (stamp) => {
       if (!this.#paired) return;
       this.sync.set({ [readKey(room.id)]: stamp }).then((items) => this.#broadcastSync(items))

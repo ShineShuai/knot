@@ -141,12 +141,22 @@ test('with a certificate an envelope is written as the main identity', async () 
   assert.equal(await bad({ cert: stranger }), false, 'a certificate of someone else');
   assert.equal(await bad({ cert: undefined }), false, 'claims an identity the key is not');
   assert.equal(await bad({ id: env.id.replace(main.id, other.id) }), false);
-  // Membership and unlinking stay with the main key itself.
-  for (const kind of ['admit', 'revoke', 'transfer', 'unlink']) {
-    const sneaky = await createEnvelope(phone, new HLC(), 'room1', kind, kind === 'unlink'
-      ? unlinkBody(toB64u(other.pub)) : { id: other.id, name: 'x', prev: '' }, 'Ada');
-    assert.equal(await verifyEnvelope(sneaky, 'room1'), false, kind);
+  // Membership changes and unlinks are made as the main identity too: the room checks that
+  // the identity is the owner. Only a recovery is signed by a key of its own.
+  const bodies = {
+    admit: { id: other.id, name: 'x', prev: '' }, revoke: { id: other.id, prev: '' },
+    transfer: { to: other.id, prev: '' }, unlink: unlinkBody(toB64u(other.pub)),
+  };
+  for (const [kind, body] of Object.entries(bodies)) {
+    const made = await createEnvelope(phone, new HLC(), 'room1', kind, body, 'Ada');
+    assert.equal(await verifyEnvelope(made, 'room1'), true, kind);
+    assert.equal(authorIdOf(made), main.id, kind);
   }
+  const epoch = { n: 1, commit: 'x'.repeat(43) };
+  const recover = await createEnvelope(
+    phone, new HLC(), 'room1', 'recover', { to: other.id, epoch, prev: '' }, 'Ada',
+  );
+  assert.equal(await verifyEnvelope(recover, 'room1'), false, 'recover has no certificate');
   const body = unlinkBody(toB64u(phone.pub));
   const own = await createEnvelope(main, new HLC(), 'room1', 'unlink', body, 'Ada');
   assert.equal(await verifyEnvelope(own, 'room1'), true);

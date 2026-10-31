@@ -70,7 +70,8 @@ test('ui: link a phone with two codes, check the digits, then unlink it', async 
   assert.equal(phone.model.settings.name, 'Ada');
 
   await openDevices(main); // the main device lists it, and can unlink it
-  assert.match(dialog(main).textContent, /device-/);
+  const aliases = dialog(main).querySelectorAll('.device-alias').map((i) => i.value);
+  assert.match(aliases.join(), /device-/, 'the phone has an alias of its own');
   button(main, 'Unlink').click();
   await until(() => dialog(main).textContent.includes('No linked devices yet'));
   assert.deepEqual(await main.model.linkedDevices(), []);

@@ -5,11 +5,13 @@ import { loadIdentity } from './crypto/identity.js';
 import { IdbKV } from './store/kv.js';
 import { rankStun } from './net/ice-probe.js';
 import { BrokerHealth } from './net/broker-health.js';
+import { holdInstance } from './store/instance-lock.js';
 import { keepStorage } from './store/persist.js';
 import { watchErrors } from './ui/diagnostics.js';
 import { AppModel } from './app.js';
 import { UpdateWatcher } from './update.js';
-import { setLanguage } from './ui/i18n.js';
+import { h } from './ui/dom.js';
+import { setLanguage, t } from './ui/i18n.js';
 import { mountUi } from './ui/view.js';
 
 async function boot() {
@@ -18,6 +20,13 @@ async function boot() {
   const kv = new IdbKV();
   const settings = await loadSettings(kv);
   setLanguage(settings.language);
+  // Before the identity is read: a first run in two tabs would make two identities.
+  if (!(await holdInstance())) {
+    root.replaceChildren(h('main', { class: 'instance-open' }, h('h1', {}, t('instanceTitle')),
+      h('p', {}, t('instanceText')),
+      h('button', { class: 'primary', onclick: () => location.reload() }, t('instanceRetry'))));
+    return;
+  }
   const identity = await applyDelegation(await loadIdentity(kv), kv);
 
   const brokerHealth = new BrokerHealth();

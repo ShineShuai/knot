@@ -46,6 +46,7 @@ export class FakeElement {
     for (const n of nodes) {
       if (n instanceof FakeElement) { n.parentNode?.removeChild(n); n.parentNode = this; }
       this.children.push(n);
+      if (this.tagName === 'SELECT' && n.selected) this.value = n.value; // as a real <select>
     }
   }
   appendChild(n) { this.append(n); return n; }

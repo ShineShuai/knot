@@ -59,11 +59,12 @@ export async function linkCode(devicePub, mainPub, boxPub) {
 
 /**
  * The main device answers a request: `rooms` is a list of { secret, label, founder, epoch }
- * (see Room.exportState). Returns the code and the six digits to compare.
+ * (see Room.exportState); `sync`: what the devices share (see device-sync.js). Returns the code
+ * and the six digits to compare.
  */
-export async function makeLinkGrant(main, request, { name, rooms, now = Date.now() }) {
+export async function makeLinkGrant(main, request, { name, rooms, sync = null, now = Date.now() }) {
   const cert = await makeCert(main, request.pub, request.name, now);
-  const plain = utf8.encode(JSON.stringify({ cert, name, rooms }));
+  const plain = utf8.encode(JSON.stringify({ cert, name, rooms, sync }));
   const box = await sealBox(request.boxPub, plain, text('knot/link-grant', request.id));
   const sig = await main.sign(concat(text('knot/link-grant-sig', request.id), box));
   const wire = new ByteWriter().u8(1).raw(main.pub).raw(sig).raw(box).done();
@@ -80,7 +81,7 @@ const validRoom = (r) => !!r && typeof r === 'object' && typeof r.secret === 'st
   && (r.epoch === null || (Number.isSafeInteger(r.epoch?.n) && B64U.test(r.epoch?.s ?? '')));
 
 /**
- * The new device reads the grant: { cert, name, rooms, mainId, sas }, or null if it is not
+ * The new device reads the grant: { cert, name, rooms, sync, mainId, sas }, or null if it is not
  * addressed to this device, was not signed by the main key it names, or its certificate is not
  * for this device's key. `boxKey`: the one-time key whose public half went into the request.
  */
@@ -94,7 +95,7 @@ export async function readLinkGrant(input, { identity, boxKey, boxPub }) {
     const signed = concat(text('knot/link-grant-sig', identity.id), box);
     if (!(await verifySignature(mainPub, sig, signed))) return null;
     const plain = await openBox(boxKey.privateKey, box, text('knot/link-grant', identity.id));
-    const { cert, name, rooms } = JSON.parse(fromUtf8(plain));
+    const { cert, name, rooms, sync } = JSON.parse(fromUtf8(plain));
     const mainId = await peerIdOf(mainPub);
     const member = await verifyCert(cert);
     if (member !== mainId || cert.d !== toB64u(identity.pub) || toB64u(mainPub) !== cert.r) {
@@ -103,6 +104,6 @@ export async function readLinkGrant(input, { identity, boxKey, boxPub }) {
     if (typeof name !== 'string' || !Array.isArray(rooms) || rooms.length > MAX_ROOMS) return null;
     if (!rooms.every(validRoom)) return null;
     const sas = await linkCode(identity.pub, mainPub, boxPub);
-    return { cert, name: name.slice(0, 32), rooms, mainId, sas };
+    return { cert, name: name.slice(0, 32), rooms, mainId, sas, sync: sync ?? null };
   } catch { return null; }
 }

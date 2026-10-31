@@ -79,11 +79,13 @@ if no broker is reachable; with brokers, reconnection is automatic).
       chat/read-marks.js   what this device has shown its user: the unread count
       chat/notice.js       one-line text for membership changes ("Bob joined")
       chat/devices.js      linking a device: request and grant codes, six-digit check
+      chat/device-sync.js  settings and aliases shared by our devices: newest change wins
       chat/search.js       search the messages this device holds
       files/transfer.js    chunked P2P file transfer with SHA-256 check
       files/image.js       image sniffing, sender-side thumbnail/preview derivation
       files/preview-cache.js  per-room LRU cache of previews (IndexedDB)
       store/persist.js     asks the browser not to delete our storage
+      store/instance-lock.js  one running tab per browser profile (Web Locks)
       call/call.js         CallManager: mesh call of one room, presence + signaling frames
       call/call-link.js    one audio+video RTCPeerConnection to one participant
       call/media.js        microphone / camera / screen access (swappable in tests)
@@ -287,7 +289,7 @@ if no broker is reachable; with brokers, reconnection is automatic).
   answers with a *grant* (the certificate and every room's secret, owner id and key epoch,
   sealed to that one-time key, signed by the main key). Both screens show six digits derived
   from all keys; if they differ, a code was swapped. Rooms joined later need linking again
-  (it only adds). *Unlink* (main device, Settings > Linked devices) is a signed `unlink`
+  (it only adds; settings and aliases stay in step, see below). *Unlink* (main device, Settings > Linked devices) is a signed `unlink`
   envelope in every room, kept forever like membership changes: peers drop that device's links
   and refuse everything it writes with that certificate, including history that arrives later;
   the device itself notices and goes back to its own identity. Limits: a stolen linked device
@@ -295,10 +297,27 @@ if no broker is reachable; with brokers, reconnection is automatic).
   change room keys (an owner removing a member does, see above); a linked device cannot create
   rooms or own them; each device keeps its own unread marks and call connections. Every device
   of one identity shows that identity's messages as its own ("You", edit, delete). Once a
-  certificate of someone has been seen (in a message or on a link), their name carries a device
-  tag in messages, the connection bar, calls and exports: "Ada · phone" (the name in the
-  certificate, signed by the main key) or "Ada · main" (no certificate). Someone with one
-  device has no tag.
+  certificate or alias of someone has been seen (in a message or on a link), their name
+  carries a device tag in messages, the connection bar, calls and exports: "Ada · phone" or
+  "Ada · main". Someone with one device has no tag. The tag is the device's *alias*: it starts
+  as the name given when linking (suggested from the device kind: iPhone, iPad, Android, Mac,
+  Windows, Linux; numbered if taken; the main device is "main") and can be changed in
+  Settings > Linked devices on any device, for any device. A message carries it as `al`
+  `{ n, sig }`, signed with the writing device's key over the message id (so it cannot be moved
+  to another message); old versions ignore the field. **Shared state:** the settings except
+  notifications (name, language, STUN/TURN, brokers, relay, previews) and the aliases are
+  last-writer-wins registers (hybrid clock stamp, device id as tie-break), kept under `sync`.
+  A change is sent as `{t:'sync', items}` over the direct links to our other devices (a link
+  proves that with the main id or the certificate) in every room, relayed on, and each device
+  sends all it has when a link to one of its devices comes up, so changes made while apart
+  arrive when two devices meet in any room. The newest change wins everywhere. Received items
+  are checked (known keys, value types and sizes) before use.
+* **One tab per browser profile:** the tabs of a profile share one identity and database, and
+  two running at once would clash (same peer id, room list overwritten, equal message stamps).
+  The first tab takes a Web Lock; others show a message instead of starting (taken before the
+  identity is read, so a first run in two tabs cannot make two). Another person on the same
+  device needs another browser profile or a private window. Without Web Locks nothing is
+  enforced.
 * **Delete and quote:** a `del` envelope (signed by the author, naming one of the
   author's own message ids) makes every peer drop that message's content from memory
   and storage and show "<name> deleted a message" in its place; a copy that arrives

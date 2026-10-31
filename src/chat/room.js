@@ -31,7 +31,7 @@ import { verifyCert } from '../crypto/delegation.js';
 import { FileTransfer } from '../files/transfer.js';
 import { PreviewCache } from '../files/preview-cache.js';
 import {
-  ADMIN_KINDS, authorIdOf, authorOfId, createEnvelope, delBody, editBody, isEmoji, quoteOf,
+  ADMIN_KINDS, authorIdOf, authorOfId, createEnvelope, delBody, editBody, isAlias, isEmoji, quoteOf,
   reactBody, replyBody, unlinkBody, verifyEnvelope,
 } from './envelope.js';
 import { MessageLog, byStamp } from './log.js';
@@ -87,7 +87,7 @@ export class Room extends Emitter {
     // A linked device writes as the main identity: its counters start high, so their ids
     // cannot collide with the main device's.
     this.hlc = new HLC(Date.now, identity.cert ? LINKED_COUNTER_BASE : 0);
-    if (identity.cert) this.#multi.add(identity.member);
+    if (identity.cert || identity.alias) this.#multi.add(identity.member);
     this.log = new MessageLog(settings.logCap);
     this.previews = new PreviewCache(kv, this.id, settings.previewCacheBytes);
     this.files = new FileTransfer(
@@ -154,10 +154,10 @@ export class Room extends Emitter {
     );
     const owner = (id) => id === this.roster?.owner;
     const rows = [...this.peers.values()].map(({
-      id, name, state, via, sas, member, device,
+      id, name, state, via, sas, member, device, alias,
     }) => ({
       id, name, via, sas, member: member ?? id, owner: owner(member ?? id),
-      device: this.deviceOf(member ?? id, device),
+      device: this.deviceOf(member ?? id, alias ?? device),
       state: state === 'p2p' || !viaRelay(id) ? state : 'relay',
     }));
     for (const [id, m] of this.members) {
@@ -197,20 +197,22 @@ export class Room extends Emitter {
   isMine(authorId) { return authorId === this.identity.member; }
 
   /** Which device of `authorId` is meant, for a name tag like "Ada · phone": null while only
-   *  one device of that member is known; else `device` (the name in its certificate), or ''
-   *  for the main device, which has no certificate. */
+   *  one device of that member is known; else `device` (its alias, or the name in its
+   *  certificate), or '' for the main device, which has neither. */
   deviceOf(authorId, device = null) {
     return this.#multi.has(authorId) ? (device ?? '') : null;
   }
 
   /** The same for a live connection by its device id (this device included). */
   peerDevice(id) {
-    if (id === this.identity.id) return this.deviceOf(this.identity.member, this.identity.cert?.n);
+    if (id === this.identity.id) {
+      return this.deviceOf(this.identity.member, this.identity.alias ?? this.identity.cert?.n);
+    }
     const entry = this.peers.get(id);
-    return this.deviceOf(entry?.member ?? id, entry?.device);
+    return this.deviceOf(entry?.member ?? id, entry?.alias ?? entry?.device);
   }
 
-  #noteDevice(env) { if (env.cert) this.#multi.add(authorIdOf(env)); }
+  #noteDevice(env) { if (env.cert || env.al) this.#multi.add(authorIdOf(env)); }
 
 
 
@@ -492,11 +494,13 @@ export class Room extends Emitter {
     entry.device = cert.n;
     this.#multi.add(member);
     if (this.roster && !entry.synced && this.roster.isMember(member)) this.#markSynced(entry);
+    this.#maybeSibling(entry);
     this.#emitPeers();
   }
 
   #sendCert(link) {
     if (this.identity.cert) link.sendChat(JSON.stringify({ t: 'cert', cert: this.identity.cert }));
+    if (this.identity.alias) link.sendChat(JSON.stringify({ t: 'alias', n: this.identity.alias }));
   }
 
   /** Who may post what. Admin envelopes are checked by the roster itself. */
@@ -613,12 +617,24 @@ export class Room extends Emitter {
     let m;
     try { m = JSON.parse(raw); } catch { return; }
     if (m?.t === 'cert') { await this.#onCert(entry, m); return; }
+    if (m?.t === 'alias') { // a device's own name for itself; only for display
+      if (isAlias(m.n)) {
+        entry.alias = m.n;
+        this.#multi.add(entry.member ?? entry.id);
+        this.#emitPeers();
+      }
+      return;
+    }
     if (this.roster && m?.t === 'admin' && Array.isArray(m.es)) {
       for (const e of m.es.slice(0, 100)) await this.#ingest(e, null);
       if (!entry.synced && this.roster.isMember(entry.member ?? entry.id)) this.#markSynced(entry);
       return;
     }
     if (this.roster && !entry.synced) return; // not (yet) known to be a member: ignored
+    if (m?.t === 'sync') { // settings and aliases from another device of ours
+      if (this.#isSibling(entry)) this.emit('sync', m.items, entry);
+      return;
+    }
     if (this.roster && m?.t === 'epoch') { await this.#onEpoch(m, entry); return; }
     if (m?.t === 'call') { this.call.onFrame(entry.id, m); return; }
     if (m?.t === 'msg') await this.#ingest(m.e, entry);
@@ -657,7 +673,41 @@ export class Room extends Emitter {
     this.call.peerUp(entry.id);
     this.#sendEpoch(entry.link);
     this.#sendHave(entry.link);
+    this.#maybeSibling(entry);
     this.#emitPeers();
+  }
+
+  // ---- our other devices (same identity) -------------------------------------------------------
+
+  /** Is this connection another device of ours? (A linked device proves it with its
+   *  certificate; the main device's own id is the identity.) */
+  #isSibling(entry) {
+    return entry.id !== this.identity.id && (entry.member ?? entry.id) === this.identity.member;
+  }
+
+  /** Tell the app once that a connected, admitted device of ours is ready to exchange state. */
+  #maybeSibling(entry) {
+    if (entry.sibling || !entry.synced || entry.state !== 'p2p' || !this.#isSibling(entry)) return;
+    entry.sibling = true;
+    this.emit('sibling', entry);
+  }
+
+  /** Send a frame (a plain object) to one connected device of ours. */
+  sendToSibling(entry, frame) {
+    try { entry.link.sendChat(JSON.stringify(frame)); } catch { /* link dying */ }
+  }
+
+  /** Send a frame to every connected device of ours. */
+  sendToSiblings(frame) {
+    for (const entry of this.peers.values()) if (entry.sibling) this.sendToSibling(entry, frame);
+  }
+
+  /** Our alias changed: tell everyone we are connected to. */
+  announceAlias() {
+    const n = this.identity.alias ?? this.identity.cert?.n ?? '';
+    for (const entry of this.peers.values()) {
+      if (entry.state === 'p2p') this.sendToSibling(entry, { t: 'alias', n });
+    }
   }
 
   #sendHave(link) {
@@ -724,6 +774,7 @@ export class Room extends Emitter {
         entry.synced = true;
         this.call.peerUp(peer.id);
         this.#sendHave(link);
+        this.#maybeSibling(entry);
       } else {
         this.#sendAdmin(link);
         if (this.roster.isMember(peer.id)) this.#markSynced(entry);

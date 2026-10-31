@@ -1,6 +1,6 @@
 // Save a room's history: readable text, or the signed envelopes as they are (so anyone can
 // check them). Only what this device holds; shared files themselves are not included.
-import { ADMIN_KINDS, authorIdOf } from '../chat/envelope.js';
+import { ADMIN_KINDS, authorIdOf, deviceNameOf } from '../chat/envelope.js';
 import { noticeLine } from '../chat/notice.js';
 import { VERSION } from '../version.js';
 import { withDevice } from './alias.js';
@@ -33,7 +33,7 @@ export function exportText(room, now = Date.now()) {
       lines.push(`${at} * ${noticeLine(room, env, t)}`);
       continue;
     }
-    const name = withDevice(env.name, room.deviceOf(authorIdOf(env), env.cert?.n));
+    const name = withDevice(env.name, room.deviceOf(authorIdOf(env), deviceNameOf(env)));
     const who = room.log.isEdited(env) ? `${name} (${t('edited')})` : name;
     if (env.kind === 'file') {
       lines.push(`${at} ${who}: [${t('exportFile')}] ${env.body.name} (${fmtSize(env.body.size)})`);

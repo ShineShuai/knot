@@ -292,7 +292,10 @@ if no broker is reachable; with brokers, reconnection is automatic).
   *request* (its key, a one-time sealing key, a name, signed with its key); the main device
   answers with a *grant* (the certificate and every room's secret, owner id and key epoch,
   sealed to that one-time key, signed by the main key). Both screens show six digits derived
-  from all keys; if they differ, a code was swapped. Rooms joined later reach the
+  from all keys; if they differ, a code was swapped. A device is never linked to itself (another
+  tab of the same browser profile): the main device refuses a code made by itself, a device
+  refuses a grant from itself, and a certificate of a key for itself (an old mistake that left
+  the main device unable to link anything) is dropped at start. Rooms joined later reach the
   other devices by themselves (see *Shared state* below). *Unlink* (any device, for any linked device but itself; the main device cannot
   be unlinked; Settings > Linked devices) is a signed `unlink` envelope in every room, kept
   forever like membership changes: peers drop that device's links and refuse everything it
@@ -304,8 +307,9 @@ if no broker is reachable; with brokers, reconnection is automatic).
   call connections. Every device
   of one identity shows that identity's messages as its own ("You", edit, delete). Once a
   certificate or alias of someone has been seen (in a message or on a link), their name
-  carries a device tag in messages, the connection bar, calls and exports: "Ada · phone" or
-  "Ada · main". Someone with one device has no tag. The tag is the device's *alias*: it starts
+  carries a device tag in messages, calls and exports: "Ada · phone" or
+  "Ada · main". Someone with one device has no tag. The connection bar has one entry per person, with
+  their devices and connections: "Bob · direct", "Ada · main direct | mac relay". The tag is the device's *alias*: it starts
   as the name given when linking (suggested from the device kind: iPhone, iPad, Android, Mac,
   Windows, Linux; numbered if taken; the main device is "main") and can be changed in
   Settings > Linked devices on any device, for any device. A message carries it as `al`

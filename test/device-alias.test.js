@@ -7,7 +7,7 @@ import { authorIdOf } from '../src/chat/envelope.js';
 import { newRoomSecret } from '../src/crypto/room-keys.js';
 import { Messages } from '../src/ui/messages.js';
 import { exportText } from '../src/ui/export.js';
-import { peerLabel, withDevice } from '../src/ui/alias.js';
+import { peerEntries, peerLabel, withDevice } from '../src/ui/alias.js';
 import { setLanguage } from '../src/ui/i18n.js';
 import { newIdentity } from './helpers.js';
 import { until } from './fakes.js';
@@ -76,4 +76,22 @@ test('every device of Ada shows her messages as its own, tagged with the device'
   const text = exportText(b);
   assert.ok(text.includes('Ada · Pixel: from phone'), text);
   assert.equal(authorIdOf(fromPhone), authorIdOf(mine));
+});
+
+test('the connection bar has one entry per person, with their devices and connections', () => {
+  const row = (member, name, device, state, sas = null) => ({ member, name, device, state, sas });
+  const entries = peerEntries([
+    row('A', 'Ada', '', 'relay', '111 222'), row('B', 'Bob', null, 'p2p', '333 444'),
+    row('A', 'Ada', 'mac', 'p2p', '555 666'), row('C', 'Cy', null, 'seen'),
+  ]);
+  assert.deepEqual(entries.map((e) => e.text), [
+    'Ada · main relay | mac direct', 'Bob · direct', 'Cy · seen',
+  ]);
+  assert.deepEqual(entries.map((e) => e.state), ['p2p', 'p2p', 'seen'], 'the best connection');
+  assert.ok(entries[0].title.includes('main: ') && entries[0].title.includes('555 666'));
+  assert.ok(entries[1].title.includes('333 444') && !entries[1].title.includes('main'));
+  assert.equal(entries[2].title, '');
+  assert.deepEqual(peerEntries([row('A', 'Ada', 'mac', 'p2p')]).map((e) => e.text), [
+    'Ada · mac · direct',
+  ]);
 });

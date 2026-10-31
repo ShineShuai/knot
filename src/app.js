@@ -317,6 +317,9 @@ export class AppModel extends Emitter {
     if (this.isLinked) throw new Error('Only the main device can link a device');
     const request = await readLinkRequest(requestText);
     if (!request) throw new Error('That is not a valid device code (or it has expired)');
+    // Same browser profile (another tab of this app): that "device" is this one. Linking it
+    // would make this device a linked device of itself, which nothing can undo.
+    if (request.id === this.identity.id) throw new Error('That code was made by this device');
     const rooms = [...this.rooms.values()].map((room) => room.exportState());
     // The new device's alias: what it asked for, numbered if another device has it already.
     const taken = this.deviceRows().map((r) => r.alias || 'main');
@@ -361,7 +364,7 @@ export class AppModel extends Emitter {
       const grant = await readLinkGrant(
         text, { identity: this.identity, boxKey, boxPub: boxKey.pub },
       );
-      if (!grant) return null;
+      if (!grant || grant.mainId === this.identity.id) return null; // never to ourselves
       return {
         name: grant.name, mainId: grant.mainId, sas: grant.sas, rooms: grant.rooms.length,
         apply: () => this.#applyGrant(grant),

@@ -43,6 +43,10 @@ export async function verifyCert(c) {
  *  stored certificate is not for this device's key. */
 export async function applyDelegation(identity, kv) {
   const record = await kv.get('delegate');
+  if (record?.cert?.r !== undefined && record.cert.r === record.cert.d) {
+    await kv.delete('delegate'); // a device linked to itself (an old mistake): not a link at all
+    return identity;
+  }
   const member = record ? await verifyCert(record.cert) : null;
   if (member && record.cert.d === toB64u(identity.pub)) {
     Object.assign(identity, { member, cert: record.cert });

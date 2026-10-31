@@ -8,7 +8,7 @@ import {
   DeviceSync, deviceKey, readKey, roomKey, suggestAlias, uniqueAlias,
 } from '../src/chat/device-sync.js';
 import { deviceNameOf, verifyEnvelope } from '../src/chat/envelope.js';
-import { applyDelegation } from '../src/crypto/delegation.js';
+import { applyDelegation, makeCert } from '../src/crypto/delegation.js';
 import { toB64u } from '../src/util/bytes.js';
 import { newRoomSecret } from '../src/crypto/room-keys.js';
 import { MemoryKV } from '../src/store/kv.js';
@@ -367,4 +367,25 @@ test('any device unlinks another linked device; the main device stays', async ()
   await main.unlinkDevice(one.pub); // and the main device the first
   assert.equal(main.deviceRows().length, 1);
   assert.equal(main.paired, false, 'alone again');
+});
+
+const requestFrom = async (alias) => (
+  await (await open(await newIdentity(), new MemoryKV())).startLinking(alias)
+).code;
+
+test('a device cannot be linked to itself; an old self-link is dropped at start', async () => {
+  const [id, kv] = [await newIdentity(), new MemoryKV()];
+  const model = await open(id, kv, 'Ada');
+  const mine = await model.startLinking('Tab two'); // the same browser profile
+  await assert.rejects(model.linkDevice(mine.code), /made by this device/);
+  assert.ok((await model.linkDevice(await requestFrom('Pixel'))).code, 'another device is fine');
+  // what an older version could do: a certificate of the device for itself
+  await kv.put('delegate', { cert: await makeCert(id, id.pub, 'Self') });
+  const again = await applyDelegation(id, kv);
+  assert.ok(!again.cert);
+  assert.equal(again.member, id.id, 'speaks as itself');
+  assert.ok(!(await kv.get('delegate')), 'and the record is gone');
+  const later = await open(again, kv, 'Ada');
+  assert.equal(later.isLinked, false);
+  assert.ok((await later.linkDevice(await requestFrom('Two'))).code, 'it can link devices again');
 });

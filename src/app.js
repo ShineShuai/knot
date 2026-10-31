@@ -7,7 +7,7 @@ import { saveSettings } from './config.js';
 import { newBoxKey } from './crypto/box.js';
 import { makeLinkGrant, makeLinkRequest, readLinkGrant, readLinkRequest } from './chat/devices.js';
 import {
-  DeviceSync, SHARED, deviceKey, suggestAlias, uniqueAlias,
+  DeviceSync, SHARED, deviceKey, readKey, roomKey, suggestAlias, uniqueAlias,
 } from './chat/device-sync.js';
 import { ALIAS_MAX, isAlias } from './chat/envelope.js';
 import { deriveRoomKeys, newRoomSecret } from './crypto/room-keys.js';
@@ -22,10 +22,26 @@ export function nextRoomName(labels, base) {
   for (let n = 1; ; n++) if (!used.has(`${base} ${n}`)) return `${base} ${n}`;
 }
 
+const B64U = /^[A-Za-z0-9_-]+$/;
+
+/** Key epochs received from another device: only well-formed ones, for known-length room ids. */
+function cleanEpochs(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [id, e] of Object.entries(raw).slice(0, 200)) {
+    if (id.length === 16 && B64U.test(id) && e && Number.isSafeInteger(e.n) && e.n >= 1
+      && e.n <= 1e6 && typeof e.s === 'string' && e.s.length === 22 && B64U.test(e.s)) {
+      out[id] = { n: e.n, s: e.s };
+    }
+  }
+  return out;
+}
+
 export class AppModel extends Emitter {
   rooms = new Map(); // room id -> Room
   #removed = new Set(); // ids of rooms left in this tab (so saving does not bring them back)
   #saving = Promise.resolve();
+  #paired = false; // do we have other devices to keep in step? (linked, or linked to)
 
   /** `WS`, `linkFactory`, `callEnv`: injectable network and media pieces (tests); the
    *  defaults are the browser's. */
@@ -44,6 +60,7 @@ export class AppModel extends Emitter {
 
   async load() {
     await this.sync.load();
+    await this.#refreshPaired();
     await this.#sharePrevious();
     this.#applyOwnAlias();
     for (const saved of (await this.kv.get('rooms')) ?? []) await this.#open(
@@ -51,6 +68,9 @@ export class AppModel extends Emitter {
       saved.label,
       saved.owner ?? null,
     );
+    // what our other devices changed while this one was closed, then what only this one has
+    await this.#applyRoomItems(this.sync.items, {});
+    await this.#shareRooms();
     if (this.rooms.size) await this.#persist(); // writes back what an older version dropped
     this.emit('rooms');
   }
@@ -132,14 +152,100 @@ export class AppModel extends Emitter {
     }
   }
 
-  #broadcastSync(items) {
-    if (!Object.keys(items).length) return;
-    for (const room of this.rooms.values()) room.sendToSiblings({ t: 'sync', items });
+  /** Do we have other devices to keep in step? Alone, nothing about rooms is recorded. */
+  get paired() { return this.#paired; }
+
+  async #refreshPaired() {
+    this.#paired = this.isLinked || (await this.linkedDevices()).length > 0;
   }
 
-  async #receiveSync(items) {
+  /** What the others need to add a room: its secret, label and owner. */
+  #roomValue(room) {
+    return {
+      s: toB64u(room.secret), l: String(room.label || 'Room').slice(0, 40),
+      o: room.roster?.founder ?? null,
+    };
+  }
+
+  /** Record (and send on) that a room was added, renamed or left (`room` null: left). */
+  async #shareRoom(id, room) {
+    if (!this.#paired) return;
+    const value = room ? this.#roomValue(room) : null;
+    this.#broadcastSync(await this.sync.set({ [roomKey(id)]: value }));
+  }
+
+  /** Record every room and how far we read it (what has no record yet, or is newer). */
+  async #shareRooms() {
+    if (!this.#paired) return;
+    const patch = {};
+    for (const room of this.rooms.values()) {
+      patch[roomKey(room.id)] = this.#roomValue(room);
+      const { ms, c } = room.readStamp;
+      if (ms || c) patch[readKey(room.id)] = { ms, c };
+    }
+    this.#broadcastSync(await this.sync.set(patch));
+  }
+
+  /** Apply room and read-mark items that came from another device (or were stored): open the
+   *  rooms it added, drop the rooms it left, take its labels and read marks. A room this
+   *  identity owns is never dropped from afar: losing it cannot be undone. */
+  async #applyRoomItems(items, epochs) {
+    let changed = false;
+    for (const [key, item] of Object.entries(items)) {
+      if (key.startsWith('k:')) {
+        await this.rooms.get(key.slice(2))?.advanceRead(item.v);
+        continue;
+      }
+      if (!key.startsWith('r:')) continue;
+      const [id, room, value] = [key.slice(2), this.rooms.get(key.slice(2)), item.v];
+      if (value === null) {
+        if (room && !room.isOwner) { await this.#dropRoom(id); changed = true; }
+      } else if (!room) {
+        if ((await deriveRoomKeys(fromB64u(value.s))).id !== id) continue; // not that room's secret
+        if (epochs[id]) await this.kv.put(`epoch:${id}`, epochs[id]);
+        this.#removed.delete(id);
+        await this.#open(fromB64u(value.s), value.l, value.o);
+        changed = true;
+      } else if (room.label !== value.l) {
+        room.label = value.l;
+        changed = true;
+      }
+    }
+    if (changed) { await this.#persist(); this.emit('rooms'); }
+  }
+
+  /** The key epoch of each room in `items` that we hold (a new device needs it to join). */
+  #epochsFor(items) {
+    const out = {};
+    for (const [key, item] of Object.entries(items)) {
+      if (!key.startsWith('r:') || !item.v) continue;
+      const epoch = this.rooms.get(key.slice(2))?.exportState().epoch;
+      if (epoch) out[key.slice(2)] = epoch;
+    }
+    return out;
+  }
+
+  #frame(items) { return { t: 'sync', items, epochs: this.#epochsFor(items) }; }
+
+  #broadcastSync(items) {
+    if (!Object.keys(items).length) return;
+    const frame = this.#frame(items);
+    for (const room of this.rooms.values()) room.sendToSiblings(frame);
+  }
+
+  /** Everything we hold, to a device of ours that just connected (in small frames). */
+  #sendSnapshot(room, entry) {
+    const all = Object.entries(this.sync.items);
+    for (let i = 0; i < all.length; i += 40) {
+      room.sendToSibling(entry, this.#frame(Object.fromEntries(all.slice(i, i + 40))));
+    }
+  }
+
+  async #receiveSync(items, epochs) {
     const accepted = await this.sync.merge(items);
-    if (Object.keys(accepted).length) this.#broadcastSync(accepted);
+    if (!Object.keys(accepted).length) return;
+    await this.#applyRoomItems(accepted, cleanEpochs(epochs));
+    this.#broadcastSync(accepted);
   }
 
   // ---- linked devices (see chat/devices.js) ------------------------------------------------
@@ -163,6 +269,8 @@ export class AppModel extends Emitter {
     const alias = uniqueAlias(want || 'device', taken);
     await this.sync.seed();
     await this.sync.set({ [deviceKey(toB64u(request.pub))]: alias });
+    this.#paired = true;
+    await this.#shareRooms();
     const grant = await makeLinkGrant(
       this.identity, { ...request, name: alias },
       { name: this.settings.name, rooms, sync: this.sync.items },
@@ -179,6 +287,7 @@ export class AppModel extends Emitter {
     for (const room of this.rooms.values()) await room.unlinkDevice(devicePub).catch(() => {});
     await this.kv.put('linked', (await this.linkedDevices()).filter((x) => x.d !== devicePub));
     this.#broadcastSync(await this.sync.set({ [deviceKey(devicePub)]: null }));
+    await this.#refreshPaired();
     this.emit('devices');
   }
 
@@ -221,6 +330,7 @@ export class AppModel extends Emitter {
   async forgetLinking() {
     await this.kv.delete('delegate');
     await this.kv.delete('sync');
+    this.#paired = false;
   }
 
   /** Join (or return the existing) room with this secret. `owner`: its owner's id, if it has
@@ -228,6 +338,7 @@ export class AppModel extends Emitter {
   async addRoom(secret, label, owner = null) {
     const room = await this.#open(secret, label, owner);
     await this.#persist();
+    await this.#shareRoom(room.id, room);
     this.emit('rooms');
     return room;
   }
@@ -246,6 +357,18 @@ export class AppModel extends Emitter {
   }
 
   async removeRoom(id) {
+    if (!this.rooms.has(id)) return;
+    if (this.#paired) { // tell our other devices while the links are still up, and let it out
+      await this.#shareRoom(id, null);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    await this.#dropRoom(id);
+    this.emit('rooms');
+  }
+
+  /** Forget a room on this device (what removeRoom does, and what a device of ours leaving it
+   *  does here). */
+  async #dropRoom(id) {
     const room = this.rooms.get(id);
     if (!room) return;
     room.stop();
@@ -257,7 +380,6 @@ export class AppModel extends Emitter {
     this.#removed.add(id);
     this.rooms.delete(id);
     await this.#persist();
-    this.emit('rooms');
   }
 
   /** The owner said yes: open the room, with the approval that came with the grant. */
@@ -307,8 +429,17 @@ export class AppModel extends Emitter {
     if (owner) await this.kv.put(`owner:${id}`, owner);
     const room = await Room.open(this.#options(secret, label, owner));
     if (this.rooms.has(room.id)) return this.rooms.get(room.id);
-    room.on('sibling', (entry) => room.sendToSibling(entry, { t: 'sync', items: this.sync.items }));
-    room.on('sync', (items) => this.#receiveSync(items));
+    const synced = this.sync.value(readKey(room.id));
+    if (synced) await room.advanceRead(synced); // read on another device of ours already
+    room.on('sibling', (entry) => this.#sendSnapshot(room, entry));
+    room.on('sync', (items, entry, epochs) => {
+      this.#receiveSync(items, epochs).catch((err) => console.error('sync failed', err));
+    });
+    room.on('read', (stamp) => {
+      if (!this.#paired) return;
+      this.sync.set({ [readKey(room.id)]: stamp }).then((items) => this.#broadcastSync(items))
+        .catch((err) => console.error('sync failed', err));
+    });
     room.start();
     this.rooms.set(room.id, room);
     return room;
@@ -321,6 +452,7 @@ export class AppModel extends Emitter {
     if (!room || !next) return;
     room.label = next;
     await this.#persist();
+    await this.#shareRoom(id, room);
     this.emit('rooms');
   }
 

@@ -288,14 +288,14 @@ if no broker is reachable; with brokers, reconnection is automatic).
   *request* (its key, a one-time sealing key, a name, signed with its key); the main device
   answers with a *grant* (the certificate and every room's secret, owner id and key epoch,
   sealed to that one-time key, signed by the main key). Both screens show six digits derived
-  from all keys; if they differ, a code was swapped. Rooms joined later need linking again
-  (it only adds; settings and aliases stay in step, see below). *Unlink* (main device, Settings > Linked devices) is a signed `unlink`
+  from all keys; if they differ, a code was swapped. Rooms joined later reach the
+  other devices by themselves (see *Shared state* below). *Unlink* (main device, Settings > Linked devices) is a signed `unlink`
   envelope in every room, kept forever like membership changes: peers drop that device's links
   and refuse everything it writes with that certificate, including history that arrives later;
   the device itself notices and goes back to its own identity. Limits: a stolen linked device
   can read and write as you until its unlink has reached the others, and unlinking does not
   change room keys (an owner removing a member does, see above); a linked device cannot create
-  rooms or own them; each device keeps its own unread marks and call connections. Every device
+  rooms or own them; each device keeps its own call connections. Every device
   of one identity shows that identity's messages as its own ("You", edit, delete). Once a
   certificate or alias of someone has been seen (in a message or on a link), their name
   carries a device tag in messages, the connection bar, calls and exports: "Ada · phone" or
@@ -305,13 +305,22 @@ if no broker is reachable; with brokers, reconnection is automatic).
   Settings > Linked devices on any device, for any device. A message carries it as `al`
   `{ n, sig }`, signed with the writing device's key over the message id (so it cannot be moved
   to another message); old versions ignore the field. **Shared state:** the settings except
-  notifications (name, language, STUN/TURN, brokers, relay, previews) and the aliases are
-  last-writer-wins registers (hybrid clock stamp, device id as tie-break), kept under `sync`.
+  notifications (name, language, STUN/TURN, brokers, relay, previews), the aliases, the *room
+  list* and the *read marks* are last-writer-wins registers (hybrid clock stamp, device id as tie-break), kept under `sync`.
   A change is sent as `{t:'sync', items}` over the direct links to our other devices (a link
   proves that with the main id or the certificate) in every room, relayed on, and each device
   sends all it has when a link to one of its devices comes up, so changes made while apart
   arrive when two devices meet in any room. The newest change wins everywhere. Received items
-  are checked (known keys, value types and sizes) before use.
+  are checked (known keys, value types and sizes) before use. Rooms: `r:<room id>` holds the
+  secret, label and owner id, or null once the room was left (a tombstone, so it does not come
+  back from a device that still has it); a device opens rooms it gets (with their key epoch,
+  sent along), renames, and leaves rooms as the item says, and checks that the secret is that
+  room's. A room this identity owns is never dropped from another device (the owner role
+  cannot be recovered); leaving it elsewhere only affects that device. Read marks: `k:<room id>`
+  holds the newest message stamp read on any device and only moves forward, so a room read on
+  one device is not unread on the others. Rooms and marks are recorded only while there are
+  other devices (linking records the ones that exist), and a leave is announced before the
+  links close.
 * **One tab per browser profile:** the tabs of a profile share one identity and database, and
   two running at once would clash (same peer id, room list overwritten, equal message stamps).
   The first tab takes a Web Lock; others show a message instead of starting (taken before the

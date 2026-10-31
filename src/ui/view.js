@@ -29,7 +29,6 @@ class Ui {
   #offStage = [];       // unsubscribers for the active room
   #watched = new Set(); // rooms whose 'peers' events refresh the rail
   #updateReady = false; // a newer version of the app has been published
-  #unlinkedShown = false;
   #ownerEvents = new WeakSet(); // rooms whose owner events we already listen to
 
   constructor(root, model, opts = {}) {
@@ -84,6 +83,10 @@ class Ui {
       this.#renderRail();
       this.#watchRooms();
     });
+    this.model.on('unlinked', () => { // left or withdrawn: start over as a device of its own
+      this.notify(t('unlinkedNotice'));
+      setTimeout(() => globalThis.location?.reload?.(), 2500);
+    });
     this.model.on('settings', (keys) => { // another device of ours changed them
       if (!keys.includes('language')) return;
       setLanguage(this.model.settings.language);
@@ -116,10 +119,7 @@ class Ui {
 
   /** The main device withdrew this device. */
   async #onUnlinked() {
-    if (!this.model.isLinked || this.#unlinkedShown) return;
-    this.#unlinkedShown = true;
-    await this.model.forgetLinking();
-    this.notify(t('unlinkedNotice'));
+    if (this.model.isLinked) await this.model.forgetLinking();
   }
 
   #openRoom(id) {
@@ -214,7 +214,7 @@ class Ui {
       room.on('peers', () => this.#renderRail());
     }
     const items = rooms.map((room) => {
-      const direct = room.peerList.filter((p) => p.state === 'p2p').length;
+      const direct = peerEntries(room.peerList).filter((e) => e.state === 'p2p').length;
       const unread = room.unread;
       return h('li', {},
         h('button', { class: 'room-item', 'aria-current': room === this.#current ? 'true'

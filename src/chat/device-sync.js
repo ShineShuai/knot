@@ -132,12 +132,15 @@ export class DeviceSync extends Emitter {
   value(key) { return this.#items[key]?.v; }
 
   /** Our own changes: `patch` maps keys to new values. Returns the items that changed (to
-   *  send on). Throws if a value is not acceptable. */
-  async set(patch) {
+   *  send on). Throws if a value is not acceptable, unless `lenient`: then that value is
+   *  left out (for bulk updates, where one odd room must not stop the rest). */
+  async set(patch, { lenient = false } = {}) {
     const changed = {};
     for (const [key, v] of Object.entries(patch)) {
-      if (!known(key)) throw new Error(`not shared: ${key}`);
-      if (!validValue(key, v)) throw new Error(`invalid value for ${key}`);
+      if (!known(key) || !validValue(key, v)) {
+        if (lenient) continue;
+        throw new Error(known(key) ? `invalid value for ${key}` : `not shared: ${key}`);
+      }
       const now = SHARED.includes(key) ? this.settings[key] : this.#items[key]?.v;
       if (same(now, v)) continue; // nothing changes
       if (READ.test(key) && now && compareStamps(v, now) <= 0) continue; // only moves forward

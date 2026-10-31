@@ -200,6 +200,7 @@ const en = {
   devicesUnlink: 'Unlink',
   scanUnavailable: 'This browser cannot scan QR codes (Firefox cannot; Chrome, Edge and Safari 17+ can). Paste the code instead.',
   noRoomLink: 'Already use Knot on another device? Link this one to it to get your rooms and settings.',
+  devicesSaved: 'Saved.',
   deviceAlias: 'Device alias',
   deviceThis: 'this device',
   deviceAliasHelp: 'The alias is shown after your name in messages and calls. Any of your devices can rename any other; all your devices share their settings.',
@@ -223,7 +224,9 @@ const en = {
   linkDone: 'Linked. Reloading…',
   linkInvalid: 'That is not a valid code (or it has expired)',
   linkedTo: 'This device is linked to {id}: it writes as that identity. Unlink it from the main device.',
-  unlinkedNotice: 'This device was unlinked from your main device.',
+  unlinkedNotice: 'This device is no longer linked. It restarts as a device of its own, with a new identity.',
+  leaveLink: 'Separate this device from the main device',
+  leaveLinkConfirm: 'Separate this device from your main device? It stops sharing your identity, rooms and settings, restarts with a new identity and keeps the history of its rooms. It can then link other devices.',
 };
 const zh = {
   newRoom: '新建房间',
@@ -420,6 +423,7 @@ const zh = {
   devicesUnlink: '取消关联',
   scanUnavailable: '此浏览器无法扫描二维码（Firefox 不支持；Chrome、Edge 和 Safari 17+ 支持）。请改为粘贴代码。',
   noRoomLink: '已在其他设备上使用 Knot？把这台设备关联过来，即可获得你的房间和设置。',
+  devicesSaved: '已保存。',
   deviceAlias: '设备别名',
   deviceThis: '本设备',
   deviceAliasHelp: '别名会显示在消息和通话里你的名字后面。你的任一设备都可以重命名其他设备；所有设备共享设置。',
@@ -443,7 +447,9 @@ const zh = {
   linkDone: '已关联，正在重新加载…',
   linkInvalid: '代码无效（或已过期）',
   linkedTo: '此设备已关联到 {id}：它以该身份发言。请在主设备上取消关联。',
-  unlinkedNotice: '此设备已被主设备取消关联。',
+  unlinkedNotice: '此设备已不再关联，将作为独立设备以新身份重新启动。',
+  leaveLink: '将此设备与主设备分离',
+  leaveLinkConfirm: '将此设备与主设备分离？它将不再共享你的身份、房间和设置，以新身份重新启动，并保留房间的聊天记录。之后它可以关联其他设备。',
 };
 const de = {
   newRoom: 'Neuer Raum',
@@ -646,6 +652,7 @@ const de = {
   devicesUnlink: 'Trennen',
   scanUnavailable: 'Dieser Browser kann keine QR-Codes scannen (Firefox nicht; Chrome, Edge und Safari 17+ schon). Füge den Code stattdessen ein.',
   noRoomLink: 'Du nutzt Knot schon auf einem anderen Gerät? Verknüpfe dieses damit, um deine Räume und Einstellungen zu bekommen.',
+  devicesSaved: 'Gespeichert.',
   deviceAlias: 'Gerätename',
   deviceThis: 'dieses Gerät',
   deviceAliasHelp: 'Der Gerätename steht in Nachrichten und Anrufen hinter deinem Namen. Jedes deiner Geräte kann die anderen umbenennen; alle teilen ihre Einstellungen.',
@@ -669,7 +676,9 @@ const de = {
   linkDone: 'Verknüpft. Lade neu…',
   linkInvalid: 'Das ist kein gültiger Code (oder er ist abgelaufen)',
   linkedTo: 'Dieses Gerät ist mit {id} verknüpft: Es schreibt als diese Identität. Trenne es am Hauptgerät.',
-  unlinkedNotice: 'Dieses Gerät wurde vom Hauptgerät getrennt.',
+  unlinkedNotice: 'Dieses Gerät ist nicht mehr verknüpft. Es startet als eigenes Gerät mit neuer Identität neu.',
+  leaveLink: 'Dieses Gerät vom Hauptgerät trennen',
+  leaveLinkConfirm: 'Dieses Gerät vom Hauptgerät trennen? Es teilt dann Identität, Räume und Einstellungen nicht mehr, startet mit neuer Identität neu und behält den Verlauf seiner Räume. Danach kann es andere Geräte verknüpfen.',
 };
 export const dictionaries = { en, zh, de };
 /** Each language's name in that language, so you can find yours whatever the UI speaks now. */

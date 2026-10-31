@@ -209,9 +209,10 @@ if no broker is reachable; with brokers, reconnection is automatic).
   to a known identity. Each pair has one connection with two fixed transceivers (audio,
   video); the peer with the smaller id always offers. Muting is `track.enabled`, the camera
   is `replaceTrack` (off stops the capture, so the light goes out): neither renegotiates.
-  A connection that dies is offered again with growing pauses. Camera and microphone are
-  asked for only when you join (or turn the camera on); a refused device still lets you
-  listen. **Video quality** favours audio first, then smooth motion (no queueing, so no added
+  A connection that dies is offered again with growing pauses. Alone in a call for
+  `callAloneMs` (5 min: nobody else joined, or everyone left), you leave it and get a notice.
+  Camera and microphone are asked for only when you join (or turn the camera on); a
+  refused device still lets you listen. **Video quality** favours audio first, then smooth motion (no queueing, so no added
   delay), then sharpness. The camera is captured at up to 720p/30; each connection encodes
   only what it can carry and the receiver shows (`call/quality.js`, no renegotiation, only
   `setParameters`): a ladder of rungs (180p/15 fps/100 kb/s up to 720p/30/1.8 Mb/s; a screen

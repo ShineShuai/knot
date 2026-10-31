@@ -350,3 +350,18 @@ test('ui: the call window tells each sender how big its video is shown; paused v
       assert.ok(bob.classList.contains('novideo'));
     } finally { delete globalThis.ResizeObserver; }
   });
+
+test('ui: alone in a call for too long: the window closes and a notice says why', async () => {
+  const a = await person('Ada');
+  const room = await a.model.addRoom(newRoomSecret(), 'Club');
+  rooms.push(room);
+  a.ui.select(room);
+  const panel = a.root.querySelector('.call');
+  byLabel(a.root, 'Start an audio call').click();
+  await until(() => room.call.joined && panel.hidden === false);
+  room.call.checkAlone();
+  a.party.clock.t = DEFAULTS.callAloneMs;
+  room.call.checkAlone();
+  assert.equal(panel.hidden, true);
+  assert.match(a.root.querySelector('.toast').textContent, /Call in Club ended/);
+});

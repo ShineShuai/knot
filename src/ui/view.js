@@ -167,6 +167,7 @@ class Ui {
       });
       room.on('roster', () => { if (room.isOwner) this.roomDialogs.ensureRecovery(room); });
       room.call.on('change', () => this.callPanel.sync(room));
+      room.call.on('alone', () => this.notify(t('callAlone', { room: room.label })));
       room.on('unread', () => this.#refreshUnread());
       room.on('unlinked', () => this.#onUnlinked());
       this.notifier.watch(room);

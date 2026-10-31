@@ -20,7 +20,9 @@ import { Emitter } from '../util/emitter.js';
 import { randomBytes, toB64u } from '../util/bytes.js';
 import { CallLink, validSdp } from './call-link.js';
 import { browserMedia } from './media.js';
-import { LinkQuality, MAX_WANT, ceiling, parseWant, profileOf } from './quality.js';
+import {
+  LinkQuality, MAX_WANT, QualityGroup, bitrate, ceiling, parseWant, profileOf, topRung,
+} from './quality.js';
 
 const MAX_TRIES = 6;
 const MAX_SID = 32;
@@ -48,7 +50,7 @@ export class CallManager extends Emitter {
   #audio = null; #video = null; #screen = null; #localStream = null;
   #mic = { track: null, stream: null };
   #generation = 0; #joining = false; #adapting = false;
-  #sentVideo = null; #stopAdapt = null;
+  #sentVideo = null; #stopAdapt = null; #group = new QualityGroup();
   #send; #opts; #media; #now; #every;
 
   /**
@@ -145,6 +147,7 @@ export class CallManager extends Emitter {
     this.#demand.clear();
     this.#want.clear();
     this.#paused.clear();
+    this.#group = new QualityGroup();
     for (const timer of this.#timers) clearTimeout(timer);
     this.#timers.clear();
     this.#tries.clear();
@@ -342,7 +345,10 @@ export class CallManager extends Emitter {
       connectTimeoutMs: settings.connectTimeoutMs, RTC, Stream,
     });
     link.setTracks({ audio: this.#audio, video: this.#sending() });
-    const entry = { link, sid, offerer, answered: false, q: null, rung: -1, paused: false };
+    const entry = {
+      link, sid, offerer, answered: false, q: null, rung: -1, paused: false,
+      sample: null, sampledAt: null, bps: null,
+    };
     this.#links.set(id, entry);
     link.on('connected', () => { this.#tries.delete(id); this.emit('change'); });
     link.on('close', () => this.#closed(id, entry));
@@ -403,19 +409,50 @@ export class CallManager extends Emitter {
     if (this.joined && h !== undefined && this.#up.has(id)) this.#send(id, { k: 'want', h });
   }
 
-  /** Measure every connection once and review its video settings (a timer does this). */
+  /** Measure every connection once and review its video settings (a timer does this). The
+   *  connections share one uplink, so a group decides who steps down or up first. */
   async adapt() {
-    if (this.#adapting || !this.#sending()) return; // nothing is sent: nothing to learn
+    if (this.#adapting || !this.#links.size) return;
     this.#adapting = true;
     const at = this.#now();
     try {
-      await Promise.all([...this.#links].map(async ([id, entry]) => {
-        const sample = await entry.link.sample();
-        if (!sample || !entry.q || this.#links.get(id) !== entry) return;
-        const ceil = this.#ceilingFor(id, entry);
-        this.#setRung(id, entry, entry.q.update(sample, ceil, at), ceil);
-      }));
+      const taken = await Promise.all(
+        [...this.#links].map(async ([id, entry]) => [id, entry, await entry.link.sample()]),
+      );
+      const items = [];
+      for (const [id, entry, sample] of taken) {
+        if (!sample || this.#links.get(id) !== entry || !entry.q) continue;
+        entry.bps = entry.sample && bitrate(entry.sample, sample, (at - entry.sampledAt) / 1000);
+        entry.sample = sample;
+        entry.sampledAt = at;
+        items.push({
+          id, entry, q: entry.q, sample, ceil: this.#ceilingFor(id, entry),
+          want: this.#demand.get(id),
+        });
+      }
+      if (!this.#sending()) return; // nothing is sent: nothing to learn
+      const rungs = this.#group.review(items, at);
+      items.forEach(({ id, entry, ceil }, i) => this.#setRung(id, entry, rungs[i], ceil));
     } finally { this.#adapting = false; }
+  }
+
+  /** One row per connection, for the diagnostics: what we send and measured, what is asked. */
+  quality() {
+    return [...this.#links].map(([id, entry]) => {
+      const { q, sample: s } = entry;
+      return {
+        id, state: entry.link.state, kind: q?.kind ?? null, rung: entry.rung,
+        level: q?.level ?? null, top: q ? topRung(q.kind) : null,
+        paused: entry.paused, pausedByPeer: this.#paused.has(id),
+        demand: this.#demand.get(id) ?? null, want: this.#want.get(id) ?? null,
+        send: s && {
+          kbps: entry.bps == null ? null : Math.round(entry.bps / 1000),
+          fps: s.fps, w: s.w, h: s.h, loss: s.loss, rtt: s.rtt, limit: s.limit,
+          available: s.available,
+        },
+        recv: s?.recv ?? null,
+      };
+    });
   }
 
   #ceilingFor(id, entry) {

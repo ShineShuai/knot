@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  LADDER, LinkQuality, ceiling, parseWant, profileOf, readStats, rungByPeople, rungFor,
+  LADDER, LinkQuality, bitrate, ceiling, parseWant, profileOf, readStats, rungByPeople, rungFor,
   wantHeight,
 } from '../src/call/quality.js';
 
@@ -70,11 +70,22 @@ test('readStats keeps what browsers give and tolerates what they do not', () => 
     { type: 'candidate-pair', nominated: false, state: 'succeeded', availableOutgoingBitrate: 1 },
   ];
   assert.deepEqual(readStats({ forEach: (fn) => list.forEach(fn) }), {
-    bytes: 1000, ts: 5, loss: 0.02, rtt: 0.08, limit: 'cpu', available: 7e5,
+    bytes: 1000, ts: 5, fps: null, w: null, h: null, loss: 0.02, rtt: 0.08, limit: 'cpu',
+    available: 7e5, recv: null,
   });
   assert.deepEqual(readStats({ forEach() {} }), {
-    bytes: null, ts: null, loss: null, rtt: null, limit: null, available: null,
+    bytes: null, ts: null, fps: null, w: null, h: null, loss: null, rtt: null, limit: null,
+    available: null, recv: null,
   });
+  const more = [
+    { type: 'outbound-rtp', kind: 'video', framesPerSecond: 29, frameWidth: 640, frameHeight: 360 },
+    { type: 'inbound-rtp', kind: 'video', framesPerSecond: 24, frameWidth: 320, frameHeight: 180,
+      freezeCount: 2 },
+    { type: 'inbound-rtp', kind: 'audio', framesPerSecond: 99 },
+  ];
+  const got = readStats({ forEach: (fn) => more.forEach(fn) });
+  assert.deepEqual([got.fps, got.w, got.h], [29, 640, 360]);
+  assert.deepEqual(got.recv, { fps: 24, w: 320, h: 180, freezes: 2 });
 });
 
 const good = { loss: 0, rtt: 0.05 };
@@ -137,20 +148,51 @@ test('the browser\'s bandwidth estimate gates both the cap and the climb', () =>
   for (let at = 2000; at <= 6000; at += 2000) q.update(poor, 5, at); // still warming up
   assert.equal(q.update(poor, 5, 8000), 3);
   assert.equal(q.update(poor, 5, 10_000), 2);
-  const tight = { ...good, available: 400_000 }; // fits 250k, not the next rung (needs 650k)
+  const tight = { ...good, available: 270_000 }; // no air above the 250k rung
   assert.equal(run(q, tight, 5, 12_000, 60_000), 2);
-  const roomy = { ...good, available: 900_000 };
-  assert.equal(run(q, roomy, 5, 62_000, 80_000), 3);
+  const some = { ...good, available: 400_000 }; // air to try 500k, none beyond
+  assert.equal(run(q, some, 5, 62_000, 120_000), 3);
+  const roomy = { ...good, available: 2_000_000 }; // a wide margin: no need to wait
+  assert.equal(q.update(roomy, 5, 122_000), 4);
+  assert.equal(q.update(roomy, 5, 126_000), 4); // the margin above 1M is thinner: wait again
 });
 
-test('a failed climb makes the next one wait longer', () => {
+test('a rung that did not hold is not tried again for a while, longer each time', () => {
   const q = new LinkQuality('camera', 0);
   assert.equal(run(q, good, 5, 2000, 10_000), 4); // the climb
   const lossy = { loss: 0.08, rtt: 0.05 };
   q.update(lossy, 5, 12_000);
   assert.equal(q.update(lossy, 5, 14_000), 3); // it did not hold
-  assert.equal(run(q, good, 5, 16_000, 28_000), 3); // 8 s would have been enough before
-  assert.equal(q.update(good, 5, 32_000), 4);
+  assert.equal(run(q, good, 5, 16_000, 100_000), 3); // 8 s of calm would have been enough
+  assert.equal(q.update(good, 5, 106_000), 4); // tried again once the block ended
+  q.update(lossy, 5, 108_000);
+  assert.equal(q.update(lossy, 5, 110_000), 3); // and failed again: now the block is doubled
+  assert.equal(run(q, good, 5, 112_000, 280_000), 3);
+  assert.equal(q.update(good, 5, 292_000), 4);
+});
+
+test('a wide margin in the estimate overrides the block on a failed rung', () => {
+  const q = new LinkQuality('camera', 0);
+  run(q, good, 5, 2000, 10_000);
+  const lossy = { loss: 0.08, rtt: 0.05 };
+  q.update(lossy, 5, 12_000);
+  assert.equal(q.update(lossy, 5, 14_000), 3);
+  assert.equal(run(q, { ...good, available: 3_000_000 }, 5, 16_000, 20_000), 4);
+});
+
+test('a rung that held for a minute is trusted again: its next failure counts as the first', () => {
+  const q = new LinkQuality('camera', 0);
+  const lossy = { loss: 0.08, rtt: 0.05 };
+  assert.equal(run(q, good, 4, 2000, 10_000), 4);
+  q.update(lossy, 4, 12_000);
+  assert.equal(q.update(lossy, 4, 14_000), 3); // 4 failed right after the climb: 90 s block
+  assert.equal(run(q, good, 4, 16_000, 102_000), 3);
+  assert.equal(q.update(good, 4, 104_000), 4); // tried again, and it holds
+  run(q, good, 4, 106_000, 168_000);
+  q.update(lossy, 4, 170_000);
+  assert.equal(q.update(lossy, 4, 172_000), 3);
+  assert.equal(run(q, good, 4, 174_000, 214_000), 3); // blocked for 45 s, not 90 or 180
+  assert.equal(q.update(good, 4, 218_000), 4);
 });
 
 test('video that cannot be carried is dropped, and tried again after a pause', () => {
@@ -160,4 +202,13 @@ test('video that cannot be carried is dropped, and tried again after a pause', (
   assert.equal(q.update(good, 5, 12_000), 0); // paused: no video to measure
   assert.equal(q.update(good, 5, 22_000), 0);
   assert.equal(q.update(good, 5, 24_000), 1); // tries the lowest rung again
+});
+
+test('bitrate comes from byte counts and their timestamps, or from a given interval', () => {
+  assert.equal(bitrate({ bytes: 1000, ts: 0 }, { bytes: 26_000, ts: 2000 }), 100_000);
+  assert.equal(bitrate({ bytes: 1000 }, { bytes: 26_000 }, 2), 100_000);
+  assert.equal(bitrate({ bytes: 5000, ts: 0 }, { bytes: 1000, ts: 1000 }), 0); // a restart
+  assert.equal(bitrate(null, { bytes: 1 }, 2), null);
+  assert.equal(bitrate({ bytes: 1 }, { bytes: null }, 2), null);
+  assert.equal(bitrate({ bytes: 1 }, { bytes: 9 }), null); // no time given
 });

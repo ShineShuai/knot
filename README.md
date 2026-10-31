@@ -88,7 +88,8 @@ if no broker is reachable; with brokers, reconnection is automatic).
       store/instance-lock.js  one running tab per browser profile (Web Locks)
       call/call.js         CallManager: mesh call of one room, presence + signaling frames
       call/call-link.js    one audio+video RTCPeerConnection to one participant
-      call/quality.js      video quality policy: ladder, ceilings, stats reader, controller
+      call/quality.js      video quality policy: ladder, ceilings, stats reader, controller,
+                           QualityGroup (the connections of a call take turns)
       call/media.js        microphone / camera / screen access (swappable in tests)
       qr/qr.js             QR encoder (verified against OpenCV in tests)
       ui/                  DOM helpers, i18n (en/zh/de), views, camera scanner
@@ -205,8 +206,14 @@ if no broker is reachable; with brokers, reconnection is automatic).
   severe: two rungs), up is slow (one rung after 8 s calm, longer after a failed try). If even
   the lowest rung does not fit, video pauses for that peer (their tile says so), audio goes
   on, and video is tried again after a pause. Cameras degrade by resolution first, screens by
-  frame rate (`degradationPreference`, where the browser has it). One call at a time per
-  device; it keeps running while you read another room
+  frame rate (`degradationPreference`, where the browser has it). The connections of a call
+  share one uplink, so they take turns: one steps down per review, one climbs at a time, and
+  only while none suffers (severe trouble acts at once). A rung that failed is not tried
+  again blindly for 45-180 s, so the picture does not jump up and down; where the browser
+  does not say why it holds back (Firefox, Safari), frames smaller than asked for are the
+  sign. Settings > Diagnostics lists every call connection (rung, bitrate, frame size and
+  rate, loss, round-trip time, the browser's limit and estimate, what each side asked for,
+  what we receive). One call at a time per device; it keeps running while you read another room
   ("minimize"). Texting and files work during a call: the chat button (💬) puts the room's
   conversation next to the video (call at the side on a desktop, on top on a phone) with the
   usual message box, drop, paste and reactions, and counts what arrives while the call covers
@@ -256,6 +263,15 @@ if no broker is reachable; with brokers, reconnection is automatic).
   can ask again. Without it the browser may delete the identity key and history when space is
   low (Safari: after about a week without a visit unless the app is installed to the Home
   Screen or Dock). The key cannot be recovered.
+* **Call quality tests:** `test/quality-sim.js` models one sender's uplink (a bandwidth
+  estimate that follows the capacity with a lag, a queue, then loss) and `quality-sim.test.js`
+  runs the controller through it for browsers that report nothing extra, a limit reason, or a
+  bandwidth estimate: a rich link, 600 kb/s, a collapse and a recovery, a hopeless link, five
+  connections on 1 Mb/s. It checks the behaviour (settles, does not flap, short queue, video
+  returns), not a real network: for that, `sudo tools/netshape.sh weak|lte|lossy|hopeless|cycle`
+  shapes this Mac's UDP traffic (macOS, dummynet + pf; `off` restores) while you call from
+  another device, and Settings > Diagnostics shows what the call did. Check Chrome, Firefox
+  and Safari with 2, 4 and 6 people.
 * **Diagnostics:** Settings > Diagnostics makes a text report for when something works in one
   browser and not in another: the browser, what it supports (WebRTC, Ed25519 and X25519,
   image encoding, IndexedDB buffers...), every room's links (direct, relayed), the brokers and

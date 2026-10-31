@@ -8,6 +8,7 @@
 // Events: 'connected', 'close'
 import { Emitter } from '../util/emitter.js';
 import { gathered } from '../net/ice-gather.js';
+import { DEGRADATION, readStats } from './quality.js';
 
 const MAX_SDP_CHARS = 24_000;
 
@@ -22,7 +23,8 @@ export class CallLink extends Emitter {
   state = 'connecting'; // connecting | connected | closed
   /** What the other side sends us; its tracks are added as they arrive. */
   stream;
-  #pc; #gatherMs; #tracks = { audio: null, video: null }; #maxVideo = null;
+  #pc; #gatherMs; #tracks = { audio: null, video: null };
+  #profile = null; #busy = false; #dirty = false; #noPreference = false;
 
   constructor({
     iceServers = [], gatherTimeoutMs = 3000, connectTimeoutMs = 20000,
@@ -37,7 +39,8 @@ export class CallLink extends Emitter {
       const s = this.#pc.connectionState;
       if (s === 'connected' && this.state === 'connecting') {
         this.state = 'connected';
-        this.#applyVideoLimit();
+        this.#prioritizeAudio();
+        this.#flush();
         this.emit('connected');
       } else if (s === 'failed' || s === 'closed') this.close();
     };
@@ -79,6 +82,7 @@ export class CallLink extends Emitter {
   setTracks({ audio = null, video = null }) {
     this.#tracks = { audio, video };
     this.#applyTracks();
+    this.#flush(); // a new capture may need another downscale factor
   }
 
   #applyTracks() {
@@ -87,21 +91,75 @@ export class CallLink extends Emitter {
     }
   }
 
-  /** Cap the video bitrate (bits per second); applied as soon as the connection is up. */
-  limitVideo(bitsPerSecond) {
-    this.#maxVideo = bitsPerSecond;
-    this.#applyVideoLimit();
+  #transceiver(kind) {
+    return this.#pc.getTransceivers().find((t) => t.receiver.track.kind === kind);
   }
 
-  async #applyVideoLimit() {
-    if (this.state !== 'connected' || !this.#maxVideo) return;
-    const video = this.#pc.getTransceivers().find((t) => t.receiver.track.kind === 'video');
+  /** The video encoder settings (see `profileOf` in quality.js): on or off, resolution,
+   *  frame rate, bitrate cap. Applied as soon as the connection is up and whenever they
+   *  change; never renegotiates. Several changes in a row collapse into the last one. */
+  applyProfile(profile) {
+    this.#profile = profile;
+    this.#flush();
+  }
+
+  async #flush() {
+    if (this.state !== 'connected' || !this.#profile) return;
+    if (this.#busy) { this.#dirty = true; return; }
+    this.#busy = true;
     try {
-      const params = video.sender.getParameters();
+      do {
+        this.#dirty = false;
+        await this.#write(this.#profile);
+      } while (this.#dirty && this.state === 'connected');
+    } finally { this.#busy = false; }
+  }
+
+  /** Not every browser lets us tune this: it is an optimisation, so failures are ignored.
+   *  A browser that rejects `degradationPreference` is asked again without it. */
+  async #write(profile) {
+    const sender = this.#transceiver('video')?.sender;
+    if (!sender) return;
+    for (const withPreference of [!this.#noPreference, false]) {
+      try {
+        const params = sender.getParameters();
+        params.encodings = params.encodings?.length ? params.encodings : [{}];
+        const [encoding] = params.encodings;
+        encoding.active = profile.active;
+        if (profile.active) {
+          encoding.maxBitrate = profile.bps;
+          encoding.maxFramerate = profile.fps;
+          encoding.scaleResolutionDownBy = this.#scaleFor(profile.h);
+          if (withPreference) params.degradationPreference = DEGRADATION[profile.kind];
+        }
+        await sender.setParameters(params);
+        return;
+      } catch { this.#noPreference = true; }
+    }
+  }
+
+  /** How much to shrink the capture to get `height` pixels (never enlarges). */
+  #scaleFor(height) {
+    const captured = this.#tracks.video?.getSettings?.().height;
+    return captured > height ? captured / height : 1;
+  }
+
+  /** Voice outranks video when the link is short of bandwidth. */
+  async #prioritizeAudio() {
+    try {
+      const sender = this.#transceiver('audio')?.sender;
+      const params = sender.getParameters();
       params.encodings = params.encodings?.length ? params.encodings : [{}];
-      params.encodings[0].maxBitrate = this.#maxVideo;
-      await video.sender.setParameters(params);
-    } catch { /* not every browser lets us tune this: it is only an optimisation */ }
+      params.encodings[0].priority = 'high';
+      params.encodings[0].networkPriority = 'high';
+      await sender.setParameters(params);
+    } catch { /* optional */ }
+  }
+
+  /** One reading of the connection's statistics (see `readStats`), null if unavailable. */
+  async sample() {
+    if (this.state !== 'connected' || typeof this.#pc.getStats !== 'function') return null;
+    try { return readStats(await this.#pc.getStats()); } catch { return null; }
   }
 
   close() {

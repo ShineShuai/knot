@@ -11,48 +11,66 @@
 //                who        who is in the call? (answered with `in`; sent when a link is ready,
 //                           because a frame sent before the other side counts us as a member
 //                           is dropped)
+//                want {h}   how tall (pixels) you show my video; 0: not at all. The sender
+//                           never encodes more than that (and pauses at 0)
+//                pause {on} I stopped sending you video because the network cannot carry it
 //                offer/answer {sid, sdp}   the peer with the smaller id always offers
 // Events: 'change' (anyone joined, left, muted, connected...)
 import { Emitter } from '../util/emitter.js';
 import { randomBytes, toB64u } from '../util/bytes.js';
 import { CallLink, validSdp } from './call-link.js';
 import { browserMedia } from './media.js';
+import {
+  LinkQuality, MAX_WANT, QualityGroup, bitrate, ceiling, parseWant, profileOf, topRung,
+} from './quality.js';
 
 const MAX_TRIES = 6;
 const MAX_SID = 32;
-/** Every sender encodes once per receiver, so the more people, the less each stream gets. */
-const videoBitrate = (people) => (people <= 2 ? 1_000_000 : people <= 4 ? 450_000 : 250_000);
+const ADAPT_MS = 2000; // how often every connection is measured and its video settings reviewed
+
+const everyMs = (fn, ms) => {
+  const timer = setInterval(fn, ms);
+  timer.unref?.();
+  return () => clearInterval(timer);
+};
 
 export class CallManager extends Emitter {
   joined = false;
   /** peer id -> { a, v } for everyone known to be in a call (whether or not we are). */
   members = new Map();
 
-  #links = new Map();  // peer id -> { link, sid, offerer, answered }
+  #links = new Map();  // peer id -> { link, sid, offerer, answered, q, rung, paused }
+  #demand = new Map(); // peer id -> tile height they show our video at (their `want`)
+  #want = new Map();   // peer id -> tile height we show theirs at (what we told them)
+  #paused = new Set(); // peers that stopped sending us video because of the network
   #up = new Set();     // peers we can signal to right now
   #tries = new Map();  // peer id -> failed connection attempts in a row
   #chains = new Map(); // peer id -> promise: one peer's negotiation steps run in order
   #timers = new Set();
   #audio = null; #video = null; #screen = null; #localStream = null;
   #mic = { track: null, stream: null };
-  #generation = 0; #joining = false;
-  #send; #opts; #media;
+  #generation = 0; #joining = false; #adapting = false;
+  #sentVideo = null; #stopAdapt = null; #group = new QualityGroup();
+  #send; #opts; #media; #now; #every;
 
   /**
    * send(peerId, frame) -> boolean   deliver a frame (without `t`) to one peer
    * iceServers() -> RTCIceServer[]
    * settings: callMaxParticipants, callRetryMs, gatherTimeoutMs, connectTimeoutMs
-   * RTC, Stream, media: injectable browser pieces (tests)
+   * RTC, Stream, media, now, every: injectable browser pieces (tests)
    */
   constructor({
     selfId, send, iceServers, settings, media = browserMedia,
     RTC = globalThis.RTCPeerConnection, Stream = globalThis.MediaStream,
+    now = () => performance.now(), every = everyMs,
   }) {
     super();
     this.selfId = selfId;
     this.#send = send;
     this.#opts = { iceServers, settings, RTC, Stream };
     this.#media = media;
+    this.#now = now;
+    this.#every = every;
   }
 
   /** False on insecure pages and browsers without WebRTC or media capture. */
@@ -80,7 +98,10 @@ export class CallManager extends Emitter {
   get participants() {
     return [...this.members].sort(([x], [y]) => (x < y ? -1 : 1)).map(([id, { a, v, s }]) => {
       const link = this.#links.get(id)?.link;
-      return { id, a, v, s, stream: link?.stream ?? null, state: link?.state ?? 'waiting' };
+      return {
+        id, a, v, s, stream: link?.stream ?? null, state: link?.state ?? 'waiting',
+        paused: this.#paused.has(id), // they hold their video back for the network
+      };
     });
   }
 
@@ -106,6 +127,7 @@ export class CallManager extends Emitter {
       this.#audio = audio;
       this.#setVideo(camera);
       this.joined = true;
+      this.#stopAdapt = this.#every(() => this.adapt(), ADAPT_MS);
       this.#broadcast(this.#state());
       this.#reconcile();
       this.emit('change');
@@ -118,8 +140,14 @@ export class CallManager extends Emitter {
     this.#generation++;
     if (!this.joined) return;
     this.joined = false;
+    this.#stopAdapt?.();
+    this.#stopAdapt = null;
     this.#broadcast({ k: 'out' });
     for (const id of [...this.#links.keys()]) this.#drop(id);
+    this.#demand.clear();
+    this.#want.clear();
+    this.#paused.clear();
+    this.#group = new QualityGroup();
     for (const timer of this.#timers) clearTimeout(timer);
     this.#timers.clear();
     this.#tries.clear();
@@ -212,9 +240,14 @@ export class CallManager extends Emitter {
   }
 
   #applyTracks() {
-    for (const { link } of this.#links.values()) {
-      link.setTracks({ audio: this.#audio, video: this.#sending() });
+    const video = this.#sending();
+    const changed = video !== this.#sentVideo; // camera <-> screen: new size, new settings
+    this.#sentVideo = video;
+    for (const entry of this.#links.values()) {
+      entry.link.setTracks({ audio: this.#audio, video });
+      if (changed) entry.rung = -1;
     }
+    this.#retune();
   }
 
   #broadcast(frame) { for (const id of this.#up) this.#send(id, frame); }
@@ -231,6 +264,8 @@ export class CallManager extends Emitter {
   peerDown(id) {
     this.#up.delete(id);
     this.#tries.delete(id);
+    this.#demand.delete(id);
+    this.#want.delete(id);
     this.#drop(id);
     if (this.members.delete(id)) this.emit('change');
   }
@@ -241,11 +276,24 @@ export class CallManager extends Emitter {
       this.members.set(id, { a: m.a === true, v: m.v === true, s: m.s === true });
       this.emit('change');
       this.#reconcile();
+      this.#tell(id); // they may have lost what we last said about their video
     } else if (m?.k === 'who') {
       if (this.joined) this.#send(id, this.#state());
     } else if (m?.k === 'out') {
+      this.#demand.delete(id);
+      this.#want.delete(id);
       this.#drop(id);
       if (this.members.delete(id)) this.emit('change');
+    } else if (m?.k === 'want') {
+      const h = parseWant(m.h);
+      if (h === undefined || !this.joined || !this.members.has(id)) return;
+      this.#demand.set(id, h);
+      this.#retune();
+    } else if (m?.k === 'pause') {
+      if (!this.members.has(id)) return;
+      const was = this.#paused.has(id);
+      if (m.on === true) this.#paused.add(id); else this.#paused.delete(id);
+      if (was !== this.#paused.has(id)) this.emit('change');
     } else if (m?.k === 'offer' || m?.k === 'answer') {
       this.#serial(id, () => this.#negotiate(id, m));
     }
@@ -297,11 +345,14 @@ export class CallManager extends Emitter {
       connectTimeoutMs: settings.connectTimeoutMs, RTC, Stream,
     });
     link.setTracks({ audio: this.#audio, video: this.#sending() });
-    const entry = { link, sid, offerer, answered: false };
+    const entry = {
+      link, sid, offerer, answered: false, q: null, rung: -1, paused: false,
+      sample: null, sampledAt: null, bps: null,
+    };
     this.#links.set(id, entry);
     link.on('connected', () => { this.#tries.delete(id); this.emit('change'); });
     link.on('close', () => this.#closed(id, entry));
-    this.#tune();
+    this.#retune();
     this.emit('change');
     return entry;
   }
@@ -311,8 +362,9 @@ export class CallManager extends Emitter {
     const entry = this.#links.get(id);
     if (!entry) return;
     this.#links.delete(id);
+    this.#paused.delete(id);
     entry.link.close();
-    this.#tune();
+    this.#retune();
     this.emit('change');
   }
 
@@ -320,6 +372,8 @@ export class CallManager extends Emitter {
   #closed(id, entry) {
     if (this.#links.get(id) !== entry) return;
     this.#links.delete(id);
+    this.#paused.delete(id);
+    this.#retune();
     this.emit('change');
     const tries = this.#tries.get(id) ?? 0;
     const retry = this.joined && this.selfId < id && this.members.has(id) && tries < MAX_TRIES;
@@ -336,9 +390,94 @@ export class CallManager extends Emitter {
 
   #full() { return this.#links.size >= this.max - 1; }
 
-  #tune() {
-    const bitrate = videoBitrate(this.#links.size + 1);
-    for (const { link } of this.#links.values()) link.limitVideo(bitrate);
+  // ---- video quality ------------------------------------------------------------------
+  // Each connection sends at the highest rung (see quality.js) that the head count, what the
+  // receiver shows, and the health we measured all allow; a receiver that does not show our
+  // video gets none. Only encoder settings change: nothing is renegotiated.
+
+  /** Tell `id` how tall we show their video (pixels; 0: not at all). The call window does
+   *  this as tiles resize, hide and show. */
+  setWant(id, height) {
+    const h = Math.max(0, Math.min(MAX_WANT, Math.round(height)));
+    if (!Number.isFinite(h) || this.#want.get(id) === h) return;
+    this.#want.set(id, h);
+    this.#tell(id);
+  }
+
+  #tell(id) {
+    const h = this.#want.get(id);
+    if (this.joined && h !== undefined && this.#up.has(id)) this.#send(id, { k: 'want', h });
+  }
+
+  /** Measure every connection once and review its video settings (a timer does this). The
+   *  connections share one uplink, so a group decides who steps down or up first. */
+  async adapt() {
+    if (this.#adapting || !this.#links.size) return;
+    this.#adapting = true;
+    const at = this.#now();
+    try {
+      const taken = await Promise.all(
+        [...this.#links].map(async ([id, entry]) => [id, entry, await entry.link.sample()]),
+      );
+      const items = [];
+      for (const [id, entry, sample] of taken) {
+        if (!sample || this.#links.get(id) !== entry || !entry.q) continue;
+        entry.bps = entry.sample && bitrate(entry.sample, sample, (at - entry.sampledAt) / 1000);
+        entry.sample = sample;
+        entry.sampledAt = at;
+        items.push({
+          id, entry, q: entry.q, sample, ceil: this.#ceilingFor(id, entry),
+          want: this.#demand.get(id),
+        });
+      }
+      if (!this.#sending()) return; // nothing is sent: nothing to learn
+      const rungs = this.#group.review(items, at);
+      items.forEach(({ id, entry, ceil }, i) => this.#setRung(id, entry, rungs[i], ceil));
+    } finally { this.#adapting = false; }
+  }
+
+  /** One row per connection, for the diagnostics: what we send and measured, what is asked. */
+  quality() {
+    return [...this.#links].map(([id, entry]) => {
+      const { q, sample: s } = entry;
+      return {
+        id, state: entry.link.state, kind: q?.kind ?? null, rung: entry.rung,
+        level: q?.level ?? null, top: q ? topRung(q.kind) : null,
+        paused: entry.paused, pausedByPeer: this.#paused.has(id),
+        demand: this.#demand.get(id) ?? null, want: this.#want.get(id) ?? null,
+        send: s && {
+          kbps: entry.bps == null ? null : Math.round(entry.bps / 1000),
+          fps: s.fps, w: s.w, h: s.h, loss: s.loss, rtt: s.rtt, limit: s.limit,
+          available: s.available,
+        },
+        recv: s?.recv ?? null,
+      };
+    });
+  }
+
+  #ceilingFor(id, entry) {
+    return ceiling(entry.q.kind, this.#links.size + 1, this.#demand.get(id));
+  }
+
+  /** Everything but health changed (people, tiles, camera or screen): recompute. */
+  #retune() {
+    const kind = this.#screen ? 'screen' : 'camera';
+    for (const [id, entry] of this.#links) {
+      if (entry.q?.kind !== kind) { entry.q = new LinkQuality(kind, this.#now()); entry.rung = -1; }
+      const ceil = this.#ceilingFor(id, entry);
+      this.#setRung(id, entry, entry.q.rung(ceil), ceil);
+    }
+  }
+
+  #setRung(id, entry, rung, ceil) {
+    const paused = rung === 0 && ceil > 0; // dropped for the network, not because unseen
+    if (paused !== entry.paused) {
+      entry.paused = paused;
+      this.#send(id, { k: 'pause', on: paused });
+    }
+    if (rung === entry.rung) return;
+    entry.rung = rung;
+    entry.link.applyProfile(profileOf(entry.q.kind, rung));
   }
 
   /** Run `step` after the earlier steps for this peer, so offers and answers never overlap. */

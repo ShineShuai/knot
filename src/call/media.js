@@ -3,9 +3,10 @@
 
 const CONSTRAINTS = {
   audio: { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } },
-  // Modest on purpose: in a mesh every sender encodes once per receiver.
+  // Capture sharp; each connection then encodes only as much as it can carry and its
+  // receiver shows (quality.js sets the size, frame rate and bitrate per connection).
   video: {
-    video: { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24 } },
+    video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
   },
 };
 

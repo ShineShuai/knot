@@ -7,6 +7,8 @@ export class FakeTrack {
   stopped = false;
   #handlers = {};
   constructor(kind) { this.kind = kind; }
+  /** What the capture delivered (a camera is 720 pixels tall; a screen is left unset). */
+  getSettings() { return this.settings ?? {}; }
   stop() { this.stopped = true; }
   addEventListener(type, fn) { (this.#handlers[type] ??= []).push(fn); }
   /** The device went away (unplugged, revoked). */
@@ -28,6 +30,7 @@ export const fakeMedia = ({ denied = [], share = true } = {}) => ({
   async getTrack(kind) {
     if (denied.includes(kind)) throw new Error('permission denied');
     const track = new FakeTrack(kind);
+    if (kind === 'video') track.settings = { height: 720 };
     this.tracks.push(track);
     return track;
   },
@@ -46,9 +49,10 @@ const transceiver = (kind, direction) => ({
   sender: {
     track: null,
     params: { encodings: [{}] },
+    writes: 0, // how many times the encoder settings were set
     async replaceTrack(track) { this.track = track; },
     getParameters() { return structuredClone(this.params); },
-    async setParameters(params) { this.params = params; },
+    async setParameters(params) { this.params = params; this.writes++; },
   },
 });
 
@@ -62,6 +66,8 @@ export class FakeRtc {
   connectionState = 'new';
   localDescription = null;
   offerer = false;
+  /** What `getStats()` reports: a list of stats dictionaries (see quality.js `readStats`). */
+  stats = [];
   #transceivers = [];
   #remote = null;
 
@@ -72,6 +78,7 @@ export class FakeRtc {
 
   addEventListener() {}
   removeEventListener() {}
+  async getStats() { return { forEach: (fn) => this.stats.forEach(fn) }; }
   getTransceivers() { return this.#transceivers; }
   addTransceiver(kind, { direction }) { this.#transceivers.push(transceiver(kind, direction)); }
 
@@ -103,13 +110,23 @@ export class FakeRtc {
   close() { this.connectionState = 'closed'; this.onconnectionstatechange?.(); }
 }
 
-/** One call participant's pieces: spread `env` into the Room's `callEnv`. */
+/** One call participant's pieces: spread `env` into the Room's `callEnv`. The call reviews
+ *  its video only when a test calls `call.adapt()`; `clock.t` is the time it sees (ms). */
 export function callParty({ denied, share } = {}) {
   const made = [];
+  const clock = { t: 0 };
   const media = fakeMedia({ denied, share });
   class Rtc extends FakeRtc { constructor(...a) { super(...a); made.push(this); } }
-  return { made, media, env: { RTC: Rtc, Stream: FakeStream, media } };
+  const env = {
+    RTC: Rtc, Stream: FakeStream, media, now: () => clock.t, every: () => () => {},
+  };
+  return { made, media, clock, env };
 }
+
+/** The video sender's current encoder settings on `rtc`. */
+export const videoEncoding = (rtc) => rtc.getTransceivers().find(
+  (t) => t.receiver.track.kind === 'video',
+).sender.params;
 
 /** The track we currently send on `rtc` for `kind`. */
 export const sending = (rtc, kind) => rtc.getTransceivers().find(

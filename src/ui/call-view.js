@@ -5,10 +5,13 @@
 // It only renders `room.call` and forwards clicks.
 import { h } from './dom.js';
 import { SpeakingMeter } from '../call/speaking.js';
+import { wantHeight } from '../call/quality.js';
 import { peerLabel, withDevice } from './alias.js';
 import { t } from './i18n.js';
 
 const SELF = 'self';
+const HIDDEN_AFTER_MS = 5000; // a page out of sight this long stops asking for video
+const SHRINK_AFTER_MS = 1500; // a smaller tile waits (no flapping); a bigger one asks at once
 const initial = (name) => ([...name][0] ?? '?').toUpperCase();
 
 export class CallPanel {
@@ -16,6 +19,7 @@ export class CallPanel {
   #mode = 'full';  // 'full' | 'chat' | 'mini'
   #before = 'full'; // what a minimized window goes back to
   #openChat; #onMode; #meter;
+  #sizes = null; #sent = new Map(); #shrink = null; #away = null; #hidden = false;
 
   /** `openChat(room)`: show that room's conversation; `onMode(mode)`: the layout changed. */
   constructor({ notify, openChat = () => {}, onMode = () => {}, speaking = {} }) {
@@ -49,6 +53,7 @@ export class CallPanel {
       h('footer', { class: 'call-bar' }, this.mic, this.cam, this.share, this.files, this.chat,
         this.leave));
     this.#setMode('full', false);
+    globalThis.document?.addEventListener?.('visibilitychange', () => this.#pageVisible());
   }
 
   /** The language changed: say everything again in the new one. */
@@ -87,6 +92,12 @@ export class CallPanel {
     this.#offs = [];
     this.#meter.stop();
     this.#room = null;
+    this.#sizes?.disconnect();
+    this.#sizes = null;
+    this.#sent.clear();
+    clearTimeout(this.#shrink);
+    clearTimeout(this.#away);
+    this.#hidden = false;
     this.#tiles.clear();
     this.grid.replaceChildren();
     this.element.hidden = true;
@@ -172,8 +183,11 @@ export class CallPanel {
       this.#drawTile(person);
     }
     for (const id of gone) {
-      this.#tiles.get(id).el.remove();
+      const { el } = this.#tiles.get(id);
+      this.#sizes?.unobserve(el);
+      el.remove();
       this.#tiles.delete(id);
+      this.#sent.delete(id);
     }
     this.#drawFiles();
     // Everyone is shown, whatever their camera or microphone does: the grid shares its space
@@ -206,7 +220,7 @@ export class CallPanel {
   }
 
   /** Tiles are created once and updated in place: a video element must not be rebuilt. */
-  #drawTile({ id, name, a, v, s, stream, state }) {
+  #drawTile({ id, name, a, v, s, stream, state, paused }) {
     let tile = this.#tiles.get(id);
     if (!tile) {
       const video = h('video', { autoplay: true, playsinline: true, muted: id === SELF });
@@ -215,20 +229,74 @@ export class CallPanel {
       const status = h('span', { class: 'tile-status' });
       const el = h('figure', { class: id === SELF ? 'tile self' : 'tile' },
         video, avatar, h('figcaption', {}, label, status));
-      tile = { el, video, avatar, label, status };
+      tile = { el, video, avatar, label, status, height: null };
       this.#tiles.set(id, tile);
       this.grid.append(el);
+      if (id !== SELF) this.#watchSize(tile);
     }
     if (tile.video.srcObject !== stream) {
       tile.video.srcObject = stream;
       tile.video.play?.()?.catch(() => {}); // autoplay can refuse; the next tap starts it
     }
-    tile.el.classList.toggle('novideo', !(v && stream));
+    tile.el.classList.toggle('novideo', !(v && stream) || !!paused);
     tile.el.classList.toggle('sharing', !!s);
     tile.el.classList.toggle('speaking', this.#meter.isSpeaking(id));
     tile.avatar.textContent = initial(name);
     tile.label.textContent = name;
-    const quiet = state !== 'connected' ? t('callConnecting') : a ? '' : '🔇';
+    const quiet = state !== 'connected' ? t('callConnecting')
+      : paused && v ? `📶 ${t('callPaused')}` : a ? '' : '🔇';
     tile.status.textContent = s ? `🖥 ${quiet}`.trim() : quiet;
+  }
+
+  // ---- what we ask the senders for -------------------------------------------------------
+  // Each sender encodes no more than its tile shows here: a small tile gets a small stream, a
+  // hidden one (or a page out of sight) none. Asking for more is immediate, for less is slow.
+
+  #watchSize(tile) {
+    const Observer = globalThis.ResizeObserver;
+    if (!Observer) return; // the senders then fall back to the head count alone
+    this.#sizes ??= new Observer((entries) => {
+      for (const { target, contentRect } of entries) {
+        const found = [...this.#tiles.values()].find((x) => x.el === target);
+        if (found) found.height = contentRect.height;
+      }
+      this.#report();
+    });
+    this.#sizes.observe(tile.el);
+  }
+
+  #pageVisible() {
+    if (globalThis.document?.hidden) {
+      this.#away ??= setTimeout(() => {
+        this.#hidden = true;
+        this.#report(true);
+      }, HIDDEN_AFTER_MS);
+      return;
+    }
+    clearTimeout(this.#away);
+    this.#away = null;
+    this.#hidden = false;
+    this.#report();
+  }
+
+  /** Tell the senders how tall we show them; `settle`: also pass on smaller sizes now. */
+  #report(settle = false) {
+    const call = this.#room?.call;
+    if (!call) return;
+    const ratio = globalThis.devicePixelRatio ?? 1;
+    let later = false;
+    for (const [id, tile] of this.#tiles) {
+      if (id === SELF || tile.height === null) continue;
+      const want = this.#hidden ? 0 : wantHeight(tile.height, ratio);
+      const sent = this.#sent.get(id);
+      if (sent !== undefined && want < sent && !settle) { later = true; continue; }
+      if (want === sent) continue;
+      this.#sent.set(id, want);
+      call.setWant(id, want);
+    }
+    if (later) {
+      clearTimeout(this.#shrink);
+      this.#shrink = setTimeout(() => this.#report(true), SHRINK_AFTER_MS);
+    }
   }
 }

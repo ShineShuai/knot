@@ -1,11 +1,13 @@
 // LEGACY-CURVES: review and removal plan: LEGACY_CURVES_REVIEW_BY in config.js.
 // Curve25519 for the Ed25519 identity and the X25519 sealed boxes. WebCrypto does it where the
 // browser has it (Safari 17, Firefox 129, Chrome 137); older ones (iOS 16, which some iPads
-// cannot leave) use the bundled TweetNaCl, pure JS. Same wire formats either way. It is
-// imported statically, not on demand: it must arrive with the app (flaky networks, offline).
-import nacl from '../vendor/nacl-fast.js';
+// cannot leave) use TweetNaCl (vendor/), pure JS. Same wire formats either way.
+// TweetNaCl is fetched (same origin, like every module of the app) only by a browser that needs
+// it, at start-up, when the first `hasNative` answers false. The service worker keeps it.
 
-export { nacl };
+/** TweetNaCl. Set once `hasNative()` has answered false for anything: code that holds such an
+ *  answer (a soft key, a branch taken because of it) may use it without waiting. */
+export let nacl;
 
 const USAGES = { Ed25519: ['sign', 'verify'], X25519: ['deriveBits'] };
 const probes = new Map();
@@ -23,11 +25,19 @@ async function probe(name) {
   return false;
 }
 
-/** Can WebCrypto do `name` ('Ed25519' or 'X25519')? Asked once per page load. */
-export function hasNative(name) {
-  if (forced) return Promise.resolve(false);
-  if (!probes.has(name)) probes.set(name, probe(name));
-  return probes.get(name);
+let loading;
+const loadNacl = () => (loading ??= import('../vendor/nacl-fast.js').then(
+  (m) => { nacl = m.default; },
+  (err) => { loading = undefined; throw err; }, // the next start tries again
+));
+
+/** Can WebCrypto do `name` ('Ed25519' or 'X25519')? Asked once per page load. A no also
+ *  loads TweetNaCl, so it is there before anything acts on the no. */
+export async function hasNative(name) {
+  if (!forced && !probes.has(name)) probes.set(name, probe(name));
+  const ok = !forced && await probes.get(name);
+  if (!ok) await loadNacl();
+  return ok;
 }
 
 /** Let the page draw between two heavy synchronous steps (pure-JS crypto on a slow device). */

@@ -1,7 +1,7 @@
 // LEGACY-CURVES. TweetNaCl.js 0.14.5 nacl-fast.js (Unlicense), github.com/dchest/tweetnacl-js
 // Upstream sha256: 432333a18cef679d16c71328fcc18cc547e58d7d1c2b880a581b2d7ee4248027
 // Changed from upstream: this header, the next line, the last two lines (ES module export).
-// Needed only where WebCrypto lacks Ed25519 or X25519, but always loaded (see curves.js).
+// Needed only where WebCrypto lacks Ed25519 or X25519; loaded on demand (see curves.js).
 const nacl = {};
 (function(nacl) {
 'use strict';

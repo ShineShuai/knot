@@ -62,7 +62,7 @@ if no broker is reachable; with brokers, reconnection is automatic).
       crypto/identity.js   Ed25519 device key (non-extractable, IndexedDB)
       crypto/curves.js     WebCrypto or TweetNaCl for Ed25519 / X25519 (feature-probed)
       crypto/soft-key.js   seed encrypted at rest, for devices on the TweetNaCl path
-      vendor/nacl-fast.js  TweetNaCl 0.14.5, public domain; used only without WebCrypto curves
+      vendor/nacl-fast.js  TweetNaCl 0.14.5, public domain; fetched only without WebCrypto curves
       crypto/room-keys.js  room secret -> HKDF -> topic id + AES-GCM key
       crypto/delegation.js certificates of linked devices
       net/sdp.js           SDP <-> compact SdpInfo (data-channel-only)
@@ -121,8 +121,8 @@ if no broker is reachable; with brokers, reconnection is automatic).
 * **Old browsers (LEGACY-CURVES):** WebCrypto got Ed25519 and X25519 in Safari 17 / iOS 17,
   Firefox 129 and Chrome 137 (every iOS browser is WebKit, so iOS 16 has neither). Without them
   the app signs, verifies and seals with the bundled TweetNaCl: same formats, so old and new
-  devices talk to each other. The library is always shipped with the app (not fetched on
-  demand), so a flaky network cannot leave an old device without it. Costs: slower (tens of ms
+  devices talk to each other. The library (14 KB gzipped, same origin like every module) is
+  fetched at start-up only by a browser that needs it, and kept by the service worker. Costs: slower (tens of ms
   per signature on an old iPad), and the identity is a seed that lives in page memory and,
   encrypted with a non-extractable AES key (WebKit keeps that key wrapped in the Keychain), in
   IndexedDB: a copy of the storage is useless, but code running in the page can read it (the

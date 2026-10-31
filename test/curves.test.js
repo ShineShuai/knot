@@ -39,6 +39,7 @@ test('Ed25519 without WebCrypto: RFC 8032 test 1 and 3', async () => {
 });
 
 test('X25519 without WebCrypto: RFC 7748 section 6.1', async () => {
+  await soft(() => hasNative('X25519')); // loads TweetNaCl
   const [alice, alicePub, bobPub, shared] = [
     '77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a',
     '8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a',

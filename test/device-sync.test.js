@@ -357,7 +357,8 @@ test('a new device that links to a main device with no rooms stays in step with 
   const mine = await phone.createRoom('Mine'); // and a linked device may make one
   await until(() => main.rooms.has(mine.id), 8000);
   assert.equal(main.rooms.get(mine.id).isOwner, true, 'owned by the identity, so by both');
-  assert.equal(await main.kv.get('rooms').then((r) => r.length), 2);
+  // saved a moment after the room shows up in memory
+  await until(async () => (await main.kv.get('rooms'))?.length === 2, 8000);
 });
 
 test('any device unlinks another linked device; the main device stays', async () => {

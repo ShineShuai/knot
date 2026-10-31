@@ -311,7 +311,10 @@ if no broker is reachable; with brokers, reconnection is automatic).
   proves that with the main id or the certificate) in every room, relayed on, and each device
   sends all it has when a link to one of its devices comes up, so changes made while apart
   arrive when two devices meet in any room. The newest change wins everywhere. Received items
-  are checked (known keys, value types and sizes) before use. Rooms: `r:<room id>` holds the
+  are checked (known keys, value types and sizes) before use. At the first link the new
+  device *adopts* the main device's state (the grant carries it) instead of merging it with its
+  own, so the main device's settings and name win even over newer ones the new device made
+  before. Rooms: `r:<room id>` holds the
   secret, label and owner id, or null once the room was left (a tombstone, so it does not come
   back from a device that still has it); a device opens rooms it gets (with their key epoch,
   sent along), renames, and leaves rooms as the item says, and checks that the secret is that

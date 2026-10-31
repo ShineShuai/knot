@@ -1,7 +1,7 @@
 # knot - serverless peer-to-peer chat room
 
 Browser-only chat: WebRTC data channels between devices, no application server,
-no build step, no dependencies. Messages are signed, rooms are end-to-end sealed
+no build step, no dependencies (one vendored fallback, see below). Messages are signed, rooms are end-to-end sealed
 wherever a third party is involved, and the app still works when public
 signaling brokers are blocked (manual QR / text pairing).
 
@@ -60,6 +60,9 @@ if no broker is reachable; with brokers, reconnection is automatic).
       main.js              boot
       util/                bytes (base64url, binary writer/reader), hlc, rate limiter
       crypto/identity.js   Ed25519 device key (non-extractable, IndexedDB)
+      crypto/curves.js     WebCrypto or TweetNaCl for Ed25519 / X25519 (feature-probed)
+      crypto/soft-key.js   seed encrypted at rest, for devices on the TweetNaCl path
+      vendor/nacl-fast.js  TweetNaCl 0.14.5, public domain; fetched only without WebCrypto curves
       crypto/room-keys.js  room secret -> HKDF -> topic id + AES-GCM key
       crypto/delegation.js certificates of linked devices
       net/sdp.js           SDP <-> compact SdpInfo (data-channel-only)
@@ -115,6 +118,19 @@ if no broker is reachable; with brokers, reconnection is automatic).
 
 ## Design notes
 
+* **Old browsers (LEGACY-CURVES):** WebCrypto got Ed25519 and X25519 in Safari 17 / iOS 17,
+  Firefox 129 and Chrome 137 (every iOS browser is WebKit, so iOS 16 has neither). Without them
+  the app signs, verifies and seals with the bundled TweetNaCl: same formats, so old and new
+  devices talk to each other. The library (14 KB gzipped, same origin like every module) is
+  fetched at start-up only by a browser that needs it, and kept by the service worker. Costs: slower (tens of ms
+  per signature on an old iPad), and the identity is a seed that lives in page memory and,
+  encrypted with a non-extractable AES key (WebKit keeps that key wrapped in the Keychain), in
+  IndexedDB: a copy of the storage is useless, but code running in the page can read it (the
+  CSP keeps foreign code out). When the browser later gains the curves, the key moves into
+  WebCrypto as non-extractable. `npm run test:soft` runs the unit tests in this mode;
+  Settings > Diagnostics shows which is used. It is to be removed one day: the review date and
+  the steps are in `src/config.js` (`LEGACY_CURVES_REVIEW_BY`), and a unit test fails after
+  that date so it is not forgotten.
 * **Identity:** each device has an Ed25519 key; peer id = first 8 bytes of
   SHA-256(public key). Handshakes are signed, so the identity vouches for the
   DTLS fingerprint. Chat messages are signed and carry their author; any peer

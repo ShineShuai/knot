@@ -1,3 +1,17 @@
+// LEGACY-CURVES: when to drop the fallback for browsers without WebCrypto Ed25519 / X25519
+// (iOS 16 and older; crypto/curves.js). It costs a vendored library, slower crypto, a weaker
+// identity key and a second code path. There is no telemetry: ask the people who use the app
+// whether anyone still needs it (Settings > Diagnostics shows "Curve25519 used: JS fallback"
+// on such a device). test/legacy-curves.test.js fails after this date: decide, then either
+// push the date out or remove it:
+//   1. grep -rn LEGACY-CURVES (code, tests, CI, README) and delete what it marks; delete
+//      src/vendor/nacl-fast.js, src/crypto/soft-key.js, test/soft-curves.mjs, the test:soft
+//      script, test/legacy-curves.test.js and this constant.
+//   2. Device identities sealed on an old browser move into WebCrypto when it first runs on a
+//      browser that can. Keep `loadSealed` and soft-key.js's `openSeed` while such a device may
+//      still update, or it loses its identity (peer id, owned rooms) when it does.
+export const LEGACY_CURVES_REVIEW_BY = '2027-10-31';
+
 // Central defaults. Everything environment-dependent lives here and can be
 // overridden by the user in Settings (stored under the "settings" key).
 export const DEFAULTS = Object.freeze({

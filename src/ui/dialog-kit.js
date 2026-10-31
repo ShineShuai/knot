@@ -70,6 +70,9 @@ export class DialogKit {
     }, t('scan'));
     const submit = () => area.value.trim() && onText(area.value);
     area.addEventListener('paste', () => setTimeout(submit, 0));
-    return { area, submit, node: h('div', { class: 'code-input' }, area, view, scan) };
+    // A camera but no QR detector (Firefox): say why there is no scan button.
+    const noScan = !canScan() && !!navigator.mediaDevices?.getUserMedia
+      && h('p', { class: 'muted' }, t('scanUnavailable'));
+    return { area, submit, node: h('div', { class: 'code-input' }, area, view, scan, noScan) };
   }
 }

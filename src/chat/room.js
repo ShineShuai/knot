@@ -221,8 +221,8 @@ export class Room extends Emitter {
 
   /** What the broker channel and lobby keys derive from: the room secret, mixed with the
    *  latest rotation's secret once a member has been removed. */
-  #chanSecret() {
-    return this.#epoch.n ? concat(this.secret, this.#epoch.secret) : this.secret;
+  #chanSecret(epoch = this.#epoch) {
+    return epoch.n ? concat(this.secret, epoch.secret) : this.secret;
   }
 
   get epoch() { return this.#epoch.n; }
@@ -316,9 +316,11 @@ export class Room extends Emitter {
   /** Switch to the keys of rotation `n`. Whoever left (or lost the secret) cannot follow:
    *  the broker topic, presence, signalling and relay all move to a channel only members know. */
   async #applyEpoch(n, secret) {
-    this.#epoch = { n, secret };
+    const next = { n, secret };
+    // The new channel keys first, so that `epoch` and `channelId` always change together.
+    const chan = await deriveRoomKeys(this.#chanSecret(next));
+    [this.#epoch, this.#chan] = [next, chan];
     await this.#kv.put(`epoch:${this.id}`, { n, s: toB64u(secret) });
-    this.#chan = await deriveRoomKeys(this.#chanSecret());
     this.members.clear(); // presence under the old keys means nothing now
     if (this.#channel) { this.#channel.stop(); this.#openChannel(); }
     await this.#desk.restart(); // old join links stop working

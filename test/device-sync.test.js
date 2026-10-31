@@ -135,6 +135,21 @@ test('linking hands the settings and the phone\'s alias over', async () => {
   assert.equal(phone.identity.alias, undefined, 'its own name is the default one');
 });
 
+test('at the first link a device takes the main device\'s settings, even over newer ones', async () => {
+  const main = await open(await newIdentity(), new MemoryKV(), 'Ada');
+  await main.updateSettings({ name: 'Ada main', language: 'de' });
+  const [phoneId, phoneKv] = [await newIdentity(), new MemoryKV()];
+  const first = await open(phoneId, phoneKv);
+  await first.updateSettings({ name: 'Phone person', relayFallback: false, language: 'zh' });
+  const { code, read } = await first.startLinking('Pixel');
+  await (await read((await main.linkDevice(code)).code)).apply();
+  const phone = await open(await applyDelegation(phoneId, phoneKv), phoneKv);
+  assert.equal(phone.settings.name, 'Ada main');
+  assert.equal(phone.settings.language, 'de');
+  assert.equal(phone.settings.relayFallback, main.settings.relayFallback);
+  assert.deepEqual([main.settings.name, main.settings.language], ['Ada main', 'de'], 'unchanged');
+});
+
 test('the latest change on any device wins on all of them; some settings stay local', async () => {
   const { main, phone, ra, rb } = await devices();
   await link(ra, rb);

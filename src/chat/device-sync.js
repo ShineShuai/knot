@@ -154,6 +154,15 @@ export class DeviceSync extends Emitter {
     return this.#take(changed, true);
   }
 
+  /** First link: this device has just become part of another one's identity, so that device's
+   *  state replaces ours (merge would let a newer stamp of ours win). */
+  async adopt(raw) {
+    this.#items = {};
+    const taken = await this.merge(raw);
+    if (!Object.keys(taken).length) await this.kv.put('sync', { items: this.#items });
+    return taken;
+  }
+
   /** Items from another device: the newer ones win. Returns the ones we accepted. */
   async merge(raw) {
     const incoming = clean(raw);

@@ -314,7 +314,7 @@ export class AppModel extends Emitter {
 
   async #applyGrant({ cert, name, rooms, sync }) {
     await this.kv.put('delegate', { cert });
-    if (sync) await this.sync.merge(sync);
+    if (sync) await this.sync.adopt(sync); // the main device's settings, not ours
     if (name) {
       this.settings.name = name;
       await saveSettings(this.kv, this.settings);

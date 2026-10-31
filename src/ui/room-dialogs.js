@@ -211,7 +211,7 @@ export class RoomDialogs {
 
   /** Leave a room (after asking): its images, staged files and stored messages go. */
   leave(room) {
-    if (!confirm(t('leaveConfirm'))) return;
+    if (!confirm(t('leaveConfirm') + (this.ui.model.paired ? `\n${t('leaveOthers')}` : ''))) return;
     this.ui.images.disposeRoom(room.id);
     this.ui.composer.forget(room);
     this.ui.model.removeRoom(room.id).then(() => this.ui.select(null));

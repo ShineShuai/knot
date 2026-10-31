@@ -6,7 +6,8 @@ import { authorIdOf } from './envelope.js';
 
 const UNREAD_KINDS = ['text', 'reply', 'file']; // what counts as a message to catch up on
 
-/** Events: 'change' (the unread count may have changed). */
+/** Events: 'change' (the unread count may have changed), 'read' (stamp: this device moved the
+ *  mark forward; not fired for a mark that came from another of our devices). */
 export class ReadMarks extends Emitter {
   #read = { ms: 0, c: 0 }; // stamp of the newest message seen on this device
 
@@ -29,6 +30,17 @@ export class ReadMarks extends Emitter {
     if (!mark) await this.kv.put(this.#key, this.#read).catch(() => {});
   }
 
+  /** The newest message stamp seen, on this device or (see `advance`) on another of ours. */
+  get stamp() { return { ...this.#read }; }
+
+  /** Another of our devices has read up to `stamp`: the mark only ever moves forward. */
+  async advance(stamp) {
+    if (compareStamps(stamp, this.#read) <= 0) return;
+    this.#read = { ms: stamp.ms, c: stamp.c };
+    this.emit('change');
+    await this.kv.put(this.#key, this.#read).catch(() => {});
+  }
+
   isUnread(env) {
     return UNREAD_KINDS.includes(env.kind) && !this.isMine(authorIdOf(env))
       && compareStamps(env, this.#read) > 0;
@@ -43,6 +55,7 @@ export class ReadMarks extends Emitter {
     if (compareStamps(newest, this.#read) <= 0) return;
     this.#read = newest;
     this.emit('change');
+    this.emit('read', { ...newest });
     await this.kv.put(this.#key, newest).catch(() => {});
   }
 }

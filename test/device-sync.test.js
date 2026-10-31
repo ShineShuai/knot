@@ -4,7 +4,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AppModel } from '../src/app.js';
 import { DEFAULTS } from '../src/config.js';
-import { DeviceSync, deviceKey, suggestAlias, uniqueAlias } from '../src/chat/device-sync.js';
+import {
+  DeviceSync, deviceKey, readKey, roomKey, suggestAlias, uniqueAlias,
+} from '../src/chat/device-sync.js';
 import { deviceNameOf, verifyEnvelope } from '../src/chat/envelope.js';
 import { applyDelegation } from '../src/crypto/delegation.js';
 import { toB64u } from '../src/util/bytes.js';
@@ -12,7 +14,7 @@ import { newRoomSecret } from '../src/crypto/room-keys.js';
 import { MemoryKV } from '../src/store/kv.js';
 import { newIdentity } from './helpers.js';
 import { FakeLink, until } from './fakes.js';
-import { link } from './room-kit.js';
+import { link, makeRoom } from './room-kit.js';
 
 const PUB = 'A'.repeat(43);
 const sync = async (settings = { ...DEFAULTS }, id = 'dev1') => {
@@ -187,4 +189,116 @@ test('an alias that was forged on the way is refused', async () => {
   assert.equal(await verifyEnvelope({ ...env, al: { ...env.al, n: 'main' } }, rb.id), false);
   const other = { ...env, id: `${env.id}x`, al: env.al };
   assert.equal(await verifyEnvelope(other, rb.id), false, 'bound to this message');
+});
+
+// ---- rooms and read marks ---------------------------------------------------------------------
+
+test('room items: well-formed ones only; a read mark never moves back', async () => {
+  const s = await sync();
+  const [id, secret] = ['A'.repeat(16), 'B'.repeat(22)];
+  const stamp = { ms: 9, c: 0, by: 'x' };
+  const room = (v) => ({ v, ...stamp });
+  const taken = await s.merge({
+    [roomKey(id)]: room({ s: secret, l: 'Club', o: null }),
+    [roomKey('C'.repeat(16))]: room({ s: 'short', l: 'Club', o: null }),
+    [roomKey('D'.repeat(16))]: room({ s: secret, l: 'x'.repeat(41), o: null }),
+    [roomKey('E'.repeat(16))]: room({ s: secret, l: 'Club', o: 'bad' }),
+    [roomKey('F'.repeat(16))]: room({ s: secret, l: 'Club', o: null, extra: 1 }),
+    [roomKey('too-short')]: room({ s: secret, l: 'Club', o: null }),
+    [readKey(id)]: room({ ms: 5, c: 1 }),
+    [readKey('G'.repeat(16))]: room({ ms: -1, c: 0 }),
+  });
+  assert.deepEqual(Object.keys(taken).sort(), [readKey(id), roomKey(id)].sort());
+  assert.deepEqual(await s.set({ [readKey(id)]: { ms: 5, c: 0 } }), {}, 'older: ignored');
+  const older = { v: { ms: 4, c: 9 }, ms: 99, c: 0, by: 'z' }; // a newer write of an older mark
+  assert.deepEqual(await s.merge({ [readKey(id)]: older }), {});
+  assert.ok((await s.set({ [readKey(id)]: { ms: 6, c: 0 } }))[readKey(id)]);
+  assert.deepEqual(s.value(readKey(id)), { ms: 6, c: 0 });
+  assert.equal((await s.set({ [roomKey(id)]: null }))[roomKey(id)].v, null, 'left');
+});
+
+/** Ada's main and phone, plus Bob who writes to both, all in the room "Club"; the devices are
+ *  connected to each other. */
+async function withBob() {
+  const pair = await devices();
+  const bob = await makeRoom({ secret: pair.ra.secret, name: 'Bob' });
+  await link(pair.ra, bob);
+  await link(pair.rb, bob);
+  await link(pair.ra, pair.rb);
+  return { ...pair, bob };
+}
+
+test('a room added on one device appears on the other, also when added while apart', async () => {
+  const { main, phone, ra, rb } = await devices();
+  const later = await phone.addRoom(newRoomSecret(), 'Later');
+  await link(ra, rb);
+  await until(() => main.rooms.has(later.id));
+  assert.equal(main.rooms.get(later.id).label, 'Later');
+  const live = await main.addRoom(newRoomSecret(), 'Live');
+  await until(() => phone.rooms.has(live.id));
+  assert.deepEqual([...main.rooms.keys()].sort(), [...phone.rooms.keys()].sort());
+  const kept = (await main.kv.get('rooms')).map((r) => r.label).sort();
+  assert.deepEqual(kept, ['Club', 'Later', 'Live'], 'and kept on disk');
+});
+
+test('a room made by the owner device comes as a copy that is not owned', async () => {
+  const { main, phone, ra, rb } = await devices();
+  await link(ra, rb);
+  const owned = await main.createRoom('Team');
+  await until(() => phone.rooms.has(owned.id));
+  const copy = phone.rooms.get(owned.id);
+  assert.equal(copy.isOwner, false);
+  assert.equal(copy.ownerId, owned.ownerId);
+  await phone.renameRoom(owned.id, 'Crew');
+  await until(() => owned.label === 'Crew');
+  await phone.removeRoom(owned.id); // leaving cannot take the owner's room away
+  await phone.removeRoom(ra.id);
+  await until(() => !main.rooms.has(ra.id));
+  assert.ok(main.rooms.has(owned.id), 'an owned room stays where it is owned');
+  assert.equal((await main.kv.get('rooms')).some((r) => r.label === 'Crew'), true);
+});
+
+test('leaving a room on one device leaves it on the other; joining again undoes it', async () => {
+  const { main, phone, ra, rb } = await devices();
+  const [id, secret] = [ra.id, ra.secret];
+  await link(ra, rb);
+  const second = await main.addRoom(newRoomSecret(), 'Other'); // keeps a link between them
+  await until(() => phone.rooms.has(second.id));
+  await link(second, phone.rooms.get(second.id));
+  await phone.removeRoom(id);
+  await until(() => !main.rooms.has(id));
+  assert.equal(await main.kv.get(`read:${id}`), undefined, 'its data went too');
+  await main.addRoom(secret, 'Club again');
+  await until(() => phone.rooms.has(id));
+  assert.equal(phone.rooms.get(id).label, 'Club again');
+});
+
+test('reading on one device marks the room read on the other, and only forward', async () => {
+  const { main, phone, ra, rb, bob } = await withBob();
+  await bob.sendText('hi');
+  await until(() => ra.unread === 1 && rb.unread === 1);
+  await ra.markRead();
+  await until(() => rb.unread === 0);
+  assert.deepEqual(rb.readStamp, ra.readStamp);
+  assert.deepEqual(phone.sync.value(readKey(rb.id)), ra.readStamp);
+  const before = ra.readStamp;
+  await rb.advanceRead({ ms: 1, c: 0 });
+  assert.deepEqual(rb.readStamp, before, 'an older mark changes nothing');
+  await bob.sendText('again');
+  await until(() => ra.unread === 1 && rb.unread === 1);
+  await rb.markRead();
+  await until(() => ra.unread === 0);
+  assert.ok(main.sync.value(readKey(ra.id)));
+});
+
+test('items that do not fit are ignored: a wrong room secret, a bad frame', async () => {
+  const { main, ra } = await devices();
+  const other = newRoomSecret();
+  const stamp = { ms: 9e12, c: 0, by: 'x' };
+  const fake = { v: { s: toB64u(other), l: 'Evil', o: null }, ...stamp };
+  ra.emit('sync', { [roomKey('A'.repeat(16))]: fake }, null, {});
+  ra.emit('sync', 'junk', null, 'junk');
+  ra.emit('sync', { [roomKey('A'.repeat(16))]: { v: { s: 1 }, ...stamp } }, null, null);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(main.rooms.size, 1);
 });

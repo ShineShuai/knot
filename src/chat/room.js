@@ -17,7 +17,8 @@
 // Events: 'message'(envelope), 'peers'(list), 'brokers'({connected,total}),
 //         'roster'(), 'requests'() (owner: join requests changed), 'removed'(),
 //         'incoming'(envelope) (a message from someone else that is not read yet),
-//         'unread'() (the unread count changed)
+//         'unread'() (the unread count changed), 'read'(stamp) (we read further: see ReadMarks),
+//         'sibling'(peer) (a device of ours is connected), 'sync'(items, peer, epochs)
 import { Emitter } from '../util/emitter.js';
 import { HLC } from '../util/hlc.js';
 import { RateLimiter } from '../util/rate.js';
@@ -116,6 +117,7 @@ export class Room extends Emitter {
       kv, roomId: this.id, log: this.log, isMine: (id) => this.isMine(id),
     });
     this.#marks.on('change', () => this.emit('unread'));
+    this.#marks.on('read', (stamp) => this.emit('read', stamp));
     this.#desk = new OwnerDesk(this, {
       publish: (...args) => this.#publish(...args),
       epoch: () => this.#epoch,
@@ -256,6 +258,10 @@ export class Room extends Emitter {
 
   /** The user has seen everything up to now (they are looking at this room). */
   markRead() { return this.#marks.markRead(); }
+  /** How far this room has been read (a message stamp), here or on another device of ours. */
+  get readStamp() { return this.#marks.stamp; }
+  /** Another device of ours has read up to `stamp`. */
+  advanceRead(stamp) { return this.#marks.advance(stamp); }
 
   /** Share a file with the room; resolves to the signed message (see room-files.js). */
   shareFile(file) { return this.#fileHub.share(file); }
@@ -632,7 +638,7 @@ export class Room extends Emitter {
     }
     if (this.roster && !entry.synced) return; // not (yet) known to be a member: ignored
     if (m?.t === 'sync') { // settings and aliases from another device of ours
-      if (this.#isSibling(entry)) this.emit('sync', m.items, entry);
+      if (this.#isSibling(entry)) this.emit('sync', m.items, entry, m.epochs);
       return;
     }
     if (this.roster && m?.t === 'epoch') { await this.#onEpoch(m, entry); return; }

@@ -1,7 +1,14 @@
-// What all devices of one identity share: the settings and the devices' aliases. Each value is
-// a last-writer-wins register with a stamp (hybrid clock, device id as tie-break), so a change
-// on any device reaches the others in any order and the newest one wins everywhere. Devices
-// exchange these over their direct links (see Room 'sibling' / 'sync'); nothing else sees them.
+// What all devices of one identity share: the settings, the devices' aliases, the list of rooms
+// and how far each room has been read. Each value is a last-writer-wins register with a stamp
+// (hybrid clock, device id as tie-break), so a change on any device reaches the others in any
+// order and the newest one wins everywhere; the exception is a read mark, which only ever
+// moves forward. Devices exchange these over their direct links (see Room 'sibling' / 'sync');
+// nothing else sees them.
+//
+//   <setting name>   a shared setting (SHARED)
+//   d:<device key>   the device's alias; null once it was unlinked
+//   r:<room id>      { s: room secret, l: label, o: owner id | null }; null once it was left
+//   k:<room id>      { ms, c }: the newest message stamp read on any of our devices
 import { saveSettings } from '../config.js';
 import { HLC, compareStamps } from '../util/hlc.js';
 import { ALIAS_MAX, isAlias } from './envelope.js';
@@ -15,8 +22,12 @@ export const SHARED = Object.freeze([
 ]);
 /** Key of a device's alias: "d:" and the device's public key (base64url). null = unlinked. */
 export const deviceKey = (pub) => `d:${pub}`;
+export const roomKey = (id) => `r:${id}`;
+export const readKey = (id) => `k:${id}`;
 const DEVICE = /^d:[A-Za-z0-9_-]{43}$/;
-const MAX_ITEMS = 64;
+const ROOM = /^r:[A-Za-z0-9_-]{16}$/;
+const READ = /^k:[A-Za-z0-9_-]{16}$/;
+const MAX_ITEMS = 1000;
 
 const isList = (v, max, ok) => Array.isArray(v) && v.length <= max && v.every(ok);
 const url = (prefix) => (s) => typeof s === 'string' && s.length <= 200 && prefix.test(s);
@@ -31,7 +42,21 @@ const CHECKS = {
   relayFallback: (v) => typeof v === 'boolean',
   imagePreviews: (v) => ['auto', 'tap', 'off'].includes(v),
 };
-const validValue = (key, v) => (DEVICE.test(key) ? v === null || isAlias(v) : !!CHECKS[key]?.(v));
+const B64U = /^[A-Za-z0-9_-]+$/;
+const validRoom = (v) => v === null || (!!v && typeof v === 'object'
+  && Object.keys(v).every((k) => ['s', 'l', 'o'].includes(k))
+  && typeof v.s === 'string' && v.s.length === 22 && B64U.test(v.s)
+  && typeof v.l === 'string' && v.l.length >= 1 && v.l.length <= 40
+  && (v.o === null || (typeof v.o === 'string' && v.o.length === 11 && B64U.test(v.o))));
+const validStamp = (v) => !!v && typeof v === 'object' && Object.keys(v).length === 2
+  && Number.isSafeInteger(v.ms) && v.ms >= 0 && Number.isSafeInteger(v.c) && v.c >= 0;
+const validValue = (key, v) => {
+  if (DEVICE.test(key)) return v === null || isAlias(v);
+  if (ROOM.test(key)) return validRoom(v);
+  if (READ.test(key)) return validStamp(v);
+  return !!CHECKS[key]?.(v);
+};
+const known = (key) => SHARED.includes(key) || DEVICE.test(key) || ROOM.test(key) || READ.test(key);
 const validItem = (key, i) => !!i && typeof i === 'object' && validValue(key, i.v)
   && Number.isSafeInteger(i.ms) && i.ms >= 0 && Number.isSafeInteger(i.c) && i.c >= 0
   && typeof i.by === 'string' && i.by.length <= 16;
@@ -45,9 +70,7 @@ function clean(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
   for (const key of Object.keys(raw).slice(0, MAX_ITEMS)) {
     const i = raw[key];
-    if ((SHARED.includes(key) || DEVICE.test(key)) && validItem(key, i)) {
-      out[key] = { v: i.v, ms: i.ms, c: i.c, by: i.by };
-    }
+    if (known(key) && validItem(key, i)) out[key] = { v: i.v, ms: i.ms, c: i.c, by: i.by };
   }
   return out;
 }
@@ -101,15 +124,19 @@ export class DeviceSync extends Emitter {
 
   alias(pub) { return this.#items[deviceKey(pub)]?.v; }
 
+  /** The value held for `key` (undefined if none), without copying everything. */
+  value(key) { return this.#items[key]?.v; }
+
   /** Our own changes: `patch` maps keys to new values. Returns the items that changed (to
    *  send on). Throws if a value is not acceptable. */
   async set(patch) {
     const changed = {};
     for (const [key, v] of Object.entries(patch)) {
-      if (!SHARED.includes(key) && !DEVICE.test(key)) throw new Error(`not shared: ${key}`);
+      if (!known(key)) throw new Error(`not shared: ${key}`);
       if (!validValue(key, v)) throw new Error(`invalid value for ${key}`);
       const now = SHARED.includes(key) ? this.settings[key] : this.#items[key]?.v;
       if (same(now, v)) continue; // nothing changes
+      if (READ.test(key) && now && compareStamps(v, now) <= 0) continue; // only moves forward
       const { ms, c } = this.#hlc.tick();
       changed[key] = { v, ms, c, by: this.deviceId };
     }
@@ -133,7 +160,9 @@ export class DeviceSync extends Emitter {
     const accepted = {};
     for (const [key, item] of Object.entries(incoming)) {
       const mine = this.#items[key];
-      if (!mine || newer(item, mine) > 0) accepted[key] = item;
+      const wins = READ.test(key) ? !mine || compareStamps(item.v, mine.v) > 0
+        : !mine || newer(item, mine) > 0;
+      if (wins) accepted[key] = item;
       this.#hlc.observe(item);
     }
     return this.#take(accepted, false);

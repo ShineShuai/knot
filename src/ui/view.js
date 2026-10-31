@@ -75,7 +75,15 @@ class Ui {
     );
     document.addEventListener('visibilitychange', () => this.#markViewed());
     window.addEventListener('focus', () => this.#markViewed());
-    this.model.on('rooms', () => { this.#renderRail(); this.#watchRooms(); });
+    this.model.on('rooms', () => {
+      if (this.#current && !this.model.rooms.has(this.#current.id)) { // left on another device
+        this.images.disposeRoom(this.#current.id);
+        this.composer.forget(this.#current);
+        this.select(null);
+      }
+      this.#renderRail();
+      this.#watchRooms();
+    });
     this.model.on('settings', (keys) => { // another device of ours changed them
       if (!keys.includes('language')) return;
       setLanguage(this.model.settings.language);

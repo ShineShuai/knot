@@ -70,6 +70,30 @@ export async function featureLines(env = globalThis, kv = null) {
   return rows.map(([name, value]) => `${name}: ${value}`);
 }
 
+const pct = (x) => (x == null ? '?' : `${Math.round(x * 100)}%`);
+const ms = (x) => (x == null ? '?' : `${Math.round(x * 1000)} ms`);
+const kbit = (x) => (x == null ? '?' : `${Math.round(x / 1000)}k`);
+const frame = (x) => (x?.w ? `${x.w}x${x.h}@${x.fps == null ? '?' : Math.round(x.fps)}` : '?');
+
+/** One line per call connection: what we send, what we measured, what each side asked for.
+ *  (Quality problems in a call are about timing and numbers: copy these when one is reported.) */
+export function callLines(room) {
+  if (!room.call?.joined) return [];
+  return room.call.quality().map((r) => {
+    const { send, recv } = r;
+    return [
+      `call ${r.id.slice(0, 6)} ${r.state}`,
+      r.kind ? `${r.kind} rung ${r.rung}/${r.top} (proven ${r.level})` : 'no video',
+      `shown to them at ${r.demand ?? '?'} px, theirs at ${r.want ?? '?'} px`,
+      r.paused && 'VIDEO PAUSED for the network',
+      r.pausedByPeer && 'they paused their video for the network',
+      send ? `send ${send.kbps ?? '?'}k ${frame(send)} loss ${pct(send.loss)} rtt ${ms(send.rtt)}`
+        + ` limit ${send.limit ?? '?'} estimate ${kbit(send.available)}` : 'no statistics yet',
+      recv && `recv ${frame(recv)} freezes ${recv.freezes ?? '?'}`,
+    ].filter(Boolean).join(' | ');
+  });
+}
+
 /** The whole report. */
 export async function diagnosticsReport(model, env = globalThis) {
   const lines = [`knot ${VERSION}`, env.navigator?.userAgent ?? 'unknown browser', '',
@@ -79,6 +103,7 @@ export async function diagnosticsReport(model, env = globalThis) {
     const b = room.brokerStatus ?? {};
     lines.push(`room ${room.id.slice(0, 6)}: peers [${peers.join(', ')}]`
       + ` brokers ${b.connected ?? '?'}/${b.total ?? '?'}`);
+    lines.push(...callLines(room));
   }
   const rows = model.brokerHealth?.rows(model.settings.brokers) ?? [];
   for (const r of rows) {

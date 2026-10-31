@@ -10,7 +10,7 @@ import { MemoryKV } from '../src/store/kv.js';
 import { mountUi } from '../src/ui/view.js';
 import { newIdentity } from './helpers.js';
 import { FakeLink, until } from './fakes.js';
-import { FakeAudio, callParty } from './call-fakes.js';
+import { FakeAudio, callParty, videoEncoding } from './call-fakes.js';
 
 const { root: rootA } = installFakeDom();
 const rooms = [];
@@ -21,12 +21,13 @@ async function person(name, { calls = true, share, speaking } = {}) {
     ...DEFAULTS, name, brokersEnabled: false, brokers: [], gatherTimeoutMs: 10,
     connectTimeoutMs: 2000, callRetryMs: 20,
   };
+  const party = callParty({ share });
   const model = new AppModel({
     kv: new MemoryKV(), identity: await newIdentity(), settings, iceServers: () => [],
-    linkFactory: () => new FakeLink(), callEnv: calls ? callParty({ share }).env : undefined,
+    linkFactory: () => new FakeLink(), callEnv: calls ? party.env : undefined,
   });
   const root = new rootA.constructor('div');
-  return { model, root, ui: mountUi(root, model, { speaking }) };
+  return { model, root, party, ui: mountUi(root, model, { speaking }) };
 }
 const byLabel = (root, label) => root.querySelector(`[aria-label="${label}"]`);
 
@@ -299,3 +300,53 @@ test('ui: the person who is speaking is highlighted, and marked in the minimized
   find(a.root, 'button', 'Leave call')[0].click();
   assert.equal(ctx.closed, true, 'the audio context goes with the call');
 });
+
+/** A ResizeObserver that reports only when a test says so. */
+class FakeObserver {
+  static all = [];
+  elements = new Set();
+  constructor(callback) { this.callback = callback; FakeObserver.all.push(this); }
+  observe(el) { this.elements.add(el); }
+  unobserve(el) { this.elements.delete(el); }
+  disconnect() { this.elements.clear(); }
+  resize(el, height) { this.callback([{ target: el, contentRect: { height } }]); }
+}
+
+test('ui: the call window tells each sender how big its video is shown; paused video is marked',
+  async () => {
+    globalThis.ResizeObserver = FakeObserver;
+    try {
+      const [a, b] = [await person('Ada'), await person('Bob')];
+      const [ra, rb] = await pair(a, b);
+      a.ui.select(ra);
+      b.ui.select(rb);
+      byLabel(a.root, 'Start a video call').click();
+      await until(() => ra.call.joined);
+      byLabel(b.root, 'Start an audio call').click();
+      await until(() => rb.call.joined && ra.call.participants[0]?.state === 'connected');
+      await until(() => a.root.querySelectorAll('.tile').length === 2);
+
+      const bob = a.root.querySelectorAll('.tile')[1]; // Ada's view of Bob
+      const watcher = FakeObserver.all.find((o) => o.elements.has(bob));
+      assert.ok(watcher, 'remote tiles are watched');
+      assert.ok(![...FakeObserver.all].some((o) => o.elements.has(a.root.querySelector('.self'))));
+
+      const encoding = () => videoEncoding(b.party.made[0]).encodings[0]; // Bob sends to Ada
+      watcher.resize(bob, 150); // a small tile
+      await until(() => encoding().maxBitrate === 100_000);
+      watcher.resize(bob, 0); // hidden: the shrink is slow, so nothing changes yet
+      assert.equal(encoding().maxBitrate, 100_000);
+      watcher.resize(bob, 360); // growing is immediate
+      await until(() => encoding().maxBitrate === 500_000);
+
+      // Bob's connection to Ada cannot carry video: Ada's tile for Bob says so.
+      await rb.call.setVideo(true);
+      await until(() => ra.call.participants[0].v);
+      b.party.made[0].stats = [
+        { type: 'remote-inbound-rtp', kind: 'video', fractionLost: 0.5, roundTripTime: 0.1 },
+      ];
+      for (const t of [10_000, 14_000]) { b.party.clock.t = t; await rb.call.adapt(); }
+      await until(() => bob.querySelector('.tile-status').textContent.includes('paused'));
+      assert.ok(bob.classList.contains('novideo'));
+    } finally { delete globalThis.ResizeObserver; }
+  });

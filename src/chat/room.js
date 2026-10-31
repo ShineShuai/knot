@@ -180,8 +180,8 @@ export class Room extends Emitter {
     // An older version of the app may have saved this room without its owner. If our own
     // signature starts its membership chain, the room is ours: nobody can fake that.
     const ours = (e) => ADMIN_KINDS.includes(e.kind) && e.body.prev === ''
-      && authorIdOf(e) === this.identity.id;
-    if (!this.roster && stored.some(ours)) this.roster = new Roster(this.identity.id);
+      && authorIdOf(e) === this.identity.member;
+    if (!this.roster && stored.some(ours)) this.roster = new Roster(this.identity.member);
     this.roster?.load(stored);
     this.removed = !!this.roster?.revoked.has(this.identity.member);
     for (const e of this.log.where((x) => x.kind === 'unlink')) this.#noteUnlink(e);
@@ -238,7 +238,7 @@ export class Room extends Emitter {
   /** Id of the broker channel in use (changes with every rotation). */
   get channelId() { return this.#chan.id; }
 
-  get isOwner() { return !!this.roster && this.roster.owner === this.identity.id; }
+  get isOwner() { return !!this.roster && this.roster.owner === this.identity.member; }
   get ownerId() { return this.roster?.owner ?? null; }
 
   /** Connection details of everyone we know, for the hold-V reveal:
@@ -468,17 +468,38 @@ export class Room extends Emitter {
 
   #isUnlinked(cert, memberId) { return !!cert && this.#unlinked.has(`${memberId}|${cert.d}`); }
 
-  #noteUnlink(env) { this.#unlinked.add(`${authorIdOf(env)}|${env.body.d}`); }
+  /** The main device's key: the one the identity is named after. It cannot be withdrawn. */
+  #isRootKey(devicePub, env = null) {
+    const root = env ? env.cert?.r ?? env.pub : this.identity.cert?.r ?? toB64u(this.identity.pub);
+    return devicePub === root;
+  }
 
-  /** Main device: withdraw the certificate of a linked device (its public key, base64url) in
-   *  this room. Everyone drops its links and refuses what it writes from then on. */
+  #noteUnlink(env) {
+    if (!this.#isRootKey(env.body.d, env)) this.#unlinked.add(`${authorIdOf(env)}|${env.body.d}`);
+  }
+
+  /** Any device of ours: withdraw the certificate of a linked device (its public key,
+   *  base64url) in this room. Everyone drops its links and refuses what it writes from then
+   *  on. The main device cannot be withdrawn. */
   async unlinkDevice(devicePub) {
-    if (this.identity.cert) throw new Error('Only the main device can unlink a device');
+    if (this.#isRootKey(devicePub)) throw new Error('The main device cannot be unlinked');
     return this.#publish('unlink', unlinkBody(devicePub));
+  }
+
+  /** We learned elsewhere (not from an unlink in this room) that one of our devices was
+   *  withdrawn: refuse it here too and close its links. */
+  dropDevice(devicePub) {
+    if (this.#isRootKey(devicePub)) return;
+    this.#unlinked.add(`${this.identity.member}|${devicePub}`);
+    for (const entry of this.peers.values()) {
+      const ours = (entry.member ?? entry.id) === this.identity.member;
+      if (ours && entry.pub && toB64u(entry.pub) === devicePub) entry.link.close();
+    }
   }
 
   /** A certificate was withdrawn: close that device's links; if it was ours, say so. */
   #onUnlink(env) {
+    if (this.#isRootKey(env.body.d, env)) return;
     this.#noteUnlink(env);
     for (const entry of this.peers.values()) {
       const theirs = (entry.member ?? entry.id) === authorIdOf(env);
@@ -576,6 +597,7 @@ export class Room extends Emitter {
   /** A membership change took effect. */
   async #onAdmin(env) {
     const { kind, body } = env;
+    if (kind === 'admit') this.#desk.dropRequest(body.id); // answered, maybe on another device
     if (kind === 'revoke') {
       if (this.isMine(body.id)) return this.#beRemoved();
       this.members.delete(body.id);

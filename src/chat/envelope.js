@@ -45,7 +45,8 @@ export const replyBody = (text, { id, name, text: snippet }) => (
 /** Body of a deletion ("recall") of message `id` (its author, or the room owner, may do it;
  *  the room enforces who, see Room). */
 export const delBody = (id) => ({ id });
-/** Body of an unlink: the main identity withdraws the certificate of device key `d`. Signed
+/** Body of an unlink: the identity withdraws the certificate of device key `d` (any of its
+ *  devices may; the main device itself cannot be withdrawn). Signed
  *  by the main key itself, never by a linked device. Never trimmed from the log. */
 export const unlinkBody = (d) => ({ d });
 /** Body of an edit: the new text of message `id`. Only its author may edit it; the latest edit
@@ -147,9 +148,9 @@ function wellFormed(e, roomId, { maxText, maxFileBytes, now }) {
   if (typeof e.id !== 'string' || e.id.length > 64 || typeof e.name !== 'string' ||
     e.name.length > 64) return false;
   if (!isInt(e.ms, now + MAX_FUTURE_MS) || !isInt(e.c, 1e9)) return false;
-  // A linked device's certificate rides along; membership and unlinking stay with the main key.
-  if (e.cert !== undefined && (!certShape(e.cert) || ADMIN_KINDS.includes(e.kind)
-    || e.kind === 'unlink')) return false;
+  // A linked device's certificate rides along, on membership changes and unlinks too (it acts
+  // as the main identity); only a `recover` is signed by a key of its own, the code's.
+  if (e.cert !== undefined && (!certShape(e.cert) || e.kind === 'recover')) return false;
   if (e.al !== undefined && !(!!e.al && typeof e.al === 'object' && isAlias(e.al.n)
     && e.al.n.length > 0 && isB64u(e.al.sig, 86))) return false;
   if (typeof e.pub !== 'string' || e.pub.length !== 43 || !B64U.test(e.pub)) return false;

@@ -9,6 +9,7 @@
 //   owner  -> joiner  { t:'grant', to, pub, box, sig }  |  { t:'deny', to, pub, sig }
 import { concat, fromB64u, fromUtf8, toB64u, utf8 } from '../util/bytes.js';
 import { peerIdOf, verifySignature } from '../crypto/identity.js';
+import { verifyCert } from '../crypto/delegation.js';
 import { deriveRoomKeys } from '../crypto/room-keys.js';
 import { openBox, sealBox } from '../crypto/box.js';
 
@@ -78,13 +79,15 @@ export async function makeGrant(identity, { lobbyId, to, boxPub, payload }) {
   const sig = await identity.sign(text('knot/grant-sig', lobbyId, to, box));
   return utf8.encode(JSON.stringify({
     t: 'grant', to, pub: toB64u(identity.pub), box, sig: toB64u(sig),
+    ...(identity.cert ? { cert: identity.cert } : {}),
   }));
 }
 
 export async function makeDeny(identity, { lobbyId, to }) {
   const sig = await identity.sign(text('knot/deny-sig', lobbyId, to));
   return utf8.encode(JSON.stringify(
-    { t: 'deny', to, pub: toB64u(identity.pub), sig: toB64u(sig) },
+    { t: 'deny', to, pub: toB64u(identity.pub), sig: toB64u(sig),
+      ...(identity.cert ? { cert: identity.cert } : {}) },
   ));
 }
 
@@ -95,7 +98,9 @@ export async function readDecision(bytes, { lobbyId, ownerId, selfId, boxKey }) 
     const m = JSON.parse(fromUtf8(bytes));
     if (m.to !== selfId) return null;
     const pub = fromB64u(m.pub);
-    if ((await peerIdOf(pub)) !== ownerId) return null;
+    // The owner's own key, or a device of the owner (its certificate names exactly this key).
+    const speaksFor = m.cert ? await verifyCert(m.cert) : await peerIdOf(pub);
+    if (speaksFor !== ownerId || (m.cert && m.cert.d !== m.pub)) return null;
     const sig = fromB64u(m.sig);
     if (m.t === 'deny') {
       return (await verifySignature(pub, sig, text('knot/deny-sig', lobbyId, selfId)))

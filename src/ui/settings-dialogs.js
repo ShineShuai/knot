@@ -19,10 +19,10 @@ export class SettingsDialogs {
     const parts = [];
     if (model.isLinked) {
       parts.push(h('p', {}, t('linkedTo', { id: model.identity.member.slice(0, 4) })),
-        h('p', { class: 'muted' }, t('deviceAliasHelp')), this.#deviceList(false));
+        h('p', { class: 'muted' }, t('deviceAliasHelp')), this.#deviceList());
     } else {
       parts.push(h('h3', {}, t('devices')), linked.length ? h('div', {},
-        h('p', { class: 'muted' }, t('deviceAliasHelp')), this.#deviceList(true))
+        h('p', { class: 'muted' }, t('deviceAliasHelp')), this.#deviceList())
         : h('p', { class: 'muted' }, t('devicesNone')),
       h('h3', {}, t('linkNew')), h('p', {}, t('linkNewHelp')), this.#linkNewDevice());
       parts.push(h('h3', {}, t('linkThis')), h('p', {}, t('linkThisHelp')), this.#linkThisDevice());
@@ -30,9 +30,9 @@ export class SettingsDialogs {
     this.ui.kit.open(t('devices'), ...parts);
   }
 
-  /** All devices of this identity, each with an alias to edit (any device may rename any).
-   *  Only the main device can unlink. */
-  #deviceList(canUnlink) {
+  /** All devices of this identity, each with an alias to edit and, except the main device
+   *  and this one, an Unlink: any device may do either to any other. */
+  #deviceList() {
     const { model } = this.ui;
     return h('ul', { class: 'devices-list' }, ...model.deviceRows().map((row) => {
       const input = h('input', {
@@ -47,7 +47,7 @@ export class SettingsDialogs {
       });
       return h('li', {}, input,
         row.self ? h('span', { class: 'muted' }, t('deviceThis')) : null,
-        canUnlink && !row.main ? h('button', {
+        !row.main && !row.self ? h('button', {
           class: 'ghost',
           onclick: async () => {
             if (!confirm(t('devicesUnlinkConfirm', { name: row.alias }))) return;

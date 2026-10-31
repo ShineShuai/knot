@@ -5,7 +5,11 @@ import assert from 'node:assert/strict';
 import { authorIdOf, createEnvelope } from '../src/chat/envelope.js';
 import { decodeCode } from '../src/net/handshake.js';
 import { newRoomSecret } from '../src/crypto/room-keys.js';
+import { toB64u } from '../src/util/bytes.js';
+import { DEFAULTS } from '../src/config.js';
+import { JoinRequest } from '../src/chat/join.js';
 import { HLC } from '../src/util/hlc.js';
+import { MemoryKV } from '../src/store/kv.js';
 import { newIdentity } from './helpers.js';
 import { FakeBroker, until } from './fakes.js';
 import { link, linkIdentity, makeRoom, stopRooms } from './room-kit.js';
@@ -49,9 +53,10 @@ test('a linked device writes as the main identity; both devices see it as their 
   await until(() => bob.log.isGone(env.id));
 });
 
-test('only the main device unlinks; the unlinked device is cut off everywhere', async () => {
+test('unlinking cuts a device off everywhere; the main device cannot be unlinked', async () => {
   const { a, b, bob, phone, cert } = await trio();
-  await assert.rejects(b.unlinkDevice(cert.d), /Only the main device/);
+  await assert.rejects(b.unlinkDevice(toB64u(a.identity.pub)), /main device cannot/);
+  await assert.rejects(a.unlinkDevice(toB64u(a.identity.pub)), /main device cannot/);
   let told = 0;
   b.on('unlinked', () => told++);
   await a.unlinkDevice(cert.d);
@@ -112,4 +117,64 @@ test('in an owned room a linked device is let in as its main identity', async ()
   await owner.removeMember(main.id); // removing the person removes all her devices
   await until(() => !owner.peerList.some((p) => p.state === 'p2p'));
   assert.equal(cert.d.length, 43);
+});
+
+test('a linked device answers the join requests of a room its identity owns', async () => {
+  const broker = new FakeBroker();
+  const [main, phone, bob] = [await newIdentity(), await newIdentity(), await newIdentity()];
+  await linkIdentity(main, phone);
+  const secret = newRoomSecret();
+  const owner = await makeRoom({ secret, name: 'Ada', identity: main, owner: main.id, broker });
+  const copy = await makeRoom({ secret, name: 'Ada', identity: phone, owner: main.id, broker });
+  owner.start();
+  copy.start();
+  assert.equal(copy.isOwner, true, 'it speaks for the owner');
+  owner.stop(); // only the phone is around to answer
+  const { lobbySecret, ownerId } = await copy.joinLinkParts();
+  assert.equal(ownerId, main.id, 'the link names the identity, not the device');
+  const settings = {
+    ...DEFAULTS, brokersEnabled: true, brokers: ['wss://fake'], presenceIntervalMs: 60,
+  };
+  const ask = new JoinRequest({
+    identity: bob, lobbySecret, ownerId, name: 'Bob', greeting: 'hi', settings, WS: broker.ws(),
+  });
+  const approved = new Promise((resolve) => ask.on('approved', resolve));
+  await ask.start();
+  await until(() => copy.joinRequests.some((r) => r.id === bob.id), 4000);
+  await copy.approveJoin(bob.id);
+  const grant = await approved;
+  ask.stop();
+  assert.equal(authorIdOf(grant.admit), main.id, 'admitted as the owner');
+  assert.ok(grant.admit.cert, 'by a device that proves it');
+  const guest = await makeRoom({
+    name: 'Bob', secret: grant.secret, owner: grant.founder, identity: bob, kv: new MemoryKV(),
+  });
+  await guest.receiveAdmin(grant.admit);
+  assert.equal(guest.roster.isMember(bob.id), true);
+  assert.equal(copy.roster.isMember(bob.id), true);
+});
+
+test('any linked device can unlink another one; the main device cannot be unlinked', async () => {
+  const [main, one, two] = [await newIdentity(), await newIdentity(), await newIdentity()];
+  await linkIdentity(main, one, 'One');
+  await linkIdentity(main, two, 'Two');
+  const secret = newRoomSecret();
+  const [a, b1, b2, bob] = [
+    await makeRoom({ secret, name: 'Ada', identity: main }),
+    await makeRoom({ secret, name: 'Ada', identity: one }),
+    await makeRoom({ secret, name: 'Ada', identity: two }),
+    await makeRoom({ secret, name: 'Bob' }),
+  ];
+  await Promise.all([a, b1, b2].map((room) => link(room, bob)));
+  let told = 0;
+  b1.on('unlinked', () => told++);
+  await assert.rejects(b2.unlinkDevice(toB64u(main.pub)), /main device cannot/);
+  await b2.unlinkDevice(toB64u(one.pub)); // the second phone unlinks the first
+  await until(() => told === 1);
+  await assert.rejects(b1.sendText('still here?'), /unlinked/);
+  await until(() => !bob.peerList.some((p) => p.id === one.id && p.state === 'p2p'));
+  await b2.sendText('still me'); // the other devices are unaffected
+  await until(() => bob.log.list().some((e) => e.body === 'still me'));
+  const late = await createEnvelope(one, new HLC(Date.now, 500_000), bob.id, 'text', 'late', 'Ada');
+  assert.equal(bob.log.get(late.id), null);
 });

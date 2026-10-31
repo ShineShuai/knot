@@ -265,7 +265,9 @@ class Ui {
     const room = this.#current;
     if (!room) {
       this.stage.replaceChildren(
-        h('div', { class: 'empty' }, h('h2', {}, t('noRoomTitle')), h('p', {}, t('noRoomHelp'))),
+        h('div', { class: 'empty' }, h('h2', {}, t('noRoomTitle')), h('p', {}, t('noRoomHelp')),
+          this.model.isLinked ? null : h('p', {}, t('noRoomLink'), ' ',
+            h('button', { onclick: () => this.settingsDialogs.devices() }, t('linkThis')))),
       );
       return;
     }

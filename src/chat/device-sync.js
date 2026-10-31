@@ -9,6 +9,7 @@
 //   d:<device key>   the device's alias; null once it was unlinked
 //   r:<room id>      { s: room secret, l: label, o: owner id | null }; null once it was left
 //   k:<room id>      { ms, c }: the newest message stamp read on any of our devices
+//   c:devices        the secret of the channel where our devices meet when they share no room
 import { saveSettings } from '../config.js';
 import { HLC, compareStamps } from '../util/hlc.js';
 import { ALIAS_MAX, isAlias } from './envelope.js';
@@ -24,6 +25,7 @@ export const SHARED = Object.freeze([
 export const deviceKey = (pub) => `d:${pub}`;
 export const roomKey = (id) => `r:${id}`;
 export const readKey = (id) => `k:${id}`;
+export const CHANNEL = 'c:devices';
 const DEVICE = /^d:[A-Za-z0-9_-]{43}$/;
 const ROOM = /^r:[A-Za-z0-9_-]{16}$/;
 const READ = /^k:[A-Za-z0-9_-]{16}$/;
@@ -51,12 +53,14 @@ const validRoom = (v) => v === null || (!!v && typeof v === 'object'
 const validStamp = (v) => !!v && typeof v === 'object' && Object.keys(v).length === 2
   && Number.isSafeInteger(v.ms) && v.ms >= 0 && Number.isSafeInteger(v.c) && v.c >= 0;
 const validValue = (key, v) => {
+  if (key === CHANNEL) return typeof v === 'string' && v.length === 22 && B64U.test(v);
   if (DEVICE.test(key)) return v === null || isAlias(v);
   if (ROOM.test(key)) return validRoom(v);
   if (READ.test(key)) return validStamp(v);
   return !!CHECKS[key]?.(v);
 };
-const known = (key) => SHARED.includes(key) || DEVICE.test(key) || ROOM.test(key) || READ.test(key);
+const known = (key) => SHARED.includes(key) || DEVICE.test(key) || ROOM.test(key)
+  || READ.test(key) || key === CHANNEL;
 const validItem = (key, i) => !!i && typeof i === 'object' && validValue(key, i.v)
   && Number.isSafeInteger(i.ms) && i.ms >= 0 && Number.isSafeInteger(i.c) && i.c >= 0
   && typeof i.by === 'string' && i.by.length <= 16;

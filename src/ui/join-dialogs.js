@@ -86,7 +86,7 @@ export class JoinDialogs {
         if (text.includes('knot-rk1-')) {
           this.#recoverForm(result, text);
         } else if (lobby) {
-          if (lobby[2] === this.ui.model.identity.id) throw new Error(t('ownLink'));
+          if (lobby[2] === this.ui.model.identity.member) throw new Error(t('ownLink'));
           this.#greetingForm(result, fromB64u(lobby[1]), lobby[2]);
         } else if (link) {
           const room = await this.ui.model.addRoom(fromB64u(link[1]), t('roomDefault'));

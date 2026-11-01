@@ -298,11 +298,17 @@ class Ui {
     };
 
     const drawPeers = () => {
-      peers.replaceChildren(
-        ...peerEntries(room.peerList).map(
-          (e) => h('li', { class: `peer ${e.state}`, title: e.title }, e.text),
-        )
-      );
+      peers.replaceChildren(...peerEntries(room.peerList, room.selfRow).map((e) => {
+        const title = e.mine ? [t('you'), e.title].filter(Boolean).join('\n') : e.title;
+        if (e.parts.length === 1) { // one connection: the whole entry has its colour
+          return h('li', { class: `peer ${e.mine ? 'me ' : ''}${e.state}`, title }, e.text);
+        }
+        const segments = e.parts.flatMap((p, i) => [
+          i ? ' | ' : '', h('span', { class: `seg ${p.state}` }, p.text),
+        ]);
+        return h('li', { class: `peer group${e.mine ? ' me' : ''}`, title },
+          `${e.name} · `, ...segments);
+      }));
     };
     const drawLog = (stickToBottom = false) => {
       const nearBottom = stickToBottom || log.scrollHeight - log.scrollTop - log.clientHeight < 80;
@@ -393,7 +399,7 @@ class Ui {
       room.on('message', () => { drawLog(); this.#markViewed(); }),
       room.on('peers', drawPeers),
       room.on('files', () => drawLog()), // image previews start or wait with the transfers
-      room.on('brokers', drawBrokers),
+      room.on('brokers', () => { drawBrokers(); drawPeers(); }),
       holdToReveal(room, peers, conn));
     drawPeers(); drawBrokers(); drawLog(true); drawCall();
     composer.draw();

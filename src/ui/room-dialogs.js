@@ -42,7 +42,8 @@ export class RoomDialogs {
   /** A one-field dialog: a name, then the action button. Enter works like the button. */
   #nameDialog({ title, value, button, onSave }) {
     const input = h('input', { type: 'text', maxLength: 40, value });
-    const save = h('button', { class: 'primary' }, button);
+    const footer = this.ui.kit.footer({ save: button, onSave: () => go() });
+    const save = footer.primary;
     const go = async () => {
       if (save.disabled) return; // a double click must not do it twice
       save.disabled = true;
@@ -51,12 +52,8 @@ export class RoomDialogs {
         save.disabled = false;
       }
     };
-    save.onclick = go;
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) go(); });
-    this.ui.kit.open(title,
-      h('label', { class: 'field' }, t('roomName'), input),
-      h('div', { class: 'actions' }, save,
-        h('button', { onclick: () => this.ui.dialog.close() }, t('cancel'))));
+    this.ui.kit.open(title, h('label', { class: 'field' }, t('roomName'), input), footer);
     input.focus?.();
     input.select?.();
   }
@@ -89,9 +86,7 @@ export class RoomDialogs {
     this.ui.kit.open(t('recoveryTitle'),
       h('p', {}, t('recoveryHelp')),
       this.ui.kit.copyField(code),
-      h('div', { class: 'actions' },
-        h('button', { class: 'primary', onclick: () => this.ui.dialog.close() },
-          t('recoverySaved'))));
+      this.ui.kit.footer({ save: t('recoverySaved'), onSave: () => this.ui.dialog.close() }));
     if (after) this.ui.dialog.addEventListener('close', after, { once: true });
   }
 
@@ -101,10 +96,11 @@ export class RoomDialogs {
     );
     this.ui.kit.open(t('exportHistory'),
       h('p', {}, t('exportHelp', { n: room.log.size })),
-      h('div', { class: 'actions' },
-        h('button', { class: 'primary', onclick: save('txt', exportText, 'text/plain') },
-          t('exportText')),
-        h('button', { onclick: save('json', exportJson, 'application/json') }, t('exportJson'))));
+      this.ui.kit.footer({
+        save: t('exportText'), onSave: save('txt', exportText, 'text/plain'),
+        extra: [h('button', { onclick: save('json', exportJson, 'application/json') },
+          t('exportJson'))],
+      }));
   }
 
   #download(room, extension, content, type) {

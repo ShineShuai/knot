@@ -33,8 +33,8 @@ const shown = (p) => dialog(p).querySelectorAll('textarea').filter(readOnly);
 async function openDevices(p) {
   find(p.root, 'button', 'Settings')[0].click();
   button(p, 'Linked devices').click();
-  await until(() => dialog(p).textContent.includes('Link another device')
-    || dialog(p).textContent.includes('is linked to'));
+  await until(() => dialog(p).textContent.includes('Add a new device to this one')
+    || dialog(p).textContent.includes('This is a linked device'));
 }
 
 test('ui: link a phone with two codes, check the digits, then unlink it', async () => {
@@ -50,7 +50,7 @@ test('ui: link a phone with two codes, check the digits, then unlink it', async 
   assert.match(request, /^knotdev1-/);
 
   editable(main)[0].value = request; // the main device takes it
-  button(main, 'Create link code').click();
+  button(main, 'Create answer code').click();
   await until(() => shown(main).length === 1);
   const grant = shown(main)[0].value;
   const digits = dialog(main).querySelector('.sas').textContent;
@@ -83,7 +83,7 @@ test('ui: a bad code from the other device is refused', async () => {
   const [main, phone] = [await person('Ada'), await person('')];
   await openDevices(main);
   editable(main)[0].value = 'knotdev1-nonsense';
-  button(main, 'Create link code').click();
+  button(main, 'Create answer code').click();
   await until(() => /not a valid device code/.test(main.root.querySelector('.toast').textContent));
   await openDevices(phone);
   button(phone, 'Create code').click();
@@ -100,7 +100,7 @@ async function linkViaUi(main, phone) {
   button(phone, 'Create code').click();
   await until(() => shown(phone).length === 1);
   editable(main)[0].value = shown(phone)[0].value;
-  button(main, 'Create link code').click();
+  button(main, 'Create answer code').click();
   await until(() => shown(main).length === 1);
   editable(phone).at(-1).value = shown(main)[0].value;
   button(phone, 'Connect').click();

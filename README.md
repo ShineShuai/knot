@@ -101,7 +101,7 @@ if no broker is reachable; with brokers, reconnection is automatic).
       ui/messages.js       one message: links, reactions with their palette, files, notices
       ui/alias.js          a name with its device tag: "Ada · phone"
       ui/image-cards.js    the image cards of the open room, the lightbox
-      ui/dialog-kit.js     the dialog frame, copy field, QR, code box with scanner
+      ui/dialog-kit.js     the dialog frame and its footer, copy field, QR, code box with scanner
       ui/room-dialogs.js   new, rename, recovery code, invite, members, export, leave
       ui/join-dialogs.js   joining: by link, code, recovery code, or asking the owner
       ui/settings-dialogs.js  settings, linked devices, diagnostics
@@ -190,6 +190,10 @@ if no broker is reachable; with brokers, reconnection is automatic).
   merged on save, so tabs do not drop each other's rooms. If an owned room was already
   saved without its owner, the creating device recognises its own signature on the chain
   and takes it back; other members cannot, and rejoin through the owner.
+* **Dialogs:** each ends with a footer: the action that applies what was changed and Cancel
+  (Settings: Save, Linked devices: Save for the device names, New room: Create room, Join: Join,
+  Export: Export), or a single Close for a dialog that only shows things (invite, members,
+  diagnostics). The × in the corner is a Cancel: whatever was not saved is dropped.
 * **Room names:** "New room" opens a dialog (name, Create or Cancel): nothing exists until
   Create is pressed, and a double click makes one room. The default name is the first free
   "Room N". The ✎ button renames a room; names are local to each device. The room list is
@@ -363,7 +367,9 @@ if no broker is reachable; with brokers, reconnection is automatic).
   carries a device tag in messages, calls and exports: "Ada · phone" or
   "Ada · main". Someone with one device has no tag. Presence carries the certificate and alias too, so
   devices that are only seen on a broker are grouped and tagged as well. The connection bar has one entry per person, with
-  their devices and connections: "Bob · direct", "Ada · main direct | mac relay". The tag is the device's *alias*: it starts
+  their devices and connections, each in the colour of its connection type: "Bob · direct",
+  "Ada · main · direct | mac · relay". We are in the bar too, first, with or without other
+  devices (`Ada · online`, or `offline` when every broker and everybody is out of reach). The tag is the device's *alias*: it starts
   as the name given when linking (suggested from the device kind: iPhone, iPad, Android, Mac,
   Windows, Linux; numbered if taken; the main device is "main") and can be changed in
   Settings > Linked devices on any device, for any device. A message carries it as `al`

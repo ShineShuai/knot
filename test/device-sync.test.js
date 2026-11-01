@@ -542,6 +542,6 @@ test('a person\'s devices are one entry in the bar even before their links are u
     return bob.peerList.length === 2;
   });
   assert.equal(entries().length, 1, 'one person');
-  assert.match(entries()[0].text, /^Ada · (main|Pixel) \S+ \| (main|Pixel) \S+$/);
+  assert.match(entries()[0].text, /^Ada · (main|Pixel) · \S+ \| (main|Pixel) · \S+$/);
   senders.forEach(([c]) => c.stop());
 });

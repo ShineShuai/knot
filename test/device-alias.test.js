@@ -85,9 +85,12 @@ test('the connection bar has one entry per person, with their devices and connec
     row('A', 'Ada', 'mac', 'p2p', '555 666'), row('C', 'Cy', null, 'seen'),
   ]);
   assert.deepEqual(entries.map((e) => e.text), [
-    'Ada · main relay | mac direct', 'Bob · direct', 'Cy · seen',
+    'Ada · main · relay | mac · direct', 'Bob · direct', 'Cy · seen',
   ]);
   assert.deepEqual(entries.map((e) => e.state), ['p2p', 'p2p', 'seen'], 'the best connection');
+  assert.deepEqual(entries[0].parts, [
+    { text: 'main · relay', state: 'relay' }, { text: 'mac · direct', state: 'p2p' },
+  ], 'each device in the colour of its own connection');
   assert.ok(entries[0].title.includes('main: ') && entries[0].title.includes('555 666'));
   assert.ok(entries[1].title.includes('333 444') && !entries[1].title.includes('main'));
   assert.equal(entries[2].title, '');
@@ -96,12 +99,34 @@ test('the connection bar has one entry per person, with their devices and connec
   ]);
 });
 
-test('our own other devices are "You" in the connection bar', () => {
-  const row = (device, state, mine) => ({
-    member: 'A', name: 'Ada', device, state, sas: null, mine,
+test('we are in the bar too, with or without other devices', () => {
+  const me = (device, state = 'online') => ({
+    member: 'A', name: 'Ada', device, state, sas: null, mine: true, self: true,
   });
-  assert.deepEqual(peerEntries([row('phone', 'p2p', true)]).map((e) => e.text),
-    ['You · phone · direct']);
-  assert.deepEqual(peerEntries([row('phone', 'p2p', true), row('mac', 'relay', true)])
-    .map((e) => e.text), ['You · phone direct | mac relay']);
+  const peer = (device, state) => ({
+    member: 'A', name: 'Ada', device, state, sas: null, mine: true,
+  });
+  const alone = peerEntries([{ member: 'B', name: 'Bob', device: null, state: 'p2p' }],
+    { ...me(null) });
+  assert.deepEqual(alone.map((e) => e.text), ['Ada · online', 'Bob · direct'], 'we come first');
+  assert.equal(alone[0].mine, true);
+  const linked = peerEntries([peer('mac', 'p2p'), peer('pixel', 'relay')], me(''));
+  assert.deepEqual(linked.map((e) => e.text), [
+    'Ada · main · online | mac · direct | pixel · relay',
+  ]);
+  assert.deepEqual(linked[0].parts.map((p) => p.state), ['online', 'p2p', 'relay']);
+  assert.equal(peerEntries([], me(null, 'offline'))[0].text, 'Ada · offline');
+});
+
+test('our own row for the bar names the device once we have several', async () => {
+  const { a, b, bob } = await trio();
+  assert.equal(a.selfRow.name, 'Ada');
+  assert.equal(a.selfRow.state, 'online');
+  assert.equal(bob.selfRow.device, null, 'Bob has one device');
+  await b.sendText('from my phone');
+  await until(() => a.selfRow.device === '');
+  assert.equal(a.selfRow.device, '', 'the main device');
+  assert.equal(b.selfRow.device, 'Pixel');
+  const mine = peerEntries(a.peerList, a.selfRow).find((e) => e.mine);
+  assert.match(mine.text, /^Ada · main · online/);
 });

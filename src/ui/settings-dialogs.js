@@ -16,29 +16,45 @@ export class SettingsDialogs {
   async devices() {
     const { model } = this.ui;
     const holder = h('div'); // the list of devices; drawn again when a device is added
-    const refresh = () => holder.replaceChildren(...this.#devicesSection());
+    let save = async () => this.ui.dialog.close();
+    const refresh = () => {
+      const section = this.#devicesSection();
+      save = section.save;
+      holder.replaceChildren(...section.nodes);
+    };
     refresh();
     const parts = model.isLinked
-      ? [h('p', {}, t('linkedTo', { id: model.identity.member.slice(0, 4) })), holder,
+      ? [h('p', {}, t('linkIntro')),
+        h('p', {}, t('linkedTo', { id: model.identity.member.slice(0, 4) })), holder,
         this.#separate()]
-      : [h('h3', {}, t('devices')), holder,
-        h('h3', {}, t('linkNew')), h('p', {}, t('linkNewHelp')), this.#linkNewDevice(refresh),
-        h('h3', {}, t('linkThis')), h('p', {}, t('linkThisHelp')), this.#linkThisDevice()];
-    this.ui.kit.open(t('devices'), ...parts);
+      : [h('p', {}, t('linkIntro')),
+        h('section', {}, h('h3', {}, t('devicesYours')), holder),
+        h('section', {}, h('h3', {}, t('linkNew')), h('p', {}, t('linkNewHelp')),
+          this.#linkNewDevice(refresh)),
+        h('section', {}, h('h3', {}, t('linkThis')), h('p', {}, t('linkThisHelp')),
+          this.#linkThisDevice())];
+    // Save applies the names typed in the list above; Cancel (or ×) drops them.
+    this.ui.kit.open(t('devices'), ...parts,
+      this.ui.kit.footer({ save: t('save'), onSave: () => save() }));
   }
 
-  /** The devices with their aliases: edited here, applied by Save; Cancel (or the close button)
-   *  drops the edits. */
+  /** The footer of the settings, with a link to the lab page after the buttons. */
+  #withLab(footer) {
+    footer.append(h('a', { class: 'button', href: 'lab/lab.html' }, t('lab')));
+    return footer;
+  }
+
+  /** The devices with their aliases, and what Save does with the names typed there. */
   #devicesSection() {
     const { model } = this.ui;
     if (!model.isLinked && model.deviceRows().length < 2) {
-      return [h('p', { class: 'muted' }, t('devicesNone'))];
+      return { nodes: [h('p', { class: 'muted' }, t('devicesNone'))],
+        save: async () => this.ui.dialog.close() };
     }
     const list = this.#deviceList();
-    return [h('p', { class: 'muted' }, t('deviceAliasHelp')), list.node,
-      h('div', { class: 'actions' },
-        h('button', { class: 'primary', onclick: list.save }, t('save')),
-        h('button', { onclick: () => this.ui.dialog.close() }, t('cancel')))];
+    return {
+      nodes: [h('p', { class: 'muted' }, t('deviceAliasHelp')), list.node], save: list.save,
+    };
   }
 
   /** All devices of this identity, each with an alias to edit and, except the main device
@@ -256,13 +272,7 @@ export class SettingsDialogs {
         h('button', { onclick: () => this.devices() }, t('devices')),
         h('button', { onclick: () => this.diagnostics() }, t('diagnostics'))),
       field(t('imagePreviews'), previews),
-      h(
-        'div',
-        { class: 'actions' },
-        h('button', { class: 'primary', onclick: save }, t('saveSettings')),
-        h('button', { onclick: () => this.ui.dialog.close() }, t('cancel')),
-        h('a', { class: 'button', href: 'lab/lab.html' }, t('lab')),
-      ),
+      this.#withLab(this.ui.kit.footer({ save: t('saveSettings'), onSave: save })),
     );
   }
 }

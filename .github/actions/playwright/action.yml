@@ -1,0 +1,20 @@
+name: playwright
+description: >
+  Install Playwright outside the project (it has no dependencies) and export PLAYWRIGHT_MODULE.
+inputs:
+  browser:
+    description: chromium, firefox or webkit
+    default: chromium
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        BROWSER: ${{ inputs.browser }}
+      run: |
+        mkdir -p "$RUNNER_TEMP/pw"
+        cd "$RUNNER_TEMP/pw"
+        npm init -y > /dev/null
+        npm install playwright
+        npx playwright install --with-deps "$BROWSER"
+        echo "PLAYWRIGHT_MODULE=$RUNNER_TEMP/pw/node_modules/playwright" >> "$GITHUB_ENV"

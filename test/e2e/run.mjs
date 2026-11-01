@@ -14,13 +14,15 @@ import { loadPlaywright } from './playwright.mjs';
 const NAME = browserName();
 const SUITE = suiteName(process.env, NAME);
 const playwright = loadPlaywright();
-const server = await startServer(0);
-const base = `http://127.0.0.1:${server.address().port}`;
+// E2E_BASE_URL: test a deployed site (the live suite) instead of the files of this checkout.
+const BASE_URL = process.env.E2E_BASE_URL?.replace(/\/+$/, '') || null;
+const server = BASE_URL ? null : await startServer(0);
+const base = BASE_URL ?? `http://127.0.0.1:${server.address().port}`;
 let browser;
 try {
   browser = await playwright[NAME].launch(launchOptions(NAME));
 } catch (err) {
-  server.close();
+  server?.close();
   if (/profile folder/.test(String(err))) {
     console.log(`${NAME} does not start with Playwright's temporary profile (not the app).\n`
       + `Try another Node (this is ${process.version}; 22 or 24), then `
@@ -59,9 +61,10 @@ const toneMicrophone = () => {
   };
 };
 /** A check of the full suite. E2E_ONLY=<part of a name> runs just that one. */
-async function check(name, fn, { single = false } = {}) {
+async function check(name, fn, { single = false, live = false } = {}) {
   if (process.env.E2E_ONLY && !name.includes(process.env.E2E_ONLY)) return;
   if (SUITE === 'engine' && !single) return;
+  if (SUITE === 'live' && !live) return; // the live suite: only what a deployed site can serve
   livePages.clear();
   try { await fn(); console.log(`ok   ${name}`); } catch (err) {
     failures.push(name);
@@ -69,8 +72,9 @@ async function check(name, fn, { single = false } = {}) {
     await dumpRtc();
   }
 }
-/** A check of a single page: it is also part of the engine suite, which runs in any browser. */
-const single = (name, fn) => check(name, fn, { single: true });
+/** A check of a single page: it is also part of the engine suite, which runs in any browser.
+ *  With `live`, it needs only the files of the site (no test/ pages): the live suite runs it. */
+const single = (name, fn, options) => check(name, fn, { single: true, ...options });
 const livePages = new Set(); // the pages of the running check
 async function dumpRtc() { // the ICE log of each page: why two pages did not connect
   for (const [i, page] of [...livePages].entries()) {
@@ -222,7 +226,7 @@ await single('UI: create room, send message, persists after reload', async () =>
   await page.locator('.msg.own', { hasText: 'first words' }).waitFor();
   assert.deepEqual(page.errors, []);
   await page.context().close();
-});
+}, { live: true });
 
 // ---- 3. UI manual pairing between two browsers
 // ------------------------------------------------------
@@ -670,9 +674,9 @@ await single('lab page runs the loopback pairing', async () => {
   // WebCrypto (ok) or the JS fallback (info) are both fine; only a missing fallback fails.
   assert.ok(rows.some((r) => /Ed25519\s*(ok|info)/.test(r)), rows.join('\n'));
   await page.context().close();
-});
+}, { live: true });
 
 await browser.close();
-server.close();
+server?.close();
 if (failures.length) { console.log(`\n${failures.length} failed`); process.exit(1); }
 console.log('\nall e2e checks passed');

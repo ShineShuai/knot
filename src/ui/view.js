@@ -9,6 +9,7 @@ import { h } from './dom.js';
 import { peerEntries, peerLabel } from './alias.js';
 import { setLanguage, t } from './i18n.js';
 import { VERSION } from '../version.js';
+import { buildInfo, versionLabel } from '../build.js';
 import { dragHasFiles } from './attach.js';
 import { CallPanel } from './call-view.js';
 import { Composer } from './composer.js';
@@ -209,6 +210,7 @@ class Ui {
 
   #renderRail() {
     const rooms = [...this.model.rooms.values()];
+    const version = versionLabel(VERSION, buildInfo(globalThis.document ?? null));
     for (const room of rooms) {
       if (this.#watched.has(room)) continue;
       this.#watched.add(room);
@@ -236,7 +238,7 @@ class Ui {
       h(
         'header',
         {},
-        h('h1', {}, 'knot', h('small', { class: 'version' }, `v${VERSION}`)),
+        h('h1', {}, 'knot', h('small', { class: 'version' }, version)),
         h('button', { class: 'ghost', onclick: () => this.settingsDialogs.open() }, t('settings')),
       ),
       h('ul', { class: 'rooms' }, items),

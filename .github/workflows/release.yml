@@ -1,0 +1,134 @@
+# Production: a tag vX.Y.Z is deployed to Cloudflare when its commit passed ci, soaked on beta
+# and has no open beta-blocker issue (tools/release-gate.mjs), and the `production` environment
+# approves. Run by hand (Actions > release > Run workflow) to redeploy or roll back to an
+# older tag (force), or to try the gate alone (dry run). See RELEASING.md for the one-time setup.
+name: release
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to deploy (an older one is a rollback)
+        required: true
+      force:
+        description: Skip the beta soak (hotfix, rollback)
+        type: boolean
+        default: false
+      dry_run:
+        description: Run the release gate only
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  verify:
+    name: release gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      deployments: read
+      issues: read
+    outputs:
+      sha: ${{ steps.gate.outputs.sha }}
+      host: ${{ steps.host.outputs.host }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # history and tags: is the tag on main?
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - id: gate
+        run: node tools/release-gate.mjs --tag "$TAG" $FORCE
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force && '--force' || '' }}
+      - id: host # from the tag, so that a rollback goes where that release went
+        run: |
+          host=$(git show "refs/tags/$TAG:deploy/cloudflare/wrangler.json" \
+            | node -p "JSON.parse(require('fs').readFileSync(0)).routes[0].pattern")
+          case $host in
+            *example.com) echo "::error::set the real hostname in deploy/cloudflare/wrangler.json"
+              exit 1 ;;
+          esac
+          echo "host=$host" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: deploy to Cloudflare
+    needs: verify
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    environment:
+      name: production # required reviewers and the Cloudflare secrets live here
+      url: https://${{ needs.verify.outputs.host }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.sha }}
+      - name: Assemble the site, stamped as prod
+        run: tools/assemble.sh _site "$SHA" prod
+        env:
+          SHA: ${{ needs.verify.outputs.sha }}
+      # This job holds the token: pin the action to a commit id once you have looked it up.
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: '4.108.0'
+          command: deploy --config deploy/cloudflare/wrangler.json
+
+  smoke:
+    name: live smoke (production)
+    needs: [verify, deploy]
+    runs-on: ubuntu-latest
+    env:
+      SITE: https://${{ needs.verify.outputs.host }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: ./.github/actions/playwright
+      - name: Wait until the new build is served
+        run: tools/wait-for-build.sh "$SITE" "$SHA"
+        env:
+          SHA: ${{ needs.verify.outputs.sha }}
+      - name: The security headers arrived (Cloudflare reads _headers)
+        run: |
+          headers=$(curl -fsSI "$SITE/index.html")
+          for want in "content-security-policy: frame-ancestors 'none'" \
+            'strict-transport-security:' 'x-content-type-options: nosniff'; do
+            grep -qiF "$want" <<< "$headers" || { echo "missing header: $want"; exit 1; }
+          done
+      - name: The live suite (E2E_BASE_URL selects it)
+        run: npm run test:e2e
+        env:
+          E2E_BASE_URL: ${{ env.SITE }}
+
+  release:
+    name: GitHub release
+    needs: smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create the release unless this tag has one (a rollback does not)
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 \
+            || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --generate-notes --verify-tag
+        env:
+          GH_TOKEN: ${{ github.token }}

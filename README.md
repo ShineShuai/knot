@@ -26,8 +26,13 @@ overrides the default (full in Chromium, engine elsewhere).
 CI (`.github/workflows/ci.yml`): unit tests and the browser tests run on every push and pull
 request: the full suite in Chromium, the engine suite in Firefox and WebKit. Only Chromium blocks
 a deploy for now (`continue-on-error` on the others, see the comment in the file); a push to
-`main` whose unit tests and Chromium tests pass is published to GitHub Pages (one-time:
-Settings > Pages > Source: GitHub Actions).
+`main` whose unit tests and Chromium tests pass is published to GitHub Pages as the **beta**
+copy (one-time: Settings > Pages > Source: GitHub Actions) and smoke-tested there.
+**Production** is Cloudflare, deployed by `release.yml` from a tag `vX.Y.Z` once the commit has
+soaked on beta; see `RELEASING.md`. Both are made by `tools/assemble.sh`.
+
+`E2E_BASE_URL=https://host/path/ npm run test:e2e` runs the *live* suite (the UI and the lab
+page) against a deployed site instead of this checkout; the deploy jobs use it as their smoke test.
 
 Any static host works for deployment (HTTPS required outside localhost). Host it
 on two or three origins and also hand out the folder as a ZIP: after one visit
@@ -56,6 +61,7 @@ if no broker is reachable; with brokers, reconnection is automatic).
     src/
       config.js            defaults: STUN, brokers, limits (overridable in Settings)
       version.js           the version shown in the room list (equal to package.json)
+      build.js             which deploy this is: channel (beta/prod) and commit, from the page
       app.js               AppModel: identity, settings, set of rooms
       main.js              boot
       util/                bytes (base64url, binary writer/reader), hlc, rate limiter

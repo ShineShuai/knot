@@ -252,7 +252,8 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
 
   await a.getByPlaceholder('Paste the reply code').fill(reply);
   await a.locator('dialog').getByRole('button', { name: 'Connect' }).click();
-  for (const p of [a, b]) await p.locator('.peer.p2p').waitFor({ timeout: 15000 });
+  // the entry of the other device, not our own
+  for (const p of [a, b]) await p.locator('.peer.p2p:not(.me)').waitFor({ timeout: 15000 });
   assert.equal(await a.locator('dialog strong.sas').textContent(), sasB);
 
   for (const p of [a, b]) await p.keyboard.press('Escape');
@@ -352,7 +353,7 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
   await a.locator('.quote', { hasText: 'hi Bob 你好' }).waitFor();
   await a.locator('body').click({ position: { x: 1, y: 1 } }); // leave the message box
   await a.keyboard.down('v');
-  await a.locator('.conninfo', { hasText: /anon-[\w-]+ · / }).waitFor();
+  await a.locator('.conninfo', { hasText: /anon-[\w-]+ \(direct/ }).waitFor();
   await a.keyboard.up('v');
   await a.locator('.conninfo').waitFor({ state: 'hidden' });
   a.once('dialog', (dialog) => dialog.accept());

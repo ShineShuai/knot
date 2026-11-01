@@ -1,6 +1,7 @@
 // Hold V (or press and hold the member strip) to see how everyone is connected.
 import { h } from './dom.js';
-import { connLine } from './conn.js';
+import { withDevice } from './alias.js';
+import { connLine, selfLine } from './conn.js';
 import { t } from './i18n.js';
 
 /** Hold V (or press and hold the member strip) to see how everyone is connected. */
@@ -9,7 +10,16 @@ export function holdToReveal(room, strip, panel) {
   let press = null;
   const refresh = async () => {
     const rows = await room.connectionInfo();
-    panel.replaceChildren(...rows.map((row) => h('div', {}, connLine(row, t))));
+    const me = room.selfRow;
+    const { connected = 0, total = 0 } = room.brokerStatus ?? {};
+    const label = (row) => withDevice(row.mine ? t('you') : row.name, row.device);
+    panel.replaceChildren(
+      h('div', {}, selfLine({
+        label: withDevice(t('you'), me.device), state: me.state,
+        brokers: { n: connected, m: total },
+      }, t)),
+      ...rows.map((row) => h('div', {}, connLine({ ...row, label: label(row) }, t))),
+    );
   };
   const reveal = (on) => {
     clearInterval(timer);

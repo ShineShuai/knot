@@ -238,7 +238,6 @@ test('ui: the bar always shows us, also in a room nobody else is in', async () =
   rooms.push(room);
   a.ui.select(room);
   const entries = a.root.querySelectorAll('li').filter((li) => /peer/.test(li.className));
-  assert.deepEqual(entries.map((li) => li.textContent), ['Ada · online']);
+  assert.deepEqual(entries.map((li) => li.textContent), ['You: online']);
   assert.match(entries[0].className, /\bme\b/);
-  assert.match(entries[0].title, /You/);
 });

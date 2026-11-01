@@ -14,9 +14,11 @@ const stateText = (state) => t(STATES[state] ?? state);
 const tag = (row) => (row.device ?? '') || t('deviceMain');
 
 /** The connection bar: one entry per person, however many of their devices are connected, and
- *  one for ourselves (`self`: Room.selfRow) whether we have linked devices or not.
- *    Bob · direct
- *    Ada · main · online | mac · direct | pixel · relay
+ *  one for ourselves (`self`: Room.selfRow), shown as "You" whether we have linked devices or
+ *  not. After the name a colon, then each device with its connection in brackets:
+ *    Bob: direct
+ *    You: online
+ *    Ada: main (online) | mac (direct) | pixel (relay)
  *  `rows`: Room.peerList. An entry is { name, mine, state (the best connection), text, parts
  *  ({ text, state } per device, each drawn in the colour of its connection), title (the
  *  digits to verify) }. */
@@ -27,19 +29,21 @@ export function peerEntries(rows, self = null) {
   }
   return [...groups.values()].map((list) => {
     const [first] = list;
+    const mine = list.some((row) => row.mine);
+    const name = mine ? t('you') : first.name;
     // a person with a single known device has no device name to show
     const named = list.length > 1 || first.device !== null;
     const parts = list.map((row) => ({
-      text: named ? `${tag(row)} · ${stateText(row.state)}` : stateText(row.state),
+      text: named ? `${tag(row)} (${stateText(row.state)})` : stateText(row.state),
       state: row.state,
     }));
     const title = list.filter((r) => r.sas).map(
       (r) => `${list.length > 1 ? `${tag(r)}: ` : ''}${t('verify')} ${r.sas}`,
     ).join('\n');
     return {
-      name: first.name, mine: !!first.mine, parts, title,
+      name, mine, parts, title,
       state: list.find((r) => r.state === 'p2p')?.state ?? first.state,
-      text: `${first.name} · ${parts.map((p) => p.text).join(' | ')}`,
+      text: `${name}: ${parts.map((p) => p.text).join(' | ')}`,
     };
   });
 }

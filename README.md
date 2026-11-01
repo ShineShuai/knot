@@ -367,9 +367,10 @@ if no broker is reachable; with brokers, reconnection is automatic).
   carries a device tag in messages, calls and exports: "Ada · phone" or
   "Ada · main". Someone with one device has no tag. Presence carries the certificate and alias too, so
   devices that are only seen on a broker are grouped and tagged as well. The connection bar has one entry per person, with
-  their devices and connections, each in the colour of its connection type: "Bob · direct",
-  "Ada · main · direct | mac · relay". We are in the bar too, first, with or without other
-  devices (`Ada · online`, or `offline` when every broker and everybody is out of reach). The tag is the device's *alias*: it starts
+  their devices and connections, each in the colour of its connection type: `Bob: direct`,
+  `Ada: main (direct) | mac (relay)`. We are in the bar too, first, always as **You** and in a
+  colour of our own (purple), with or without other devices: `You: online` (`offline` when every
+  broker and everybody is out of reach), `You: main (online) | mac (direct) | pixel (relay)`. The tag is the device's *alias*: it starts
   as the name given when linking (suggested from the device kind: iPhone, iPad, Android, Mac,
   Windows, Linux; numbered if taken; the main device is "main") and can be changed in
   Settings > Linked devices on any device, for any device. A message carries it as `al`

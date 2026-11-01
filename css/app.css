@@ -2,12 +2,14 @@
 :root {
   --paper: #f1f3ef; --surface: #fbfcfa; --rail: #e4e9e4; --ink: #17202a; --muted: #5d6b66; --line: #cdd5cf;
   --link: #0b6e5c; --link-ink: #fff; --relay: #a96a00; --danger: #b3261e; --own: #dcefe8;
+  --you: #6a3fb5;
   --sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 @media (prefers-color-scheme: dark) {
   :root { --paper: #12181d; --surface: #182027; --rail: #0f1418; --ink: #e5eaec; --muted: #93a29d; --line: #2a353c;
-    --link: #58c4ad; --link-ink: #08201a; --relay: #e0a53a; --danger: #ff8a80; --own: #1d3a34; }
+    --link: #58c4ad; --link-ink: #08201a; --relay: #e0a53a; --danger: #ff8a80; --own: #1d3a34;
+    --you: #c4b0ff; }
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -51,7 +53,9 @@ textarea.code { font: .85rem/1.35 var(--mono); word-break: break-all; }
 .peer.connecting { border-style: dotted; }
 .peer.online { border-color: var(--link); color: var(--link); }
 .peer.offline { border-style: dotted; }
-.peer.me { font-weight: 600; }
+.peer.me { font-weight: 600; border-color: var(--you); }
+.peer.me:not(.group) { color: var(--you); }
+.peer.me .who { color: var(--you); font-weight: 700; }
 .peer.group { color: var(--ink); }
 .peer .seg.p2p, .peer .seg.online { color: var(--link); }
 .peer .seg.relay { color: var(--relay); }

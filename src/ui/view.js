@@ -299,15 +299,15 @@ class Ui {
 
     const drawPeers = () => {
       peers.replaceChildren(...peerEntries(room.peerList, room.selfRow).map((e) => {
-        const title = e.mine ? [t('you'), e.title].filter(Boolean).join('\n') : e.title;
         if (e.parts.length === 1) { // one connection: the whole entry has its colour
-          return h('li', { class: `peer ${e.mine ? 'me ' : ''}${e.state}`, title }, e.text);
+          const cls = `peer ${e.mine ? 'me ' : ''}${e.state}`;
+          return h('li', { class: cls, title: e.title }, e.text);
         }
         const segments = e.parts.flatMap((p, i) => [
           i ? ' | ' : '', h('span', { class: `seg ${p.state}` }, p.text),
         ]);
-        return h('li', { class: `peer group${e.mine ? ' me' : ''}`, title },
-          `${e.name} · `, ...segments);
+        return h('li', { class: `peer group${e.mine ? ' me' : ''}`, title: e.title },
+          h('span', { class: 'who' }, `${e.name}: `), ...segments);
       }));
     };
     const drawLog = (stickToBottom = false) => {

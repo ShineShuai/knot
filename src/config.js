@@ -4,7 +4,7 @@
 // whether anyone still needs it (Settings > Diagnostics shows "Curve25519 used: JS fallback"
 // on such a device). test/legacy-curves.test.js fails after this date: decide, then either
 // push the date out or remove it:
-//   1. grep -rn LEGACY-CURVES (code, tests, CI, README) and delete what it marks; delete
+//   1. grep -rn LEGACY-CURVES (code, tests, CI, docs) and delete what it marks; delete
 //      src/vendor/nacl-fast.js, src/crypto/soft-key.js, test/soft-curves.mjs, the test:soft
 //      script, test/legacy-curves.test.js and this constant.
 //   2. Device identities sealed on an old browser move into WebCrypto when it first runs on a

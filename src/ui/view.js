@@ -6,7 +6,7 @@
 // settings-dialogs.js).
 import { searchLog } from '../chat/search.js';
 import { h } from './dom.js';
-import { peerEntries, peerLabel } from './alias.js';
+import { AT, peerEntries, peerLabel, stateHelp, stateName } from './alias.js';
 import { setLanguage, t } from './i18n.js';
 import { VERSION } from '../version.js';
 import { buildInfo, versionLabel } from '../build.js';
@@ -300,17 +300,23 @@ class Ui {
     };
 
     const drawPeers = () => {
-      peers.replaceChildren(...peerEntries(room.peerList, room.selfRow).map((e) => {
+      const entries = peerEntries(room.peerList, room.selfRow).map((e) => {
+        const title = [e.title, e.help].filter(Boolean).join('\n'); // digits, then meanings
         if (e.parts.length === 1) { // one connection: the whole entry has its colour
           const cls = `peer ${e.mine ? 'me ' : ''}${e.state}`;
-          return h('li', { class: cls, title: e.title }, e.text);
+          return h('li', { class: cls, title }, e.text);
         }
         const segments = e.parts.flatMap((p, i) => [
           i ? ' | ' : '', h('span', { class: `seg ${p.state}` }, p.text),
         ]);
-        return h('li', { class: `peer group${e.mine ? ' me' : ''}`, title: e.title },
-          h('span', { class: 'who' }, `${e.name}: `), ...segments);
-      }));
+        return h('li', { class: `peer group${e.mine ? ' me' : ''}`, title },
+          h('span', { class: 'who' }, `${e.name}${AT}`), ...segments);
+      });
+      const legend = h('li', { class: 'legend' }, h('button', {
+        class: 'ghost', title: t('connHelpTitle'), 'aria-label': t('connHelpTitle'),
+        onclick: () => this.#connHelp(),
+      }, '?'));
+      peers.replaceChildren(...entries, legend);
     };
     const drawLog = (stickToBottom = false) => {
       const nearBottom = stickToBottom || log.scrollHeight - log.scrollTop - log.clientHeight < 80;
@@ -405,6 +411,19 @@ class Ui {
       holdToReveal(room, peers, conn));
     drawPeers(); drawBrokers(); drawLog(true); drawCall();
     composer.draw();
+  }
+
+  /** What the connection types in the bar mean. */
+  #connHelp() {
+    const item = (term, text) => [h('dt', {}, term), h('dd', {}, text)];
+    this.kit.open(t('connHelpTitle'),
+      h('p', {}, t('connHelpIntro')),
+      h('dl', { class: 'help' },
+        ...item(t('you'), t('helpYou')),
+        ...['p2p', 'relay', 'seen', 'connecting', 'offline']
+          .flatMap((state) => item(stateName(state), stateHelp(state))),
+        ...item(t('deviceThis'), t('helpThisDevice')),
+        ...item('@', t('helpAt'))));
   }
 
   #iconButton(glyph, label, onclick) {

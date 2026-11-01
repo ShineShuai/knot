@@ -105,7 +105,7 @@ if no broker is reachable; with brokers, reconnection is automatic).
       ui/view.js           the page: room list, the open room, unread, updates
       ui/composer.js       the message box: text, replies, edits, staged files, drop, paste
       ui/messages.js       one message: links, reactions with their palette, files, notices
-      ui/alias.js          a name with its device tag: "Ada · phone"
+      ui/alias.js          a name with its device tag ("Ada @ phone"), the bar entries
       ui/image-cards.js    the image cards of the open room, the lightbox
       ui/dialog-kit.js     the dialog frame and its footer, copy field, QR, code box with scanner
       ui/room-dialogs.js   new, rename, recovery code, invite, members, export, leave
@@ -370,13 +370,23 @@ if no broker is reachable; with brokers, reconnection is automatic).
   call connections. Every device
   of one identity shows that identity's messages as its own ("You", edit, delete). Once a
   certificate or alias of someone has been seen (in a message or on a link), their name
-  carries a device tag in messages, calls and exports: "Ada · phone" or
-  "Ada · main". Someone with one device has no tag. Presence carries the certificate and alias too, so
-  devices that are only seen on a broker are grouped and tagged as well. The connection bar has one entry per person, with
-  their devices and connections, each in the colour of its connection type: `Bob: direct`,
-  `Ada: main (direct) | mac (relay)`. We are in the bar too, first, always as **You** and in a
-  colour of our own (purple), with or without other devices: `You: online` (`offline` when every
-  broker and everybody is out of reach), `You: main (online) | mac (direct) | pixel (relay)`. The tag is the device's *alias*: it starts
+  carries a device tag in messages, calls, exports and the connection bar, always written
+  `name @ device` (a person at a device, as in user@host; `AT` in `ui/alias.js` is the one place
+  for it): `Ada @ phone` or `Ada @ main`. Someone with one device has no tag. Presence carries
+  the certificate and alias too, so devices that are only seen on a broker are grouped and
+  tagged as well. The connection bar has one entry per person, each device with its connection
+  type in brackets and in the colour of that type: `Bob (direct)`,
+  `Ada @ main (direct) | mac (relay)`. The types, as seen from this device (the `?` in the bar
+  explains them to the user): **direct**, a direct link between the two devices, no server in
+  between; **relay**, no direct link, messages go on through the brokers; **seen**, in the room
+  but not linked yet; **connecting**, a link is being set up; **offline** (only for ourselves).
+  We are in the bar too, first, always as **You** and in a colour of our own (purple), and our
+  connection type is the best way this device reaches the room: direct if it has at least one
+  direct link, relay if it only reaches a broker, offline if neither: `You (direct)`,
+  `You (relay)`, `You (offline)`, and with linked devices
+  `You @ main (this device, direct) | mac (direct) | pixel (relay)`. The hold-V details line
+  reads the same way (`Bob (direct, through NAT): host ↔ srflx, UDP, 23 ms, paired by code`,
+  `Ada @ phone (...)`, first a line for this device with the brokers it reaches). The tag is the device's *alias*: it starts
   as the name given when linking (suggested from the device kind: iPhone, iPad, Android, Mac,
   Windows, Linux; numbered if taken; the main device is "main") and can be changed in
   Settings > Linked devices on any device, for any device. A message carries it as `al`

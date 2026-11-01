@@ -203,16 +203,17 @@ export class Room extends Emitter {
    *  other devices, which write as the same identity)? */
   isMine(authorId) { return authorId === this.identity.member; }
 
-  /** This device as a row of the connection bar: we are present in the room (`online`), or
-   *  cut off from every broker and everybody (`offline`). */
+  /** This device as a row of the connection bar. Its connection type is the best way it
+   *  reaches the room, in the words used for everybody else: `p2p` (at least one direct link),
+   *  `relay` (no direct link, but a broker: messages are passed on through it) or `offline`
+   *  (neither). */
   get selfRow() {
-    const { connected = 0, total = 0 } = this.brokerStatus ?? {};
-    const reached = !this.settings.brokersEnabled || total === 0 || connected > 0
-      || [...this.peers.values()].some((p) => p.state === 'p2p');
+    const { connected = 0 } = this.brokerStatus ?? {};
+    const direct = [...this.peers.values()].some((p) => p.state === 'p2p');
     return {
       id: this.identity.id, name: this.#name, member: this.identity.member, mine: true,
       self: true, sas: null, via: 'self', owner: this.isOwner,
-      state: reached ? 'online' : 'offline',
+      state: direct ? 'p2p' : connected > 0 ? 'relay' : 'offline',
       device: this.deviceOf(this.identity.member, this.identity.alias ?? this.identity.cert?.n),
     };
   }
@@ -263,10 +264,10 @@ export class Room extends Emitter {
   /** Connection details of everyone we know, for the hold-V reveal:
    *  { id, name, state, via, net: { local, remote, protocol, rtt } | null } */
   async connectionInfo() {
-    return Promise.all(this.peerList.map(async ({ id, name, state, via }) => {
+    return Promise.all(this.peerList.map(async ({ id, name, state, via, device, mine }) => {
       const link = this.peers.get(id)?.link;
       const net = state === 'p2p' ? await link?.stats?.().catch(() => null) ?? null : null;
-      return { id, name, state, via, net };
+      return { id, name, state, via, net, device, mine };
     }));
   }
 

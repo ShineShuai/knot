@@ -238,6 +238,23 @@ test('ui: the bar always shows us, also in a room nobody else is in', async () =
   rooms.push(room);
   a.ui.select(room);
   const entries = a.root.querySelectorAll('li').filter((li) => /peer/.test(li.className));
-  assert.deepEqual(entries.map((li) => li.textContent), ['You: online']);
+  assert.deepEqual(entries.map((li) => li.textContent), ['You (offline)']);
   assert.match(entries[0].className, /\bme\b/);
+});
+
+test('ui: the ? in the bar explains what the connection types mean', async () => {
+  const a = await person('Ada');
+  const room = await a.model.createRoom('Club');
+  rooms.push(room);
+  a.ui.select(room);
+  button(a.root, '?').click();
+  const dialog = a.root.querySelector('dialog');
+  await tick();
+  for (const word of ['direct', 'relay', 'seen', 'offline', 'this device', 'You', '@']) {
+    assert.ok(dialog.textContent.includes(word), `explains ${word}`);
+  }
+  assert.match(dialog.textContent, /no server in between/);
+  assert.deepEqual(dialog.querySelector('.dialog-footer').querySelectorAll('button')
+    .map((b) => b.textContent), ['Close']);
+  dialog.close();
 });

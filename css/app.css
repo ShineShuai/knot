@@ -57,7 +57,11 @@ textarea.code { font: .85rem/1.35 var(--mono); word-break: break-all; }
 .peer.me:not(.group) { color: var(--you); }
 .peer.me .who { color: var(--you); font-weight: 700; }
 .peer.group { color: var(--ink); }
-.peer .seg.p2p, .peer .seg.online { color: var(--link); }
+.peer .seg.p2p { color: var(--link); }
+.peers .legend { list-style: none; }
+.peers .legend button { padding: 0 .5rem; border-radius: 99px; font-size: .8rem; }
+dl.help dt { font-weight: 600; margin-top: .6rem; }
+dl.help dd { margin: .1rem 0 0; color: var(--muted); }
 .peer .seg.relay { color: var(--relay); }
 .peer .seg.offline, .peer .seg.seen, .peer .seg.connecting { color: var(--muted); }
 .log { list-style: none; margin: 0; padding: 1rem; flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: .6rem; background: var(--surface); border-block: 1px solid var(--line); }

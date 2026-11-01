@@ -667,7 +667,8 @@ await single('lab page runs the loopback pairing', async () => {
   await page.waitForFunction(() => window.labDone, null, { timeout: 30000 });
   const rows = await page.locator('tbody tr').allTextContents();
   assert.ok(rows.some((r) => /Pairing.*ok/.test(r)), rows.join('\n'));
-  assert.ok(rows.some((r) => /Ed25519.*ok/.test(r)));
+  // WebCrypto (ok) or the JS fallback (info) are both fine; only a missing fallback fails.
+  assert.ok(rows.some((r) => /Ed25519\s*(ok|info)/.test(r)), rows.join('\n'));
   await page.context().close();
 });
 

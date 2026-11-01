@@ -1,6 +1,7 @@
 // P0 connectivity lab. Everything here uses the same modules as the app, so a
 // pass means the real code path works on this network.
 import { DEFAULTS } from '../src/config.js';
+import { hasNative } from '../src/crypto/curves.js';
 import { loadIdentity } from '../src/crypto/identity.js';
 import { decodeCode, encodeCode, signHandshake, verifyHandshake } from '../src/net/handshake.js';
 import { probeNat, probeStun } from '../src/net/ice-probe.js';
@@ -59,11 +60,12 @@ async function checkEnvironment() {
     globalThis.BarcodeDetector ? 'ok' : 'info',
     globalThis.BarcodeDetector ? '' : 'paste codes instead',
   );
-  try {
-    await crypto.subtle.generateKey('Ed25519', false, ['sign']);
-    add('Browser', 'Ed25519 WebCrypto', 'ok');
+  try { // the app's own probe: WebCrypto where the browser has it, else the JS fallback
+    const native = await hasNative('Ed25519');
+    add('Browser', 'Ed25519', native ? 'ok' : 'info',
+      native ? 'WebCrypto' : 'JS fallback (slower)');
   }
-  catch (err) { add('Browser', 'Ed25519 WebCrypto', 'fail', err.message); }
+  catch (err) { add('Browser', 'Ed25519', 'fail', `fallback not loaded: ${err.message}`); }
 }
 
 async function checkStun() {

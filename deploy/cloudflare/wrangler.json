@@ -2,5 +2,5 @@
   "name": "knot",
   "compatibility_date": "2026-07-01",
   "assets": { "directory": "../../_site" },
-  "routes": [{ "pattern": "knot.example.com", "custom_domain": true }]
+  "routes": [{ "pattern": "knot.vintoshine.com", "custom_domain": true }]
 }

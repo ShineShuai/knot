@@ -58,8 +58,9 @@ deploy succeeded at least 7 days ago; no open `beta-blocker` issue. `force` skip
 ## One-time setup
 
 Cloudflare:
-1. Put the real host name in `deploy/cloudflare/wrangler.json` (`routes[0].pattern`); the
-   release stops while it ends in `example.com`. The zone must be in the same account.
+1. The host name is `knot.vintoshine.com` (`deploy/cloudflare/wrangler.json`, `routes[0].pattern`;
+   the release stops while it ends in `example.com`). The zone must be in the same account, and
+   `knot` must not already have a DNS record: the first deploy creates it.
 2. Create an API token from the "Edit Cloudflare Workers" template, limited to this account and
    zone. The first deploy creates the Worker `knot` and the DNS record.
 3. For the app's host name: Rocket Loader off, Web Analytics auto-injection off (the CSP blocks

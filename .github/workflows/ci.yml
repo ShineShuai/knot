@@ -1,5 +1,6 @@
-# Tests run on every push and pull request. The page is published to GitHub Pages only
-# from main, and only when both the unit tests and the browser tests passed.
+# Tests run on every push and pull request. The page is published to GitHub Pages (the beta
+# copy) only from main, and only when both the unit tests and the browser tests passed; a smoke
+# test then loads the deployed page. Production (Cloudflare) is release.yml, from a tag.
 # One-time setup: repository Settings > Pages > Build and deployment > Source: GitHub Actions.
 name: ci
 
@@ -67,23 +68,37 @@ jobs:
     concurrency:
       group: pages
       cancel-in-progress: false
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - name: Assemble the site (only what the browser needs)
-        run: |
-          mkdir _site
-          cp -r index.html sw.js manifest.webmanifest css icons lab src _site/
-          # Lets open pages notice a newer deploy: the build id goes into the page and build.json.
-          sed -i "s|<meta name=\"build\" content=\"\">|<meta name=\"build\" content=\"$GITHUB_SHA\">|" _site/index.html
-          grep -q "content=\"$GITHUB_SHA\"" _site/index.html
-          printf '{"build":"%s"}\n' "$GITHUB_SHA" > _site/build.json
-          touch _site/.nojekyll
+      - name: Assemble the site (only what the browser needs), stamped as beta
+        run: tools/assemble.sh _site "$GITHUB_SHA" beta
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  smoke:
+    name: live smoke (beta)
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: ./.github/actions/playwright
+      - name: Wait until the new build is served
+        run: tools/wait-for-build.sh "$SITE" "$GITHUB_SHA"
+        env:
+          SITE: ${{ needs.deploy.outputs.page_url }}
+      - name: The live suite (E2E_BASE_URL selects it)
+        run: npm run test:e2e
+        env:
+          E2E_BASE_URL: ${{ needs.deploy.outputs.page_url }}

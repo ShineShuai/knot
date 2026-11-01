@@ -33,7 +33,15 @@ test('the suite: full in Chromium, engine elsewhere, and the full one only in Ch
   assert.equal(suiteName({ E2E_SUITE: 'engine' }, 'chromium'), 'engine');
   assert.equal(suiteName({ E2E_BROWSER: 'webkit' }), 'engine');
   assert.throws(() => suiteName({ E2E_SUITE: 'full' }, 'webkit'), /fake camera and microphone/);
-  assert.throws(() => suiteName({ E2E_SUITE: 'all' }, 'chromium'), /one of full, engine/);
+  assert.throws(() => suiteName({ E2E_SUITE: 'all' }, 'chromium'), /one of full, engine, live/);
+});
+
+test('E2E_BASE_URL selects the live suite, in any browser, and the two go together', () => {
+  const env = { E2E_BASE_URL: 'https://knot.example.com' };
+  assert.equal(suiteName(env, 'chromium'), 'live');
+  assert.equal(suiteName(env, 'webkit'), 'live');
+  assert.throws(() => suiteName({ ...env, E2E_SUITE: 'full' }, 'chromium'), /go together/);
+  assert.throws(() => suiteName({ E2E_SUITE: 'live' }, 'chromium'), /go together/);
 });
 
 test('unreachable brokers are noise in any browser; other errors are not', () => {

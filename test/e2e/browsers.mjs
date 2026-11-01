@@ -53,14 +53,18 @@ export const isExpectedNoise = (text, name = 'chromium') => (
   || (name === 'webkit' && WEBKIT_INSPECTOR_CSP.some((re) => re.test(text)))
 );
 
-export const SUITES = ['full', 'engine'];
+export const SUITES = ['full', 'engine', 'live'];
 
 /** Which checks run. `engine`: those of a single page (the UI, two rooms paired inside one
  *  page, the lab page): they need no camera and no second page, so they run in any browser.
  *  `full` adds real WebRTC between two pages and calls with a fake camera and microphone, which
- *  only Chromium offers. Default: full in Chromium, engine elsewhere (E2E_SUITE overrides). */
+ *  only Chromium offers. `live`: the few checks that need only the files of a deployed site
+ *  (the UI, the lab page), run against E2E_BASE_URL instead of the local server; they are the
+ *  smoke test after a deploy, in any browser. Default: live with E2E_BASE_URL, else full in
+ *  Chromium and engine elsewhere (E2E_SUITE overrides). */
 export function suiteName(env = process.env, name = browserName(env)) {
-  const suite = env.E2E_SUITE || (name === 'chromium' ? 'full' : 'engine');
+  const live = Boolean(env.E2E_BASE_URL);
+  const suite = env.E2E_SUITE || (live ? 'live' : name === 'chromium' ? 'full' : 'engine');
   if (!SUITES.includes(suite)) {
     throw new Error(`E2E_SUITE must be one of ${SUITES.join(', ')} (got "${suite}")`);
   }
@@ -68,6 +72,9 @@ export function suiteName(env = process.env, name = browserName(env)) {
     throw new Error(
       `The full suite needs Chromium's fake camera and microphone: ${name} runs the engine suite`,
     );
+  }
+  if (live !== (suite === 'live')) {
+    throw new Error('The live suite and E2E_BASE_URL go together: set both or neither');
   }
   return suite;
 }

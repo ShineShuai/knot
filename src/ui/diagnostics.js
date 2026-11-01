@@ -2,6 +2,7 @@
 // what the browser supports, how each room's links look, the brokers, and the last errors
 // the page hit. Copied from Settings > Diagnostics; contains no message text or keys.
 import { VERSION } from '../version.js';
+import { buildInfo, versionDetail } from '../build.js';
 import { storageState } from '../store/persist.js';
 
 const MAX_ENTRIES = 30;
@@ -100,7 +101,9 @@ export function callLines(room) {
 
 /** The whole report. */
 export async function diagnosticsReport(model, env = globalThis) {
-  const lines = [`knot ${VERSION}`, env.navigator?.userAgent ?? 'unknown browser', '',
+  const build = buildInfo(env.document ?? null);
+  const lines = [`knot ${versionDetail(VERSION, build)}`,
+    env.navigator?.userAgent ?? 'unknown browser', '',
     ...(await featureLines(env, model.kv)), ''];
   for (const room of model.rooms.values()) {
     const peers = room.peerList.map((p) => `${p.state}${p.via ? `/${p.via}` : ''}`);

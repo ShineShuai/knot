@@ -151,7 +151,7 @@ test('ui: New room asks for a name first; Cancel or Close creates nothing', asyn
   button(dialog, 'Cancel').click();
   assert.equal(dialog.open, false);
   button(a.root, 'New room').click();
-  button(dialog, 'Close').click();
+  button(dialog, '×').click(); // the corner button is a Cancel too
   await tick();
   assert.equal(a.model.rooms.size, 0, 'nothing is created until Create is pressed');
   button(a.root, 'New room').click();
@@ -195,4 +195,50 @@ test('ui: rooms are named, renamed, and never share a default name', async () =>
   const title = () => a.root.querySelector('.stage-head')?.querySelector('h2')?.textContent ?? '';
   await until(() => /Book club/.test(title()), 3000);
   assert.match(a.root.textContent, /Book club/); // also in the room list
+});
+
+test('ui: every dialog ends with Save and Cancel, or with Close when it changes nothing', async () => {
+  const a = await person('Ada');
+  const room = await a.model.createRoom('Club');
+  rooms.push(room);
+  a.ui.select(room);
+  const dialog = a.root.querySelector('dialog');
+  const footer = () => dialog.querySelector('.dialog-footer').querySelectorAll('button')
+    .map((b) => b.textContent);
+  const shut = () => { if (dialog.open) dialog.close(); };
+  const seen = {};
+  const open = async (name, click) => { shut(); click(); await tick(); seen[name] = footer(); };
+  await open('new room', () => button(a.root, 'New room').click());
+  await open('join', () => button(a.root, 'Join').click());
+  await open('invite', () => button(a.root, 'Invite').click());
+  await open('members', () => button(a.root, 'Members').click());
+  await open('settings', () => button(a.root, 'Settings').click());
+  await open('devices', () => { shut(); button(a.root, 'Settings').click(); });
+  button(dialog, 'Linked devices').click();
+  await tick();
+  seen.devices = footer();
+  button(a.root, 'Settings').click();
+  await tick();
+  button(dialog, 'Diagnostics').click();
+  await tick();
+  seen.diagnostics = footer();
+  assert.deepEqual(seen['new room'], ['Create room', 'Cancel']);
+  assert.deepEqual(seen.join, ['Join', 'Cancel']);
+  assert.deepEqual(seen.invite, ['Close']);
+  assert.deepEqual(seen.members, ['Close']);
+  assert.deepEqual(seen.settings, ['Save', 'Cancel']);
+  assert.deepEqual(seen.devices, ['Save', 'Cancel']);
+  assert.deepEqual(seen.diagnostics, ['Close']);
+  shut();
+});
+
+test('ui: the bar always shows us, also in a room nobody else is in', async () => {
+  const a = await person('Ada');
+  const room = await a.model.createRoom('Club');
+  rooms.push(room);
+  a.ui.select(room);
+  const entries = a.root.querySelectorAll('li').filter((li) => /peer/.test(li.className));
+  assert.deepEqual(entries.map((li) => li.textContent), ['Ada · online']);
+  assert.match(entries[0].className, /\bme\b/);
+  assert.match(entries[0].title, /You/);
 });

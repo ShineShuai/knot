@@ -127,8 +127,8 @@ export class JoinDialogs {
     };
     const input = this.ui.kit.codeInput(t('joinPlaceholder'), handle);
     input.area.value = prefill;
-    this.ui.kit.open(t('joinTitle'), h('p', {}, t('joinHelp')), input.node,
-      h('button', { class: 'primary', onclick: input.submit }, t('joinRoom')), result);
+    this.ui.kit.open(t('joinTitle'), h('p', {}, t('joinHelp')), input.node, result,
+      this.ui.kit.footer({ save: t('joinRoom'), onSave: input.submit }));
     if (prefill) handle(prefill);
   }
 }

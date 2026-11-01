@@ -13,17 +13,38 @@ export class DialogKit {
     dialog.onclose = () => this.#stopScan?.();
   }
 
+  /** The frame: a title, the content and, at the bottom, a footer. A dialog that makes
+   *  changes brings its own (see `footer`); any other ends with a Close. */
   open(title, ...content) {
     this.dialog.classList.remove('wide');
+    const parts = content.filter((part) => part != null && part !== false); // never print "null"
+    if (!parts.some((part) => String(part.className ?? '').includes('dialog-footer'))) {
+      parts.push(this.footer());
+    }
     this.dialog.replaceChildren(
       h(
         'header',
         {},
         h('h2', {}, title),
-        h('button', { class: 'ghost', onclick: () => this.dialog.close() }, t('close')),
+        h('button', {
+          class: 'ghost', title: t('close'), 'aria-label': t('close'),
+          onclick: () => this.dialog.close(),
+        }, '×'), // the same as Cancel: whatever was not saved is dropped
       ),
-      ...content.filter((part) => part != null && part !== false)); // never print "null"
+      ...parts);
     if (!this.dialog.open) this.dialog.showModal();
+  }
+
+  /** The bottom row of a dialog. With `save` (the label of the button that applies the
+   *  changes, calling `onSave`): that button and Cancel; `extra`: more buttons between them.
+   *  Without: a single Close. The button that applies is `row.primary`. */
+  footer({ save = null, onSave = null, extra = [], cancel = t('cancel') } = {}) {
+    const close = (label) => h('button', { onclick: () => this.dialog.close() }, label);
+    const primary = save ? h('button', { class: 'primary', onclick: onSave }, save) : null;
+    const row = h('div', { class: 'actions dialog-footer' },
+      ...(save ? [primary, ...extra, close(cancel)] : [...extra, close(t('close'))]));
+    row.primary = primary;
+    return row;
   }
 
   /** Read-only field with a Copy button. */

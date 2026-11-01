@@ -9,25 +9,37 @@ export const withDevice = (name, device) => (
 /** Who a live connection (or this device, with our own id) is, for the bar and for calls. */
 export const peerLabel = (room, id) => withDevice(room.nameOf(id), room.peerDevice(id));
 
-const stateText = (state) => t(state === 'p2p' ? 'direct' : state);
+const STATES = { p2p: 'direct', online: 'onlineState', offline: 'offlineState' };
+const stateText = (state) => t(STATES[state] ?? state);
 const tag = (row) => (row.device ?? '') || t('deviceMain');
-/** Our own other devices are "You", not our name. */
-const who = (row) => (row.mine ? t('you') : row.name);
 
-/** The connection bar: one entry per person, however many of their devices are connected.
- *  "Bob · direct", or "Ada · main direct | mac relay". `rows`: Room.peerList. Each entry is
- *  { state (the best connection, for the colour), text, title (the digits to verify) }. */
-export function peerEntries(rows) {
+/** The connection bar: one entry per person, however many of their devices are connected, and
+ *  one for ourselves (`self`: Room.selfRow) whether we have linked devices or not.
+ *    Bob · direct
+ *    Ada · main · online | mac · direct | pixel · relay
+ *  `rows`: Room.peerList. An entry is { name, mine, state (the best connection), text, parts
+ *  ({ text, state } per device, each drawn in the colour of its connection), title (the
+ *  digits to verify) }. */
+export function peerEntries(rows, self = null) {
   const groups = new Map();
-  for (const row of rows) groups.set(row.member, [...(groups.get(row.member) ?? []), row]);
+  for (const row of self ? [self, ...rows] : rows) {
+    groups.set(row.member, [...(groups.get(row.member) ?? []), row]);
+  }
   return [...groups.values()].map((list) => {
     const [first] = list;
-    const text = list.length === 1
-      ? `${withDevice(who(first), first.device)} · ${stateText(first.state)}`
-      : `${who(first)} · ${list.map((r) => `${tag(r)} ${stateText(r.state)}`).join(' | ')}`;
+    // a person with a single known device has no device name to show
+    const named = list.length > 1 || first.device !== null;
+    const parts = list.map((row) => ({
+      text: named ? `${tag(row)} · ${stateText(row.state)}` : stateText(row.state),
+      state: row.state,
+    }));
     const title = list.filter((r) => r.sas).map(
       (r) => `${list.length > 1 ? `${tag(r)}: ` : ''}${t('verify')} ${r.sas}`,
     ).join('\n');
-    return { state: list.find((r) => r.state === 'p2p')?.state ?? first.state, text, title };
+    return {
+      name: first.name, mine: !!first.mine, parts, title,
+      state: list.find((r) => r.state === 'p2p')?.state ?? first.state,
+      text: `${first.name} · ${parts.map((p) => p.text).join(' | ')}`,
+    };
   });
 }

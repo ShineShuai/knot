@@ -203,6 +203,20 @@ export class Room extends Emitter {
    *  other devices, which write as the same identity)? */
   isMine(authorId) { return authorId === this.identity.member; }
 
+  /** This device as a row of the connection bar: we are present in the room (`online`), or
+   *  cut off from every broker and everybody (`offline`). */
+  get selfRow() {
+    const { connected = 0, total = 0 } = this.brokerStatus ?? {};
+    const reached = !this.settings.brokersEnabled || total === 0 || connected > 0
+      || [...this.peers.values()].some((p) => p.state === 'p2p');
+    return {
+      id: this.identity.id, name: this.#name, member: this.identity.member, mine: true,
+      self: true, sas: null, via: 'self', owner: this.isOwner,
+      state: reached ? 'online' : 'offline',
+      device: this.deviceOf(this.identity.member, this.identity.alias ?? this.identity.cert?.n),
+    };
+  }
+
   /** Which device of `authorId` is meant, for a name tag like "Ada · phone": null while only
    *  one device of that member is known; else `device` (its alias, or the name in its
    *  certificate), or '' for the main device, which has neither. */

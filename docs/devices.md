@@ -20,7 +20,8 @@ the main identity's (so an owned room admits it without admitting the device key
 A linked device acts as the main identity in everything: it creates rooms (owned by the identity),
 answers join requests (grants and denials carry the certificate, and the owner lobby is addressed
 by the identity, so all its devices answer) and makes membership changes and `unlink`s, which
-rooms check against the identity (the owner). Only a `recover` is signed by a key of its own, and
+rooms check against the identity (the owner). A join request or an owner's pairing code answered by a linked device admits the main identity (the
+request carries the certificate; the answer goes to the device key). Only a `recover` is signed by a key of its own, and
 only the main device can link a new device (it holds the key that signs certificates). Its
 counters start at 500000, so it cannot make the same envelope id as the main device in one
 millisecond.

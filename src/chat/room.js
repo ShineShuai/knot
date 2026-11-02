@@ -462,17 +462,21 @@ export class Room extends Emitter {
 
   /** Relay through brokers only while some known member has no direct link. */
   #needsRelay() {
+    // A link that is open but not yet synced carries no chat (see #sendToPeers): not a path.
+    const reached = (id) => {
+      const p = this.peers.get(id);
+      return p?.state === 'p2p' && p.synced;
+    };
     return !!this.#channel && this.settings.relayFallback
-      && [...this.members].some(
-        ([id, m]) => this.#isFresh(m) && this.peers.get(id)?.state !== 'p2p',
-      );
+      && [...this.members].some(([id, m]) => this.#isFresh(m) && !reached(id));
   }
 
   #isFresh(member) { return Date.now() - member.seen < 3 * this.settings.presenceIntervalMs; }
 
   // ---- receiving -------------------------------------------------------------------------
 
-  async #ingest(env, source) {
+  /** `gossip`: pass a new message on to our other links (not for history, see #gossipBatch). */
+  async #ingest(env, source, gossip = true) {
     if (!env?.id || this.log.has(env.id)) return false;
     const limits = {
       maxText: this.settings.maxTextLength,
@@ -481,12 +485,15 @@ export class Room extends Emitter {
     if (!(await verifyEnvelope(env, this.id, limits))) return false;
     if (this.#isUnlinked(env.cert, authorIdOf(env))) return false;
     if (!this.#permits(env)) return false;
-    return this.#accept(env, source);
+    return this.#accept(env, source, gossip);
   }
 
   // ---- linked devices ---------------------------------------------------------------------
 
   #isUnlinked(cert, memberId) { return !!cert && this.#unlinked.has(`${memberId}|${cert.d}`); }
+
+  /** Was this device certificate withdrawn (by an `unlink`) in this room? */
+  isWithdrawn(cert, memberId) { return this.#isUnlinked(cert, memberId); }
 
   /** The main device's key: the one the identity is named after. It cannot be withdrawn. */
   #isRootKey(devicePub, env = null) {
@@ -542,6 +549,10 @@ export class Room extends Emitter {
     entry.member = member;
     entry.device = cert.n;
     this.#multi.add(member);
+    // Approved by our pairing code under its device key, but it writes as `member`: admit that.
+    if (entry.invited && this.isOwner && member !== entry.id && !this.roster.isMember(member)) {
+      await this.#desk.admit(member, entry.name).catch(() => {});
+    }
     if (this.roster && !entry.synced && this.roster.isMember(member)) this.#markSynced(entry);
     this.#maybeSibling(entry);
     this.#emitPeers();
@@ -562,11 +573,11 @@ export class Room extends Emitter {
     return ADMIN_KINDS.includes(env.kind) || this.roster.isMember(author);
   }
 
-  async #accept(env, source) {
+  async #accept(env, source, gossip = true) {
     const batch = this.roster && ADMIN_KINDS.includes(env.kind) ? this.roster.apply(env) : [env];
     let kept = false;
     for (const e of batch) {
-      const done = await this.#keep(e, source);
+      const done = await this.#keep(e, source, gossip);
       if (e === env) kept = done;
     }
     return kept;
@@ -588,7 +599,7 @@ export class Room extends Emitter {
     return this.log.where((e) => DECORATIONS.includes(e.kind) && e.body.id === id);
   }
 
-  async #keep(env, source) {
+  async #keep(env, source, gossip = true) {
     // nothing may ride on a deleted message (an edit would bring its text back)
     if (DECORATIONS.includes(env.kind) && this.log.isGone(env.body.id)) return false;
     const stale = this.#superseded(env);
@@ -610,7 +621,7 @@ export class Room extends Emitter {
     // Membership changes are shown in the conversation too ("Bob joined"): redraw for them.
     if (env.kind !== 'recovery' && !removed.includes(env)) this.emit('message', env);
     if (fresh && !removed.includes(env)) { this.emit('incoming', env); this.emit('unread'); }
-    if (source) this.#sendToPeers(env, source.id); // gossip: heals meshes with a missing link
+    if (source && gossip) this.#sendToPeers(env, source.id); // heals meshes with a missing link
     return true;
   }
 
@@ -663,7 +674,11 @@ export class Room extends Emitter {
   }
 
   async #onChat(entry, raw) {
-    if (!entry.limiter.allow()) return;
+    if (!entry.limiter.allow()) {
+      if (!entry.limited) console.warn(`rate limit: frames of ${entry.name} are being dropped`);
+      entry.limited = (entry.limited ?? 0) + 1;
+      return;
+    }
     let m;
     try { m = JSON.parse(raw); } catch { return; }
     if (m?.t === 'cert') { await this.#onCert(entry, m); return; }
@@ -693,11 +708,22 @@ export class Room extends Emitter {
       m.ids.filter((s) => typeof s === 'string'),
       !!m.full,
     );
-    else if (m?.t === 'give' &&
-      Array.isArray(m.es)) for (const e of m.es.slice(0, 50)) await this.#ingest(
-      e,
-      entry,
-    );
+    else if (m?.t === 'give' && Array.isArray(m.es)) {
+      // History: one frame per 50 for the others, not a frame per message (the receiver's rate
+      // limit would drop most of them, and live messages queued behind them).
+      const news = [];
+      for (const e of m.es.slice(0, 50)) if (await this.#ingest(e, entry, false)) news.push(e);
+      this.#gossipBatch(news, entry.id);
+    }
+  }
+
+  /** Forward messages we just learned from history to our other synced links, in `give` frames. */
+  #gossipBatch(envs, exceptId) {
+    if (!envs.length) return;
+    for (const p of this.peers.values()) {
+      if (p.state !== 'p2p' || !p.synced || p.id === exceptId) continue;
+      try { this.#sendBatches(p.link, envs); } catch { /* link dying */ }
+    }
   }
 
   // ---- history sync (on every new link) -------------------------------------------------------
@@ -771,20 +797,23 @@ export class Room extends Emitter {
 
   #sendGive(link, ids, full) {
     const missing = this.log.missingFor(ids.slice(0, this.settings.syncWindow * 2), full);
+    try { this.#sendBatches(link, missing); } catch { /* closed mid-sync; the next link retries */ }
+  }
+
+  /** `give` frames of at most 50 messages and MAX_FRAME_BYTES each. */
+  #sendBatches(link, envs) {
     let batch = [], size = 0;
     const flush = () => {
       if (batch.length) link.sendChat(JSON.stringify({ t: 'give', es: batch }));
       batch = [];
       size = 0;
     };
-    try {
-      for (const env of missing) {
-        const n = JSON.stringify(env).length;
-        if (size + n > MAX_FRAME_BYTES || batch.length >= 50) flush();
-        batch.push(env); size += n;
-      }
-      flush();
-    } catch { /* link closed mid-sync; the next link will retry */ }
+    for (const env of envs) {
+      const n = JSON.stringify(env).length;
+      if (size + n > MAX_FRAME_BYTES || batch.length >= 50) flush();
+      batch.push(env); size += n;
+    }
+    flush();
   }
 
   // ---- links

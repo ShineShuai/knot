@@ -10,13 +10,17 @@ import { buildSdp, parseSdp } from './sdp.js';
 
 const BUFFER_HIGH = 4 * 1024 * 1024;
 const BUFFER_LOW = 1024 * 1024;
+const DISCONNECT_GRACE_MS = 8000; // 'disconnected' that does not heal by itself counts as closed
 
 export class PeerLink extends Emitter {
   state = 'connecting'; // connecting | open | closed
-  #pc; #chat; #files; #gatherMs;
+  #pc; #chat; #files; #gatherMs; #dropTimer = null;
 
   constructor(
-    { iceServers = [], gatherTimeoutMs = 3000, RTC = globalThis.RTCPeerConnection } = {},
+    {
+      iceServers = [], gatherTimeoutMs = 3000, RTC = globalThis.RTCPeerConnection,
+      disconnectGraceMs = DISCONNECT_GRACE_MS,
+    } = {},
   ) {
     super();
     this.#gatherMs = gatherTimeoutMs;
@@ -31,8 +35,17 @@ export class PeerLink extends Emitter {
       ch.onopen = () => this.#maybeOpen();
       ch.onclose = () => this.close();
     }
+    // 'disconnected' (a network change, a sleeping phone) can last for a minute before the
+    // browser says 'failed'; meanwhile messages sent on the link vanish and the room does not
+    // fall back to the brokers. Give it a moment to heal, then treat it as closed.
     this.#pc.onconnectionstatechange = () => {
-      if (['failed', 'closed'].includes(this.#pc.connectionState)) this.close();
+      const state = this.#pc.connectionState;
+      clearTimeout(this.#dropTimer);
+      if (['failed', 'closed'].includes(state)) this.close();
+      else if (state === 'disconnected') {
+        this.#dropTimer = setTimeout(() => this.close(), disconnectGraceMs);
+        this.#dropTimer?.unref?.();
+      }
     };
   }
 
@@ -104,6 +117,7 @@ export class PeerLink extends Emitter {
   close() {
     if (this.state === 'closed') return;
     this.state = 'closed';
+    clearTimeout(this.#dropTimer);
     try {
       this.#chat.close();
       this.#files.close();

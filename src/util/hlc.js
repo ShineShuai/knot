@@ -37,5 +37,6 @@ export class HLC {
     else if (ms === rms) this.c = remote.c + 1;
     else this.c = 0;
     this.ms = ms;
+    if (this.c < this.#base) this.c = this.#base; // stay in this device's lane of counters
   }
 }

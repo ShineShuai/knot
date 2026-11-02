@@ -44,10 +44,15 @@ export async function makeRequest(identity, { lobbyId, name, greeting, boxPub, n
   const sig = await identity.sign(
     text('knot/join', lobbyId, body.name, body.greeting, body.box, body.ts),
   );
-  return utf8.encode(JSON.stringify({ ...body, sig: toB64u(sig) }));
+  // A linked device asks as the identity it writes as: its certificate proves that.
+  return utf8.encode(JSON.stringify(
+    { ...body, sig: toB64u(sig), ...(identity.cert ? { cert: identity.cert } : {}) },
+  ));
 }
 
-/** Verified request, or null: { id, pub, name, greeting, boxPub, ts }. */
+/** Verified request, or null: { id, device, pub, name, greeting, boxPub, ts, cert? }. `id` is who
+ *  asks to be admitted (the main identity for a linked device); `device` is the key that asked,
+ *  where the answer goes. */
 export async function readRequest(bytes, lobbyId, now = Date.now()) {
   try {
     const m = JSON.parse(fromUtf8(bytes));
@@ -62,8 +67,14 @@ export async function readRequest(bytes, lobbyId, now = Date.now()) {
     );
     const boxPub = fromB64u(m.box);
     if (!ok || pub.length !== 32 || boxPub.length !== 32) return null;
+    const device = await peerIdOf(pub);
+    let id = device;
+    if (m.cert !== undefined) {
+      id = m.cert.d === m.pub ? await verifyCert(m.cert) : null;
+      if (!id) return null;
+    }
     return {
-      id: await peerIdOf(pub), pub, name: m.name, greeting: m.greeting, boxPub, ts: m.ts,
+      id, device, pub, name: m.name, greeting: m.greeting, boxPub, ts: m.ts, cert: m.cert,
     };
   } catch { return null; }
 }

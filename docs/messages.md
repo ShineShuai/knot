@@ -12,13 +12,14 @@ Hybrid logical clock; far-future stamps are rejected/clamped.
 ## History
 
 On every new link both sides exchange the ids of their recent messages and send what the other
-lacks. Messages are gossiped to other links so a missing mesh edge heals. The log is a FIFO of
+lacks. Messages are gossiped to other links so a missing mesh edge heals; what a history sync brought is
+passed on in `give` batches (50 per frame), never one frame per message. The log is a FIFO of
 `logCap` messages.
 
 ## Relay fallback
 
 While some known room member has no direct link, text is also published, AES-GCM sealed, on the
-room's broker topic. Files never use it.
+room's broker topic. A link is a path only while it is open *and* synced. Files never use it.
 
 ## Reactions and edits
 

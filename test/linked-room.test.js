@@ -178,3 +178,59 @@ test('any linked device can unlink another one; the main device cannot be unlink
   const late = await createEnvelope(one, new HLC(Date.now, 500_000), bob.id, 'text', 'late', 'Ada');
   assert.equal(bob.log.get(late.id), null);
 });
+
+/** A linked device asks an owner to join; the owner's room is open to it only as its identity. */
+test('a linked device joining an owned room by link is admitted as its identity', async () => {
+  const broker = new FakeBroker();
+  const [boss, main, phone] = [await newIdentity(), await newIdentity(), await newIdentity()];
+  await linkIdentity(main, phone);
+  const owner = await makeRoom({ name: 'Boss', identity: boss, owner: boss.id, broker });
+  owner.start();
+  const { lobbySecret, ownerId } = await owner.joinLinkParts();
+  const settings = {
+    ...DEFAULTS, brokersEnabled: true, brokers: ['wss://fake'], presenceIntervalMs: 60,
+  };
+  const ask = new JoinRequest({
+    identity: phone, lobbySecret, ownerId, name: 'Ada', greeting: 'hi', settings, WS: broker.ws(),
+  });
+  const approved = new Promise((resolve) => ask.on('approved', resolve));
+  await ask.start();
+  await until(() => owner.joinRequests.length === 1, 4000);
+  assert.equal(owner.joinRequests[0].id, main.id, 'it asks as the identity, not as the key');
+  await owner.approveJoin(main.id);
+  const grant = await approved; // the answer finds the device that asked
+  ask.stop();
+  assert.equal(owner.roster.isMember(main.id), true);
+  assert.equal(owner.roster.isMember(phone.id), false);
+  const guest = await makeRoom({
+    name: 'Ada', secret: grant.secret, owner: grant.founder, identity: phone, kv: new MemoryKV(),
+    broker,
+  });
+  await guest.receiveAdmin(grant.admit);
+  guest.start();
+  await until(() => owner.peerList.some((p) => p.state === 'p2p'));
+  const env = await guest.sendText('hello from the phone');
+  await until(() => owner.log.get(env.id));
+});
+
+test('a linked device answering the owner\'s pairing code is admitted as its identity', async () => {
+  const [boss, main, phone] = [await newIdentity(), await newIdentity(), await newIdentity()];
+  await linkIdentity(main, phone);
+  const owner = await makeRoom({ name: 'Boss', identity: boss, owner: boss.id });
+  const offer = decodeCode((await owner.createInvite()).code);
+  const guest = await makeRoom({
+    name: 'Ada', secret: offer.roomSecret, owner: offer.founder, identity: phone,
+  });
+  await owner.acceptAnswer(decodeCode((await guest.answerOffer(offer)).code));
+  await until(() => owner.roster.isMember(main.id));
+  const env = await guest.sendText('hello from the phone');
+  await until(() => owner.log.get(env.id));
+});
+
+test('a linked device keeps its own lane of counters after seeing other stamps', () => {
+  const clock = new HLC(() => 1000, 500_000);
+  clock.observe({ ms: 500, c: 3 });
+  assert.ok(clock.tick().c >= 500_000);
+  clock.observe({ ms: 1000, c: 7 });
+  assert.ok(clock.tick().c >= 500_000);
+});

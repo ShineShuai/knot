@@ -48,7 +48,7 @@ export class OwnerDesk {
     this.#joinRequests.delete(id);
     this.room.emit('requests');
     await this.#lobby?.sendSignal(
-      req.id, await makeDeny(this.room.identity, { lobbyId: this.#lobbyId, to: req.id }),
+      req.device, await makeDeny(this.room.identity, { lobbyId: this.#lobbyId, to: req.device }),
     );
   }
 
@@ -134,8 +134,9 @@ export class OwnerDesk {
     const payload = {
       secret, label, admit, founder: roster.founder, epoch,
     };
-    await this.#lobby?.sendSignal(req.id, await makeGrant(
-      this.room.identity, { lobbyId: this.#lobbyId, to: req.id, boxPub: req.boxPub, payload },
+    await this.#lobby?.sendSignal(req.device, await makeGrant(
+      this.room.identity,
+      { lobbyId: this.#lobbyId, to: req.device, boxPub: req.boxPub, payload },
     ));
   }
 
@@ -167,6 +168,7 @@ export class OwnerDesk {
     const req = await readRequest(bytes, this.#lobbyId);
     if (!req || !this.room.isOwner || req.id === this.room.identity.member) return;
     if (this.room.roster.revoked.has(req.id)) return;
+    if (req.cert && this.room.isWithdrawn(req.cert, req.id)) return; // an unlinked device
     if (this.room.roster.isMember(req.id)) { // knocked twice
       return void this.#grant(req).catch(() => {});
     }

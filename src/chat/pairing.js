@@ -94,7 +94,10 @@ export class Pairing {
     entry.sas = await shortAuthString(pending.offer.sdp.fingerprint, answer.sdp.fingerprint);
     this.hooks.emitPeers();
     // Pairing by a code the owner made is the owner's approval; a broker dial is not.
-    if (this.room.isOwner && !pending.peer) await this.hooks.admit(id, answer.name).catch(() => {});
+    if (this.room.isOwner && !pending.peer) {
+      entry.invited = true; // a linked device: its identity is admitted when its certificate is in
+      await this.hooks.admit(id, answer.name).catch(() => {});
+    }
     await pending.link.acceptAnswer(answer.sdp);
     return true;
   }

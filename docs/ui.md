@@ -71,3 +71,11 @@ sits next to the title in the room list. Settings > Language picks Automatic (th
 English, 中文 or Deutsch; the choice is stored with the other settings and redraws everything on
 screen at once (a running call goes on). To add a language: a dictionary and a `LANGUAGES` entry
 in `ui/i18n.js`; a test fails while any text is missing or its `{placeholders}` differ.
+
+## Notices
+
+Short messages (errors, confirmations) appear in one toast at the bottom. It is a manual popover
+(`showPopover`), shown again on every notice, so it sits in the top layer above an open modal
+dialog; without it every notice raised from a dialog would be hidden behind that dialog. Browsers
+without popovers fall back to the old behaviour, so anything a dialog must tell the user is also
+written inside the dialog (see *Keeping your data* in [operations](operations.md)).

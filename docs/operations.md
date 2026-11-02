@@ -19,6 +19,14 @@ click; Settings says whether it was granted and can ask again. Without it the br
 the identity key and history when space is low (Safari: after about a week without a visit unless
 the app is installed to the Home Screen or Dock). The key cannot be recovered.
 
+Settings > *Your data on this device* explains this and shows the state: *Protected*, *Not
+protected* (with hints: install the app, open it regularly, allow a permission prompt, export
+chats, keep recovery codes) or *cannot be asked* (no `navigator.storage.persist`). *Keep my data*
+asks again and answers in the dialog itself: "Asking the browser...", then "Done" or "did not
+agree this time". Browsers often refuse without any prompt (Chrome by engagement, Safari unless
+installed), so a refusal is normal and not an error. Persistent storage does not survive the user
+clearing site data or removing the app.
+
 ## Updates
 
 The deploy stamps the commit into `index.html` (`<meta name="build">`) and writes `build.json`

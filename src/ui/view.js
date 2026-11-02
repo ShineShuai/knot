@@ -55,7 +55,7 @@ class Ui {
   start() {
     this.rail = h('aside', { class: 'rail' });
     this.stage = h('main', { class: 'stage' });
-    this.toast = h('div', { class: 'toast', role: 'status' });
+    this.toast = h('div', { class: 'toast', role: 'status', popover: 'manual' });
     this.dialog = h('dialog');
     this.kit = new DialogKit(this.dialog);
     this.shell = h('div', { class: 'shell', 'data-view': 'rooms' }, this.rail, this.stage);
@@ -199,6 +199,10 @@ class Ui {
   notify(text) {
     this.toast.textContent = text;
     this.toast.classList.add('show');
+    // A modal dialog hides everything outside it; the top layer puts the toast above it (shown
+    // again each time, so it also lands above a dialog opened after the last notice).
+    try { this.toast.hidePopover?.(); } catch { /* not showing */ }
+    try { this.toast.showPopover?.(); } catch { /* browser without popovers */ }
     clearTimeout(this.toastTimer);
     this.toastTimer = setTimeout(() => this.toast.classList.remove('show'), 4500);
   }

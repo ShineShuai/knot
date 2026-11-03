@@ -2,6 +2,7 @@
 // check them). Only what this device holds; shared files themselves are not included.
 import { ADMIN_KINDS, authorIdOf, deviceNameOf } from '../chat/envelope.js';
 import { noticeLine } from '../chat/notice.js';
+import { plain } from '../util/text.js';
 import { VERSION } from '../version.js';
 import { withDevice } from './alias.js';
 import { fmtSize } from './dom.js';
@@ -26,7 +27,7 @@ export function exportText(room, now = Date.now()) {
     const at = `[${stamp(env.ms)}]`;
     if (env.kind === 'gone') {
       lines.push(`${at} * ${room.isMine(env.by)
-        ? t('youDeleted') : t('deletedBy', { name: env.name })}`);
+        ? t('youDeleted') : t('deletedBy', { name: plain(env.name) })}`);
       continue;
     }
     if (ADMIN_KINDS.includes(env.kind)) {
@@ -36,10 +37,11 @@ export function exportText(room, now = Date.now()) {
     const name = withDevice(env.name, room.deviceOf(authorIdOf(env), deviceNameOf(env)));
     const who = room.log.isEdited(env) ? `${name} (${t('edited')})` : name;
     if (env.kind === 'file') {
-      lines.push(`${at} ${who}: [${t('exportFile')}] ${env.body.name} (${fmtSize(env.body.size)})`);
+      const file = `${plain(env.body.name)} (${fmtSize(env.body.size)})`;
+      lines.push(`${at} ${who}: [${t('exportFile')}] ${file}`);
     } else {
       lines.push(`${at} ${who}: ${indent(room.log.textOf(env))}`);
-      if (env.kind === 'reply') lines.push(`    > ${env.body.q.name}: ${env.body.q.text}`);
+      if (env.kind === 'reply') lines.push(`    > ${plain(env.body.q.name)}: ${env.body.q.text}`);
     }
     const reacted = [...(reactions.get(env.id) ?? [])].map(
       ([emoji, ids]) => `${emoji} ${ids.map((id) => room.nameOf(id)).join(', ')}`,

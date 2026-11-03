@@ -1,6 +1,7 @@
 // Dialogs about one room or the room list: new, rename, recovery code, invite, members,
 // export and leave. The page (view.js) opens them; they use its public parts (`ui`).
 import { toB64u } from '../util/bytes.js';
+import { plain } from '../util/text.js';
 import { decodeCode } from '../net/handshake.js';
 import { nextRoomName } from '../app.js';
 import { h, safeFileName } from './dom.js';
@@ -170,7 +171,7 @@ export class RoomDialogs {
     const draw = () => {
       const states = { p2p: 'direct', relay: 'relay', seen: 'seen', connecting: 'connecting' };
       const rows = room.membersView().map((m) => h('li', { class: 'member' },
-        h('span', { class: 'member-name' }, m.name,
+        h('span', { class: 'member-name' }, plain(m.name),
           m.owner ? h('span', { class: 'badge' }, t('ownerBadge')) : null),
         h('span', { class: 'file-size' }, m.self ? t('you') : t(states[m.state] ?? 'offlineState')),
         room.isOwner && !m.self ? h('span', { class: 'imgact' },
@@ -183,7 +184,7 @@ export class RoomDialogs {
               && run(room.transferOwnership(m.id)),
           }, t('makeOwner'))) : null));
       const asks = room.joinRequests.map((r) => h('div', { class: 'request' },
-        h('b', {}, r.name), ' ', h('span', { class: 'file-size' }, r.id),
+        h('b', {}, plain(r.name)), ' ', h('span', { class: 'file-size' }, r.id),
         h('p', { class: 'text' }, r.greeting),
         h('div', { class: 'actions' },
           h('button', { class: 'primary', onclick: () => run(room.approveJoin(r.id)) },
@@ -207,7 +208,8 @@ export class RoomDialogs {
 
   /** Leave a room (after asking): its images, staged files and stored messages go. */
   leave(room) {
-    if (!confirm(t('leaveConfirm') + (this.ui.model.paired ? `\n${t('leaveOthers')}` : ''))) return;
+    const warn = [room.isOwner && t('leaveOwner'), this.ui.model.paired && t('leaveOthers')];
+    if (!confirm([t('leaveConfirm'), ...warn.filter(Boolean)].join('\n'))) return;
     this.ui.images.disposeRoom(room.id);
     this.ui.composer.forget(room);
     this.ui.model.removeRoom(room.id).then(() => this.ui.select(null));

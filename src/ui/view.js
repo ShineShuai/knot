@@ -4,8 +4,10 @@
 // module: the message box (composer.js), messages (messages.js), image cards
 // (image-cards.js) and the dialogs (dialog-kit.js, room-dialogs.js, join-dialogs.js,
 // settings-dialogs.js).
+import { authorIdOf } from '../chat/envelope.js';
 import { searchLog } from '../chat/search.js';
-import { h } from './dom.js';
+import { plain } from '../util/text.js';
+import { h, throttled } from './dom.js';
 import { AT, peerEntries, peerLabel, stateHelp, stateName } from './alias.js';
 import { setLanguage, t } from './i18n.js';
 import { VERSION } from '../version.js';
@@ -94,6 +96,10 @@ class Ui {
       this.relocalize();
     });
     this.#watchRooms();
+    const failed = this.model.loadErrors ?? []; // rooms that did not open at start
+    if (failed.length) {
+      this.notify(t('roomsFailed', { names: failed.map((f) => f.label).join(', ') }));
+    }
     document.addEventListener('paste', (e) => this.composer.onPaste(e));
     for (const type of ['dragover', 'drop']) { // a file dropped beside the chat must not open
       window.addEventListener(type, (e) => dragHasFiles(e) && e.preventDefault());
@@ -162,11 +168,18 @@ class Ui {
     for (const room of this.model.rooms.values()) {
       if (this.#ownerEvents.has(room)) continue;
       this.#ownerEvents.add(room);
-      room.on('requests', () => {
+      let asking = room.joinRequests.length;
+      room.on('requests', () => { // only a new request is news, not another one being answered
         const last = room.joinRequests.at(-1);
-        if (last) this.notify(t('joinRequestFrom', { name: last.name, greeting: last.greeting }));
+        const news = room.joinRequests.length > asking;
+        asking = room.joinRequests.length;
+        if (news && last) {
+          this.notify(t('joinRequestFrom', { name: plain(last.name), greeting: last.greeting }));
+        }
       });
-      room.on('roster', () => { if (room.isOwner) this.roomDialogs.ensureRecovery(room); });
+      room.on('roster', () => { // the main device offers it: two owner devices would each make one
+        if (room.isOwner && !room.identity.cert) this.roomDialogs.ensureRecovery(room);
+      });
       room.call.on('change', () => this.callPanel.sync(room));
       room.call.on('alone', () => this.notify(t('callAlone', { room: room.label })));
       room.on('unread', () => this.#refreshUnread());
@@ -295,6 +308,12 @@ class Ui {
     let shown = 300;  // how many of the newest messages the log shows
     const callButtons = h('span', { class: 'call-buttons' });
     const callBanner = h('div', { class: 'call-banner', hidden: true, role: 'status' });
+    const waiting = h('div', { class: 'conninfo', hidden: true, role: 'status' });
+    const drawWaiting = () => {
+      const n = room.pendingCount;
+      waiting.hidden = !n;
+      waiting.textContent = n ? t('waitingMembers', { n }) : '';
+    };
     const log = h('ol', { class: 'log', 'aria-live': 'polite' });
     /** Run `change`, and keep the newest messages in view if that is where we were. */
     const keepBottom = (change) => {
@@ -405,15 +424,27 @@ class Ui {
         membersBtn,
         h('button', { onclick: () => this.roomDialogs.invite(room) }, t('invite')),
         h('button', { class: 'ghost', onclick: () => this.roomDialogs.leave(room) }, t('leave'))),
-      callBanner, searchBar, peers, conn, log, composer.quoteBar, composer.chips, composer.bar);
+      callBanner, searchBar, peers, conn, waiting, log, composer.quoteBar, composer.chips,
+      composer.bar,
+    );
 
+    // A batch of messages (history catching up) redraws the log a few times, not once each;
+    // what we did ourselves shows at once.
+    const draw = () => { drawLog(); this.#markViewed(); };
+    const redraw = throttled(draw, 80);
     this.#offStage.push(
-      room.on('message', () => { drawLog(); this.#markViewed(); }),
+      redraw.cancel,
+      room.on('message', (env) => {
+        if (!env || !room.isMine(authorIdOf(env))) return redraw();
+        redraw.cancel();
+        return draw();
+      }),
       room.on('peers', drawPeers),
+      room.on('pending', drawWaiting),
       room.on('files', () => drawLog()), // image previews start or wait with the transfers
       room.on('brokers', () => { drawBrokers(); drawPeers(); }),
       holdToReveal(room, peers, conn));
-    drawPeers(); drawBrokers(); drawLog(true); drawCall();
+    drawPeers(); drawBrokers(); drawLog(true); drawCall(); drawWaiting();
     composer.draw();
   }
 

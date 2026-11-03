@@ -14,7 +14,7 @@
 //
 // Audio/video calls: see `room.call` (call/call.js); its signaling rides our chat links.
 //
-// Events: 'message'(envelope), 'peers'(list), 'brokers'({connected,total}),
+// Events: 'message'(envelope), 'peers'(list), 'brokers'({connected,total} | null),
 //         'roster'(), 'requests'() (owner: join requests changed), 'removed'(),
 //         'incoming'(envelope) (a message from someone else that is not read yet),
 //         'unread'() (the unread count changed), 'read'(stamp) (we read further: see ReadMarks),
@@ -46,6 +46,13 @@ import { lobbySecretOf } from './lobby.js';
 
 const MAX_FRAME_BYTES = 48 * 1024; // keep chat frames well under every browser's SCTP limit
 const DECORATIONS = ['edit', 'react']; // envelopes that ride on another message
+const PENDING_MAX = 200; // messages kept while their author's admission is unknown
+const PENDING_TTL_MS = 10 * 60 * 1000;
+const CHAIN_ASK_MS = 5000; // at most one question for the member list this often
+const ANSWER_QUIET_MS = 1500; // a relayed answer was heard: do not repeat it
+const RELAY_HAVE_IDS = 40; // ids in a `have` over the brokers (they carry less than a link does)
+const RELAY_GIVE_MAX = 100;
+const RELAY_SYNC_MS = 60_000;
 const LINKED_COUNTER_BASE = 500_000;
 
 export class Room extends Emitter {
@@ -55,6 +62,12 @@ export class Room extends Emitter {
   members = new Map();
 
   #chan; #store; #kv; #channel = null; #timers = new Set();
+  // Messages that passed every check but one: their author is not (yet) in our copy of the member
+  // list. They wait here for the list to catch up, instead of being lost.
+  #pending = new Map(); // envelope id -> { env, at }
+  #chainAskedAt = 0; #adminHeardAt = 0; #giveSentAt = 0;
+  /** Why messages were refused, for the diagnostics: reason -> { n, last: { at, by, name } }. */
+  dropped = {};
   #epoch = { n: 0, secret: null }; // key rotations: the channel keys depend on it
   #fileHub; #marks; #desk; #pairing; // what the room delegates, see the constructor
   #unlinked = new Set();     // "<member id>|<device key>" of every withdrawn certificate
@@ -163,6 +176,7 @@ export class Room extends Emitter {
         mine: who === this.identity.member,
         device: this.deviceOf(who, p.alias ?? seen?.alias ?? p.device ?? seen?.device),
         state: p.state === 'p2p' || !viaRelay(p.id) ? p.state : 'relay',
+        limited: p.limited ?? 0,
       };
     });
     for (const [id, m] of this.members) {
@@ -310,25 +324,72 @@ export class Room extends Emitter {
   // ---- lifecycle -------------------------------------------------------------------
 
   start() {
-    if (this.removed || !this.settings.brokersEnabled || !this.settings.brokers.length) return;
+    if (this.removed || !this.#brokersOn()) return;
     this.#openChannel();
-    this.#every(this.settings.presenceIntervalMs, () => this.#announce());
+    this.#announceEvery();
     this.#desk.sync().catch(() => {});
   }
 
+  #brokersOn() { return this.settings.brokersEnabled && this.settings.brokers.length > 0; }
+
+  #announcing = false;
+  #announceEvery() {
+    if (this.#announcing) return;
+    this.#announcing = true;
+    this.#every(this.settings.presenceIntervalMs, () => this.#announce());
+    // Messages and the member list that only the brokers can bring are asked for now and then.
+    this.#every(RELAY_SYNC_MS, () => { if (this.#needsRelay()) this.#relaySync(); });
+  }
+
+  #relaySyncQueued = false;
+  #relaySyncSoon(ms = 500 + Math.random() * 1000) {
+    if (this.#relaySyncQueued) return;
+    this.#relaySyncQueued = true;
+    this.#after(ms, () => { this.#relaySyncQueued = false; this.#relaySync(); });
+  }
+
+  /** The brokers, or the switch for them, changed in Settings: apply it to the running room. */
+  async refreshBrokers() {
+    if (this.removed) return;
+    this.#channel?.stop();
+    this.#channel = null;
+    if (this.#brokersOn()) {
+      this.#openChannel();
+      this.#announceEvery();
+    } else this.brokerStatus = null;
+    this.emit('brokers', this.brokerStatus);
+    await this.#desk.restart();
+  }
+
+  /** The page came back from the background, or the network did: sockets and links may have
+   *  died without a sound. Reach the brokers again at once and compare histories on every link. */
+  wake() {
+    if (this.removed) return;
+    this.#channel?.wake();
+    this.#relaySyncSoon(2000); // once the brokers are reached again
+    for (const p of this.peers.values()) {
+      if (p.state !== 'p2p' || !p.synced) continue;
+      try { this.#sendHave(p.link); } catch { /* the link is dying */ }
+    }
+  }
+
   #openChannel() {
-    this.#channel = new RoomChannel({
+    const channel = new RoomChannel({
       roomId: this.#chan.id, aes: this.#chan.aes, selfId: this.identity.id, WS: this.WS,
       brokers: this.settings.brokers, topicPrefix: this.settings.topicPrefix, health: this.health,
     });
-    this.#channel.on('presence', (p) => this.#onPresence(p));
-    this.#channel.on('signal', (bytes) => this.#pairing.onSignal(bytes));
-    this.#channel.on('relay', (bytes) => this.#onRelay(bytes));
-    this.#channel.on(
-      'status',
-      (s) => { this.brokerStatus = s; this.emit('brokers', s); if (s.connected) this.#announce(); },
-    );
-    this.#channel.start();
+    this.#channel = channel;
+    // A channel that was replaced (new keys, new brokers) may still say its last words: ignore.
+    const current = (fn) => (...args) => { if (this.#channel === channel) fn(...args); };
+    channel.on('presence', current((p) => this.#onPresence(p)));
+    channel.on('signal', current((bytes) => this.#pairing.onSignal(bytes)));
+    channel.on('relay', current((bytes) => this.#onRelay(bytes)));
+    channel.on('status', current((s) => {
+      this.brokerStatus = s;
+      this.emit('brokers', s);
+      if (s.connected) { this.#announce(); this.#relaySyncSoon(); }
+    }));
+    channel.start();
   }
 
   // ---- key rotation ----------------------------------------------------------------------------
@@ -482,10 +543,86 @@ export class Room extends Emitter {
       maxText: this.settings.maxTextLength,
       maxFileBytes: this.settings.maxFileBytes,
     };
-    if (!(await verifyEnvelope(env, this.id, limits))) return false;
-    if (this.#isUnlinked(env.cert, authorIdOf(env))) return false;
-    if (!this.#permits(env)) return false;
+    if (!(await verifyEnvelope(env, this.id, limits))) return this.#drop('invalid or forged', env);
+    if (this.#isUnlinked(env.cert, authorIdOf(env))) return this.#drop('device was unlinked', env);
+    if (!this.#permits(env)) return this.#refuse(env);
     return this.#accept(env, source, gossip);
+  }
+
+  /** Count a refused message (the diagnostics say why a room looks empty). Always false. */
+  #drop(reason, env) {
+    const entry = (this.dropped[reason] ??= { n: 0, last: null });
+    entry.n++;
+    entry.last = { at: Date.now(), by: env ? authorIdOf(env) : null, name: env?.name ?? null };
+    return false;
+  }
+
+  /** A message from someone our member list does not know may be from a member whose admission
+   *  we have not seen (it travels on direct links and, now, over the brokers): keep it, ask. */
+  #refuse(env) {
+    const author = authorIdOf(env);
+    const stranger = this.roster && !ADMIN_KINDS.includes(env.kind) && !this.roster.isMember(author)
+      && !this.roster.revoked.has(author);
+    if (!stranger) {
+      const removed = this.roster?.revoked.has(author);
+      return this.#drop(removed ? 'author was removed' : 'not allowed', env);
+    }
+    this.#hold(env);
+    this.#needChain();
+    return this.#drop('author not in member list', env);
+  }
+
+  #hold(env) {
+    const cutoff = Date.now() - PENDING_TTL_MS;
+    for (const [id, p] of this.#pending) if (p.at < cutoff) this.#pending.delete(id);
+    if (!this.#pending.has(env.id)) {
+      if (this.#pending.size >= PENDING_MAX) {
+        this.#pending.delete(this.#pending.keys().next().value); // the oldest
+      }
+      this.#pending.set(env.id, { env, at: Date.now() });
+    }
+    this.emit('pending', this.#pending.size);
+  }
+
+  /** How many messages wait for the member list to learn their author. */
+  get pendingCount() { return this.#pending.size; }
+
+  #retrying = false;
+  /** The member list grew: the messages that waited for it get another look. */
+  async #retryPending() {
+    if (this.#retrying || !this.#pending.size) return;
+    this.#retrying = true;
+    try {
+      for (const [id, { env }] of [...this.#pending]) {
+        const author = authorIdOf(env);
+        if (!this.roster.isMember(author) && !this.roster.revoked.has(author)) continue;
+        this.#pending.delete(id);
+        await this.#ingest(env, null).catch(() => {});
+      }
+    } finally {
+      this.#retrying = false;
+      this.emit('pending', this.#pending.size);
+    }
+  }
+
+  /** Ask everybody for the member list: on direct links, and over the brokers. At most one
+   *  question every few seconds. */
+  #needChain() {
+    const now = Date.now();
+    if (!this.roster || now - this.#chainAskedAt < CHAIN_ASK_MS) return;
+    this.#chainAskedAt = now;
+    const frame = { t: 'admin?', head: this.roster.head };
+    const text = JSON.stringify(frame);
+    for (const p of this.peers.values()) {
+      if (p.state === 'p2p' && p.synced) try { p.link.sendChat(text); } catch { /* dying link */ }
+    }
+    this.#channel?.sendRelay(utf8.encode(text));
+  }
+
+  #after(ms, fn) {
+    const timer = setTimeout(fn, ms);
+    timer.unref?.();
+    this.#timers.add(timer);
   }
 
   // ---- linked devices ---------------------------------------------------------------------
@@ -580,6 +717,9 @@ export class Room extends Emitter {
       const done = await this.#keep(e, source, gossip);
       if (e === env) kept = done;
     }
+    if (this.roster && this.#pending.size && batch.some((e) => ADMIN_KINDS.includes(e.kind))) {
+      this.#after(0, () => this.#retryPending());
+    }
     return kept;
   }
 
@@ -669,8 +809,54 @@ export class Room extends Emitter {
 
   async #onRelay(bytes) {
     try {
-      await this.#ingest(JSON.parse(fromUtf8(bytes)), null);
+      const m = JSON.parse(fromUtf8(bytes));
+      if (typeof m?.t === 'string') await this.#onRelayControl(m); // older versions ignore these
+      else await this.#ingest(m, null);
     } catch { /* not a valid message */ }
+  }
+
+  /** What direct links do on connecting (member list, history), asked and answered over the
+   *  brokers, for the pairs that cannot connect directly. Any member may answer; they wait a
+   *  little, so that the others' answers (the same) are not sent N times. */
+  async #onRelayControl(m) {
+    if (m.t === 'admin?') {
+      if (!this.roster?.chain.length || m.head === this.roster.head) return;
+      this.#after(100 + Math.random() * 800, () => {
+        if (Date.now() - this.#adminHeardAt < ANSWER_QUIET_MS) return; // someone answered already
+        this.#relayBatches('admin', this.roster.envs(), 100);
+      });
+    } else if (m.t === 'admin' && Array.isArray(m.es)) {
+      this.#adminHeardAt = Date.now();
+      for (const e of m.es.slice(0, 100)) await this.#ingest(e, null).catch(() => {});
+    } else if (m.t === 'have' && Array.isArray(m.ids)) {
+      const ids = m.ids.filter((s) => typeof s === 'string').slice(0, 600);
+      const missing = this.log.missingFor(ids, !!m.full).slice(-RELAY_GIVE_MAX);
+      if (!missing.length) return;
+      this.#after(100 + Math.random() * 800, () => {
+        if (Date.now() - this.#giveSentAt < ANSWER_QUIET_MS) return;
+        this.#giveSentAt = Date.now();
+        this.#relayBatches('give', missing, 30);
+      });
+    } else if (m.t === 'give' && Array.isArray(m.es)) {
+      this.#giveSentAt = Date.now();
+      for (const e of m.es.slice(0, 50)) await this.#ingest(e, null).catch(() => {});
+    }
+  }
+
+  #relayBatches(t, envs, perFrame) {
+    for (const es of this.#chunks(envs, perFrame)) {
+      this.#channel?.sendRelay(utf8.encode(JSON.stringify({ t, es })));
+    }
+  }
+
+  /** Tell the brokers what we have and which member list we know (and hear what we lack). */
+  #relaySync() {
+    if (!this.#channel || !this.settings.relayFallback) return;
+    const send = (frame) => this.#channel.sendRelay(utf8.encode(JSON.stringify(frame)));
+    send({
+      t: 'have', ids: this.log.recentIds(RELAY_HAVE_IDS), full: this.log.size >= RELAY_HAVE_IDS,
+    });
+    if (this.roster) send({ t: 'admin?', head: this.roster.head });
   }
 
   async #onChat(entry, raw) {
@@ -702,6 +888,10 @@ export class Room extends Emitter {
     }
     if (this.roster && m?.t === 'epoch') { await this.#onEpoch(m, entry); return; }
     if (m?.t === 'call') { this.call.onFrame(entry.id, m); return; }
+    if (this.roster && m?.t === 'admin?') { // a member list asked for: send ours if it differs
+      if (m.head !== this.roster.head) this.#sendAdmin(entry.link);
+      return;
+    }
     if (m?.t === 'msg') await this.#ingest(m.e, entry);
     else if (m?.t === 'have' && Array.isArray(m.ids)) this.#sendGive(
       entry.link,
@@ -731,17 +921,10 @@ export class Room extends Emitter {
   /** Membership comes first: both sides send their admin chain, and only talk chat once the
    *  other side is a known member. */
   #sendAdmin(link) {
-    const envs = this.roster.envs();
-    let [from, size] = [0, 0];
-    for (let at = 0; at < envs.length; at++) {
-      const n = JSON.stringify(envs[at]).length;
-      if (size + n > MAX_FRAME_BYTES && at > from) {
-        link.sendChat(JSON.stringify({ t: 'admin', es: envs.slice(from, at) }));
-        [from, size] = [at, 0];
-      }
-      size += n;
+    // At most 100 to a frame: that is all a receiver reads (more would lose the rest of the chain).
+    for (const es of this.#chunks(this.roster.envs(), 100)) {
+      link.sendChat(JSON.stringify({ t: 'admin', es }));
     }
-    if (from < envs.length) link.sendChat(JSON.stringify({ t: 'admin', es: envs.slice(from) }));
   }
 
   #markSynced(entry) {
@@ -800,20 +983,24 @@ export class Room extends Emitter {
     try { this.#sendBatches(link, missing); } catch { /* closed mid-sync; the next link retries */ }
   }
 
-  /** `give` frames of at most 50 messages and MAX_FRAME_BYTES each. */
-  #sendBatches(link, envs) {
+  /** `envs` in groups of at most `max` and MAX_FRAME_BYTES each. */
+  *#chunks(envs, max = 50) {
     let batch = [], size = 0;
-    const flush = () => {
-      if (batch.length) link.sendChat(JSON.stringify({ t: 'give', es: batch }));
-      batch = [];
-      size = 0;
-    };
     for (const env of envs) {
       const n = JSON.stringify(env).length;
-      if (size + n > MAX_FRAME_BYTES || batch.length >= 50) flush();
+      if (batch.length && (size + n > MAX_FRAME_BYTES || batch.length >= max)) {
+        yield batch;
+        batch = [];
+        size = 0;
+      }
       batch.push(env); size += n;
     }
-    flush();
+    if (batch.length) yield batch;
+  }
+
+  /** `give` frames of at most 50 messages and MAX_FRAME_BYTES each. */
+  #sendBatches(link, envs) {
+    for (const es of this.#chunks(envs)) link.sendChat(JSON.stringify({ t: 'give', es }));
   }
 
   // ---- links
@@ -867,7 +1054,10 @@ export class Room extends Emitter {
       entry.queue = entry.queue.then(() => this.#onChat(entry, raw))
         .catch((err) => console.error('chat frame failed', err));
     });
-    link.on('file', (data) => this.files.onFrame(link, data));
+    // Files and previews only over links of members: a stranger asks for nothing, answers nothing.
+    link.on('file', (data) => {
+      if (!this.roster || entry.synced) this.files.onFrame(link, data);
+    });
     link.on('close', () => {
       clearTimeout(timer);
       if (this.peers.get(peer.id) !== entry) return;

@@ -11,7 +11,7 @@
 //   k:<room id>      { ms, c }: the newest message stamp read on any of our devices
 //   c:devices        the secret of the channel where our devices meet when they share no room
 import { saveSettings } from '../config.js';
-import { HLC, compareStamps } from '../util/hlc.js';
+import { HLC, MAX_FUTURE_MS, compareStamps } from '../util/hlc.js';
 import { ALIAS_MAX, isAlias } from './envelope.js';
 import { Emitter } from '../util/emitter.js';
 
@@ -62,7 +62,8 @@ const validValue = (key, v) => {
 const known = (key) => SHARED.includes(key) || DEVICE.test(key) || ROOM.test(key)
   || READ.test(key) || key === CHANNEL;
 const validItem = (key, i) => !!i && typeof i === 'object' && validValue(key, i.v)
-  && Number.isSafeInteger(i.ms) && i.ms >= 0 && Number.isSafeInteger(i.c) && i.c >= 0
+  && Number.isSafeInteger(i.ms) && i.ms >= 0 && i.ms <= Date.now() + MAX_FUTURE_MS
+  && Number.isSafeInteger(i.c) && i.c >= 0
   && typeof i.by === 'string' && i.by.length <= 16;
 
 const newer = (a, b) => compareStamps(a, b) || (a.by < b.by ? -1 : a.by > b.by ? 1 : 0);

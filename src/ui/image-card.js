@@ -9,6 +9,7 @@ import { Emitter } from '../util/emitter.js';
 import { authorIdOf, previewRef } from '../chat/envelope.js';
 import { LIMITS, asImage, thumbBlob } from '../files/image.js';
 import { fmtSize, h, safeFileName } from './dom.js';
+import { plain } from '../util/text.js';
 import { t } from './i18n.js';
 import { record } from './diagnostics.js';
 
@@ -42,9 +43,10 @@ export class ImageCard extends Emitter {
 
   constructor(room, env, host, thumb) {
     super();
-    Object.assign(this, { name: env.body.name });
+    Object.assign(this, { name: plain(env.body.name) || 'image' });
     [this.#room, this.#env, this.#host] = [room, env, host];
-    const { name, size, img } = env.body;
+    const { size, img } = env.body;
+    const { name } = this;
     this.#thumbUrl = this.#url(thumb);
     // The size comes from the width and height attributes, not from style: Safari applies the
     // page's CSP to inline styles, even those set from script, and the card collapsed.
@@ -137,7 +139,8 @@ export class ImageCard extends Emitter {
   dispose() { for (const url of this.#urls) URL.revokeObjectURL(url); this.#urls.clear(); }
 
   #actionNodes() {
-    const { name, size } = this.#env.body;
+    const { name } = this;
+    const { size } = this.#env.body;
     const o = this.original;
     if (o.state === 'done') {
       const attrs = { class: 'button', href: o.url, download: safeFileName(name) };

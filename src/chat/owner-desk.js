@@ -181,10 +181,10 @@ export class OwnerDesk {
   /** An admin change dropped this requester's open request (they were removed). */
   dropRequest(id) { if (this.#joinRequests.delete(id)) this.room.emit('requests'); }
 
-  /** The channel keys rotated: the lobby moves with them (old join links stop working). */
+  /** The channel keys rotated (old join links stop working) or the brokers changed: listen
+   *  again, as the settings now say. */
   async restart() {
-    if (!this.#lobby) return;
-    this.#lobby.stop();
+    this.#lobby?.stop();
     this.#lobby = null;
     this.#joinRequests.clear();
     await this.sync();

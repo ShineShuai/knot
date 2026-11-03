@@ -1,7 +1,8 @@
 // One message of the conversation as a list item: text with links, replies, files and image
 // cards, reactions with their emoji palette, notices and what is left of a deleted message.
-import { ADMIN_KINDS, authorIdOf, deviceNameOf, isEmoji } from '../chat/envelope.js';
+import { ADMIN_KINDS, authorIdOf, deviceNameOf, isEmoji, quoteOf } from '../chat/envelope.js';
 import { noticeLine } from '../chat/notice.js';
+import { plain } from '../util/text.js';
 import { fmtSize, h, safeFileName } from './dom.js';
 import { t } from './i18n.js';
 import { linkify } from './linkify.js';
@@ -112,16 +113,20 @@ export class Messages {
   #renderGone(room, item) {
     this.ui.images.forget(room.id, item.id);
     const text = room.isMine(item.by)
-      ? t('youDeleted') : t('deletedBy', { name: item.name });
+      ? t('youDeleted') : t('deletedBy', { name: plain(item.name) });
     return h('li', { class: 'msg gone', 'data-id': item.id }, h('p', { class: 'text' }, text));
   }
 
-  #renderQuote(room, q) {
-    const gone = room.log.isGone(q.id);
+  /** The quote is a copy the author made: it can say anything. Where we hold the quoted
+   *  message, show that message's own name and text instead. */
+  #renderQuote(room, snapshot) {
+    const gone = room.log.isGone(snapshot.id);
+    const real = !gone && room.log.get(snapshot.id);
+    const q = real ? quoteOf(real, real.kind === 'file' ? null : room.log.textOf(real)) : snapshot;
     return h('blockquote', {
       class: gone ? 'quote gone' : 'quote',
       onclick: () => !gone && this.jumpTo(q.id),
-    }, h('b', {}, q.name), ' ', gone ? t('quoteDeleted') : q.text);
+    }, h('b', {}, plain(q.name)), ' ', gone ? t('quoteDeleted') : q.text);
   }
 
   jumpTo(id) {
@@ -172,7 +177,7 @@ export class Messages {
     return h(
       'div',
       { class: 'file' },
-      h('span', { class: 'file-name' }, name),
+      h('span', { class: 'file-name' }, plain(name)),
       h('span', { class: 'file-size' }, fmtSize(size)),
       action,
     );

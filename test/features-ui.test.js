@@ -116,6 +116,20 @@ test('ui: react with an emoji, see it on both screens, take it back', async () =
   assert.equal(message(b, 'lunch?').querySelector('.rx'), null);
 });
 
+test('ui: a quote shows what the quoted message says, not what the replier claims', async () => {
+  const { a, b, ra, rb } = await chatting();
+  await ra.sendText('I will pay the bill');
+  await until(() => message(b, 'I will pay the bill'));
+  const real = rb.log.list().find((e) => e.body === 'I will pay the bill');
+  // Bob forges the copy that travels with his reply
+  await rb.sendText('ok', { ...real, name: 'Carol', body: 'I will NOT pay anything' });
+  await until(() => message(a, 'ok'));
+  const quote = message(a, 'ok').querySelector('.quote');
+  assert.match(quote.textContent, /Ada/);
+  assert.match(quote.textContent, /I will pay the bill/);
+  assert.doesNotMatch(quote.textContent, /Carol|NOT/);
+});
+
 test('ui: edit your own message through the message box; Escape backs out', async () => {
   const { a, b } = await chatting();
   const box = a.root.querySelector('textarea');

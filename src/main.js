@@ -10,23 +10,30 @@ import { keepStorage } from './store/persist.js';
 import { watchErrors } from './ui/diagnostics.js';
 import { AppModel } from './app.js';
 import { UpdateWatcher } from './update.js';
+import { watchWake } from './wake.js';
 import { h } from './ui/dom.js';
 import { setLanguage, t } from './ui/i18n.js';
 import { mountUi } from './ui/view.js';
 
+const stage = (name) => window.knotStage?.(name); // see boot-guard.js
+
 async function boot() {
+  stage('storage');
   watchErrors();
   const root = document.getElementById('app');
   const kv = new IdbKV();
   const settings = await loadSettings(kv);
+  stage('other tabs');
   setLanguage(settings.language);
   // Before the identity is read: a first run in two tabs would make two identities.
   if (!(await holdInstance())) {
+    window.knotBooted?.();
     root.replaceChildren(h('main', { class: 'instance-open' }, h('h1', {}, t('instanceTitle')),
       h('p', {}, t('instanceText')),
       h('button', { class: 'primary', onclick: () => location.reload() }, t('instanceRetry'))));
     return;
   }
+  stage('identity');
   const identity = await applyDelegation(await loadIdentity(kv), kv);
 
   const brokerHealth = new BrokerHealth();
@@ -37,12 +44,16 @@ async function boot() {
       brokerHealth,
     },
   );
-  await model.load();
+  stage('rooms');
+  await model.load({ progress: (what) => stage(`rooms: ${what}`) });
+  stage('screen');
   const updates = new UpdateWatcher({
     running: document.querySelector('meta[name="build"]')?.content,
   });
   const ui = mountUi(root, model, { updates });
+  window.knotBooted?.();
   updates.start();
+  watchWake(() => model.wake());
 
   // Deep links: #r=<room secret> joins a room, #c=<pairing code> opens the join dialog.
   const hash = location.hash.slice(1);
@@ -62,5 +73,6 @@ async function boot() {
 
 boot().catch((err) => {
   console.error(err);
-  document.getElementById('app').textContent = `Could not start: ${err.message}`;
+  if (window.knotFail) window.knotFail(err);
+  else document.getElementById('app').textContent = `Could not start: ${err.message}`;
 });

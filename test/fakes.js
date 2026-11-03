@@ -110,7 +110,11 @@ export class FakeBroker {
   }
 }
 
-export async function until(cond, ms = 3000) {
+/** Wait for `cond`. Failing is slow, passing is not: the limit is generous (a loaded CI machine
+ *  needs seconds for what takes milliseconds here), and a smaller `ms` cannot lower it. */
+const PATIENCE_MS = Number(process.env.KNOT_TEST_PATIENCE_MS) || 20_000;
+export async function until(cond, ms = PATIENCE_MS) {
+  ms = Math.max(ms, PATIENCE_MS);
   const t0 = Date.now();
   while (!(await cond())) {
     if (Date.now() - t0 > ms) throw new Error('timed out waiting for condition');

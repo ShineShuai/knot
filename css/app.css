@@ -242,3 +242,10 @@ button.icon { padding: .35rem .55rem; line-height: 1; }
 .devices-list { list-style: none; padding: 0; display: grid; gap: .4rem; }
 .devices-list li { display: flex; align-items: center; gap: .5rem; }
 .device-alias { flex: 1 1 8rem; min-width: 0; }
+
+/* shown by src/boot-guard.js when the app does not start */
+.boot-fail { max-width: 36rem; margin: 3rem auto; padding: 0 1.25rem; }
+.boot-fail pre, .boot-fail .boot-report { width: 100%; box-sizing: border-box; font-size: 0.8rem;
+  white-space: pre-wrap; overflow-wrap: anywhere; }
+.boot-fail .boot-report { min-height: 10rem; }
+.boot-fail .boot-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }

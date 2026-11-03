@@ -68,6 +68,14 @@ brokers. The CSP forbids inline styles, so an image card gets its size from the 
 made when scanning starts. The CSP lines that Playwright's WebKit prints come from its own Web
 Inspector script, `web-inspector://...`: the browser tests ignore those and nothing else.)
 
+Names and file names are shown without direction overrides, invisible marks and control characters
+(`util/text.js`); a quote shows the quoted message itself when this device holds it (the copy in
+a reply is the replier's claim); files and previews are served only over links of members.
+Messages refused for an unknown author wait (bounded) instead of being lost, and the member list
+is asked for over the brokers too; both only ever apply envelopes that verify and extend the chain.
+Stamps from the far future are refused in device-sync items, and a read mark never passes this
+device's clock.
+
 ## Old browsers (LEGACY-CURVES)
 
 WebCrypto got Ed25519 and X25519 in Safari 17 / iOS 17, Firefox 129 and Chrome 137 (every iOS

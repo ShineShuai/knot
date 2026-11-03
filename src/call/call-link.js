@@ -11,6 +11,7 @@ import { gathered } from '../net/ice-gather.js';
 import { DEGRADATION, readStats } from './quality.js';
 
 const MAX_SDP_CHARS = 24_000;
+const DISCONNECT_GRACE_MS = 8000; // 'disconnected' that does not heal by itself: dead
 
 /** Accept only an SDP with exactly the two media sections we create: audio, then video. */
 export function validSdp(sdp) {
@@ -24,11 +25,12 @@ export class CallLink extends Emitter {
   /** What the other side sends us; its tracks are added as they arrive. */
   stream;
   #pc; #gatherMs; #tracks = { audio: null, video: null };
-  #profile = null; #busy = false; #dirty = false; #noPreference = false;
+  #profile = null; #busy = false; #dirty = false; #noPreference = false; #dropTimer = null;
 
   constructor({
     iceServers = [], gatherTimeoutMs = 3000, connectTimeoutMs = 20000,
     RTC = globalThis.RTCPeerConnection, Stream = globalThis.MediaStream,
+    disconnectGraceMs = DISCONNECT_GRACE_MS,
   } = {}) {
     super();
     this.#gatherMs = gatherTimeoutMs;
@@ -37,6 +39,11 @@ export class CallLink extends Emitter {
     this.#pc.ontrack = ({ track }) => this.stream.addTrack(track);
     this.#pc.onconnectionstatechange = () => {
       const s = this.#pc.connectionState;
+      clearTimeout(this.#dropTimer);
+      if (s === 'disconnected') { // 'failed' may take a minute to come; the offerer redials
+        this.#dropTimer = setTimeout(() => this.close(), disconnectGraceMs);
+        this.#dropTimer?.unref?.();
+      }
       if (s === 'connected' && this.state === 'connecting') {
         this.state = 'connected';
         this.#prioritizeAudio();
@@ -165,6 +172,7 @@ export class CallLink extends Emitter {
   close() {
     if (this.state === 'closed') return;
     this.state = 'closed';
+    clearTimeout(this.#dropTimer);
     try { this.#pc.close(); } catch { /* already closed */ }
     this.emit('close');
   }

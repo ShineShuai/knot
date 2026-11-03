@@ -121,9 +121,11 @@ export class Composer {
         sendButton.disabled = false;
       }
     };
+    // On a phone there is no Shift+Enter: Enter makes a new line there, and Send sends.
+    const touch = () => !!globalThis.matchMedia?.('(pointer: coarse)').matches;
     input.addEventListener('keydown', (e) => {
       // IME-safe
-      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && !touch()) {
         e.preventDefault();
         send();
       } else if (e.key === 'Escape' && this.#editing) this.cancelEdit();

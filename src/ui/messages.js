@@ -54,9 +54,18 @@ export class Messages {
     return h('li', { class: `msg ${own ? 'own' : 'other'}`, 'data-id': env.id },
       h('div', { class: 'meta' },
         withDevice(own ? t('you') : env.name, room.deviceOf(authorIdOf(env), deviceNameOf(env))),
-        ' ', h('time', {}, clock(env.ms)), acts),
+        ' ', h('time', {}, clock(env.ms)), own ? this.#tick(room, env) : null, acts),
       ...parts,
       opts.onShow ? null : this.#renderReactions(room, env, redraw));
+  }
+
+  /** ✓ sent, ✓✓ confirmed by another member (only for our messages of this session). */
+  #tick(room, env) {
+    const n = room.deliveredTo(env.id);
+    if (n === null) return null;
+    return h('span', {
+      class: n ? 'tick delivered' : 'tick', title: n ? t('tickDelivered', { n }) : t('tickSent'),
+    }, n ? '✓✓' : '✓');
   }
 
   /** The emoji under a message (tap one to add or take back yours) and, if open, the palette. */

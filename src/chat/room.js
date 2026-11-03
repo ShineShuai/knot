@@ -46,6 +46,11 @@ import { lobbySecretOf } from './lobby.js';
 
 const MAX_FRAME_BYTES = 48 * 1024; // keep chat frames well under every browser's SCTP limit
 const DECORATIONS = ['edit', 'react']; // envelopes that ride on another message
+const ACK_KINDS = ['text', 'reply', 'file']; // what a receiver confirms and a sender waits for
+const ACK_DELAY_MS = 250; // confirmations are sent in groups
+const ACK_RETRY_MS = [5000, 20_000, 60_000, 180_000]; // when still unconfirmed: try the brokers
+const ACK_DUP_MS = 5 * 60_000; // a repeated message is confirmed again if it is this recent
+const ACK_TRACKED = 500; // own messages whose delivery is followed
 const PENDING_MAX = 200; // messages kept while their author's admission is unknown
 const PENDING_TTL_MS = 10 * 60 * 1000;
 const CHAIN_ASK_MS = 5000; // at most one question for the member list this often
@@ -66,6 +71,10 @@ export class Room extends Emitter {
   // list. They wait here for the list to catch up, instead of being lost.
   #pending = new Map(); // envelope id -> { env, at }
   #chainAskedAt = 0; #adminHeardAt = 0; #giveSentAt = 0;
+  // Delivery: our own message id -> members who confirmed it; and the confirmations we owe.
+  #acks = new Map();
+  #ackQueue = new Map(); // author member id -> Set of message ids
+  #ackTimer = null;
   /** Why messages were refused, for the diagnostics: reason -> { n, last: { at, by, name } }. */
   dropped = {};
   #epoch = { n: 0, secret: null }; // key rotations: the channel keys depend on it
@@ -501,7 +510,89 @@ export class Room extends Emitter {
     if (!kept && ADMIN_KINDS.includes(kind)) throw new Error('That change could not be applied');
     this.#sendToPeers(env);
     if (this.#needsRelay()) this.#channel.sendRelay(utf8.encode(JSON.stringify(env)));
+    if (ACK_KINDS.includes(kind)) this.#expectAck(env);
     return env;
+  }
+
+  // ---- delivery: who has it? --------------------------------------------------------------
+
+  /** How many other members confirmed our message `id` (null: not followed, e.g. an old one). */
+  deliveredTo(id) { return this.#acks.get(id)?.size ?? null; }
+
+  /** Follow our message: if nobody confirms it, send it again through the brokers (a link can
+   *  look open and carry nothing), a few times. Later, `have`/`give` is the net underneath. */
+  #expectAck(env) {
+    this.#acks.set(env.id, new Set());
+    if (this.#acks.size > ACK_TRACKED) this.#acks.delete(this.#acks.keys().next().value);
+    const scale = this.settings.ackRetryScale ?? 1; // (tests)
+    const again = (attempt) => {
+      if (attempt >= ACK_RETRY_MS.length) return;
+      this.#after(ACK_RETRY_MS[attempt] * scale, () => {
+        if (this.#acks.get(env.id)?.size !== 0) return; // confirmed, or no longer followed
+        if (this.#othersAround()) this.#resend(env);
+        again(attempt + 1);
+      });
+    };
+    again(0);
+  }
+
+  /** Is anyone but our own devices here to confirm? (Alone, there is nobody to wait for.) */
+  #othersAround() {
+    const mine = this.identity.member;
+    for (const p of this.peers.values()) {
+      if (p.state === 'p2p' && p.synced && (p.member ?? p.id) !== mine) return true;
+    }
+    for (const [id, m] of this.members) {
+      if (this.#isFresh(m) && (m.member ?? id) !== mine) return true;
+    }
+    return false;
+  }
+
+  #resend(env) {
+    this.#sendToPeers(env);
+    if (this.#channel && this.settings.relayFallback) {
+      this.#channel.sendRelay(utf8.encode(JSON.stringify(env)));
+    }
+  }
+
+  /** We hold message `env` of somebody else: confirm it to its author, soon, with the others. */
+  #confirm(env) {
+    if (!ACK_KINDS.includes(env.kind) || this.isMine(authorIdOf(env))) return;
+    const author = authorIdOf(env);
+    const ids = this.#ackQueue.get(author) ?? new Set();
+    ids.add(env.id);
+    this.#ackQueue.set(author, ids);
+    this.#ackTimer ??= this.#after(ACK_DELAY_MS, () => this.#flushAcks());
+  }
+
+  #flushAcks() {
+    this.#ackTimer = null;
+    const queue = [...this.#ackQueue];
+    this.#ackQueue.clear();
+    for (const [author, ids] of queue) {
+      const links = [...this.peers.values()].filter(
+        (p) => p.state === 'p2p' && p.synced && (p.member ?? p.id) === author,
+      );
+      const all = [...ids];
+      for (let at = 0; at < all.length; at += 100) {
+        const frame = { t: 'ack', ids: all.slice(at, at + 100), by: this.identity.member };
+        let sent = false;
+        for (const p of links) {
+          try { p.link.sendChat(JSON.stringify(frame)); sent = true; } catch { /* dying */ }
+        }
+        if (!sent) this.#channel?.sendRelay(utf8.encode(JSON.stringify({ ...frame, to: author })));
+      }
+    }
+  }
+
+  #onAck(member, ids) {
+    if (!member || member === this.identity.member || !Array.isArray(ids)) return;
+    let changed = false;
+    for (const id of ids.slice(0, 100)) {
+      const set = typeof id === 'string' ? this.#acks.get(id) : null;
+      if (set && !set.has(member)) { set.add(member); changed = true; }
+    }
+    if (changed) this.emit('delivery');
   }
 
   /** Deliver a call frame to one member over its direct link. False if there is none. */
@@ -538,7 +629,12 @@ export class Room extends Emitter {
 
   /** `gossip`: pass a new message on to our other links (not for history, see #gossipBatch). */
   async #ingest(env, source, gossip = true) {
-    if (!env?.id || this.log.has(env.id)) return false;
+    if (!env?.id) return false;
+    if (this.log.has(env.id)) {
+      const held = this.log.get(env.id);
+      if (held && Date.now() - held.ms < ACK_DUP_MS) this.#confirm(held);
+      return false;
+    }
     const limits = {
       maxText: this.settings.maxTextLength,
       maxFileBytes: this.settings.maxFileBytes,
@@ -620,9 +716,10 @@ export class Room extends Emitter {
   }
 
   #after(ms, fn) {
-    const timer = setTimeout(fn, ms);
+    const timer = setTimeout(() => { this.#timers.delete(timer); fn(); }, ms);
     timer.unref?.();
     this.#timers.add(timer);
+    return timer;
   }
 
   // ---- linked devices ---------------------------------------------------------------------
@@ -762,6 +859,7 @@ export class Room extends Emitter {
     if (env.kind !== 'recovery' && !removed.includes(env)) this.emit('message', env);
     if (fresh && !removed.includes(env)) { this.emit('incoming', env); this.emit('unread'); }
     if (source && gossip) this.#sendToPeers(env, source.id); // heals meshes with a missing link
+    this.#confirm(env);
     return true;
   }
 
@@ -837,6 +935,8 @@ export class Room extends Emitter {
         this.#giveSentAt = Date.now();
         this.#relayBatches('give', missing, 30);
       });
+    } else if (m.t === 'ack') {
+      if (m.to === this.identity.member) this.#onAck(m.by, m.ids);
     } else if (m.t === 'give' && Array.isArray(m.es)) {
       this.#giveSentAt = Date.now();
       for (const e of m.es.slice(0, 50)) await this.#ingest(e, null).catch(() => {});
@@ -888,6 +988,7 @@ export class Room extends Emitter {
     }
     if (this.roster && m?.t === 'epoch') { await this.#onEpoch(m, entry); return; }
     if (m?.t === 'call') { this.call.onFrame(entry.id, m); return; }
+    if (m?.t === 'ack') { this.#onAck(entry.member ?? entry.id, m.ids); return; }
     if (this.roster && m?.t === 'admin?') { // a member list asked for: send ours if it differs
       if (m.head !== this.roster.head) this.#sendAdmin(entry.link);
       return;

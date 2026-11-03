@@ -99,6 +99,27 @@ export function callLines(room) {
   });
 }
 
+/** Why a room may look empty: what it refused, and what that usually means. */
+const DROP_HINTS = {
+  'author not in member list': 'their admission is not in this copy of the member list yet; it is '
+    + 'asked for over direct links and the brokers (are the brokers reachable?)',
+  'invalid or forged': 'signature, size or format is wrong: a clock more than 10 minutes off, or '
+    + 'a different app version',
+  'device was unlinked': 'a device that was unlinked still writes',
+  'author was removed': 'they were removed from the room',
+  'not allowed': 'an edit or delete of somebody else\'s message',
+};
+
+export function dropLines(room, now = Date.now()) {
+  const out = Object.entries(room.dropped ?? {}).map(([reason, { n, last }]) => {
+    const ago = last ? `, last ${Math.round((now - last.at) / 1000)} s ago` : '';
+    const hint = DROP_HINTS[reason] ? ` (${DROP_HINTS[reason]})` : '';
+    return `  refused ${n}x: ${reason}${ago}${hint}`;
+  });
+  if (room.pendingCount) out.push(`  ${room.pendingCount} message(s) wait for the member list`);
+  return out;
+}
+
 /** The whole report. */
 export async function diagnosticsReport(model, env = globalThis) {
   const build = buildInfo(env.document ?? null);
@@ -106,11 +127,17 @@ export async function diagnosticsReport(model, env = globalThis) {
     env.navigator?.userAgent ?? 'unknown browser', '',
     ...(await featureLines(env, model.kv)), ''];
   for (const room of model.rooms.values()) {
-    const peers = room.peerList.map((p) => `${p.state}${p.via ? `/${p.via}` : ''}`);
+    const peers = room.peerList.map(
+      (p) => [p.state + (p.via ? `/${p.via}` : ''), p.limited && `rate-limited x${p.limited}`]
+        .filter(Boolean).join(' '),
+    );
     const b = room.brokerStatus ?? {};
     lines.push(`room ${room.id.slice(0, 6)}: peers [${peers.join(', ')}]`
       + ` brokers ${b.connected ?? '?'}/${b.total ?? '?'}`);
-    lines.push(...callLines(room));
+    lines.push(...dropLines(room), ...callLines(room));
+  }
+  for (const f of model.loadErrors ?? []) {
+    lines.push(`room "${f.label}" could not be opened: ${f.message}`);
   }
   const rows = model.brokerHealth?.rows(model.settings.brokers) ?? [];
   for (const r of rows) {

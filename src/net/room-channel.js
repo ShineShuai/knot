@@ -20,6 +20,7 @@ export class RoomChannel extends Emitter {
   // sealed-payload ids already handled (same message arrives via every broker)
   #seen = new Set();
   #running = false;
+  #nudges = new Set(); // connections that wait to retry: `wake` cuts the wait short
 
   /** `health`: optional BrokerHealth; fast brokers connect first, known-down ones are retried
    *  slowly. */
@@ -41,6 +42,13 @@ export class RoomChannel extends Emitter {
   stop() {
     this.#running = false;
     for (const c of this.#clients.values()) c.close();
+  }
+
+  /** The page was away or the network changed: a socket can be dead without saying so. Drop
+   *  them all and reconnect now; a connection that waits to retry does not wait any longer. */
+  wake() {
+    for (const client of [...this.#clients.values()]) client.close();
+    for (const nudge of [...this.#nudges]) nudge();
   }
 
   // ---- sending ---------------------------------------------------------------
@@ -120,7 +128,11 @@ export class RoomChannel extends Emitter {
       client.close();
       this.emit('status', this.status);
       if (!this.#running) return;
-      await sleep(delay * (0.5 + Math.random()));
+      let nudge;
+      const nudged = new Promise((resolve) => { nudge = () => { delay = 500; resolve(); }; });
+      this.#nudges.add(nudge);
+      await Promise.race([sleep(delay * (0.5 + Math.random())), nudged]);
+      this.#nudges.delete(nudge);
       delay = Math.min(delay * 2, 30000);
     }
   }

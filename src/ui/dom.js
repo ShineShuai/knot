@@ -1,4 +1,6 @@
 // Tiny DOM helpers. Text is always inserted as text nodes, never as HTML.
+import { plain } from '../util/text.js';
+
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 /** h('button', { class: 'x', onclick }, 'label', child...) */
@@ -39,4 +41,17 @@ export const fmtSize = (n) => (
 );
 const UNSAFE_FILENAME_CHARS = /[\\/:*?"<>|\u0000-\u001f]/g;
 export const safeFileName = (name) =>
-  name.replace(UNSAFE_FILENAME_CHARS, '_').slice(0, 120) || 'file';
+  plain(name).replace(UNSAFE_FILENAME_CHARS, '_').slice(0, 120) || 'file';
+
+/** `fn` at once, then at most once per `ms` while calls keep coming (the last one is not lost). */
+export function throttled(fn, ms) {
+  let last = -Infinity, timer = null;
+  const run = () => { timer = null; last = Date.now(); fn(); };
+  const call = () => {
+    if (last + ms - Date.now() <= 0) { clearTimeout(timer); run(); return; }
+    timer ??= setTimeout(run, last + ms - Date.now());
+    timer?.unref?.();
+  };
+  call.cancel = () => { clearTimeout(timer); timer = null; };
+  return call;
+}

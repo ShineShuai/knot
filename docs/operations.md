@@ -12,6 +12,34 @@ STUN. Channels connect to the fast ones first; a broker whose probe failed is le
 only every minute or so, at once if a real connection works) and probed again every five minutes.
 Settings shows each broker with its time or "not reachable", with a *Check brokers* button.
 
+## When the app does not start
+
+`index.html` shows "Loading…" until the app is on screen, and loads `src/boot-guard.js` first (a
+classic script: a module that fails to load must not take it down too). After 10 s, or when
+`main.js` fails, it replaces "Loading…" with what the app waits for (storage, other tabs, identity,
+rooms: *n of m (name)*, screen), the errors it saw (a script that did not load, a security-policy
+block, a rejected promise), a hint for each, and three buttons: *Reload*, *Repair* (unregisters the
+service worker and deletes its caches; rooms and messages are not touched) and *Show report*. A
+file that fails to load triggers one automatic repair per visit, and only online.
+
+What makes a page stay on "Loading…", most likely first: (1) a file of the app did not load or
+the files are from two versions (the service worker answers from its cache when the network is
+slower than 4 s, one file at a time); (2) `indexedDB.open` never answers (an installed app after a
+restart on Safari, another connection stuck; it now fails after 20 s with a reason); (3) another
+tab holds the instance lock (the page says so instead); (4) a room that will not open (it is
+skipped and named in a notice and in Diagnostics; its entry stays in the list); (5) a very long
+history on a slow device (the stage names the room).
+
+## Coming back to the page
+
+A phone suspends sockets and links without a sound. When the page was hidden for 10 s or more and
+shows again, when the browser is back online, and when a page is restored from the cache or
+resumed (`src/wake.js`), every broker socket is replaced at once (a connection waiting to retry
+stops waiting) and each synced link sends its `have`, so what was missed arrives. A WebRTC link
+(chat or call) that stays `disconnected` for 8 s is closed, so the room falls back to the brokers
+and the peer is dialed again. Changing the broker list or the brokers switch in Settings (or on a
+linked device) reconnects running rooms; no reload is needed.
+
 ## Keeping your data
 
 The page asks the browser for persistent storage (`navigator.storage.persist()`) at the first

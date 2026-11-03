@@ -213,7 +213,7 @@ test('a linked device joining an owned room by link is admitted as its identity'
   await until(() => owner.log.get(env.id));
 });
 
-test('a linked device answering the owner\'s pairing code is admitted as its identity', async () => {
+test('a linked device answering the owner\'s code is admitted as its identity', async () => {
   const [boss, main, phone] = [await newIdentity(), await newIdentity(), await newIdentity()];
   await linkIdentity(main, phone);
   const owner = await makeRoom({ name: 'Boss', identity: boss, owner: boss.id });

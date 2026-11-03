@@ -1,4 +1,5 @@
 // A name with the device it comes from, once a person uses several: "Ada @ phone".
+import { plain } from '../util/text.js';
 import { t } from './i18n.js';
 
 /** What stands between a name and its device: "Ada @ phone", a person at a device, as in
@@ -7,13 +8,14 @@ export const AT = ' @ ';
 
 /** `device`: null (one device: the plain name), '' (the main device) or a device's name. */
 export const withDevice = (name, device) => (
-  device === null || device === undefined ? name : `${name}${AT}${device || t('deviceMain')}`
+  device === null || device === undefined ? plain(name)
+    : `${plain(name)}${AT}${plain(device) || t('deviceMain')}`
 );
 
 /** Who a live connection (or this device, with our own id) is, for the bar and for calls. */
 export const peerLabel = (room, id) => withDevice(room.nameOf(id), room.peerDevice(id));
 
-const tag = (row) => (row.device ?? '') || t('deviceMain');
+const tag = (row) => plain(row.device ?? '') || t('deviceMain');
 const STATE_KEY = { p2p: 'direct', offline: 'offlineState' };
 /** The name of a connection type: direct, relay, seen, connecting, offline. */
 export const stateName = (state) => t(STATE_KEY[state] ?? state);
@@ -43,7 +45,7 @@ export function peerEntries(rows, self = null) {
   return [...groups.values()].map((list) => {
     const [first] = list;
     const mine = list.some((row) => row.mine);
-    const name = mine ? t('you') : first.name;
+    const name = mine ? t('you') : plain(first.name);
     // a person with a single known device has no device name to show
     const named = list.length > 1 || first.device !== null;
     const parts = list.map((row) => {

@@ -78,9 +78,9 @@ dl.help dd { margin: .1rem 0 0; color: var(--muted); }
 .msg.gone .text { margin: 0; }
 .msg.flash { outline: 2px solid var(--link); }
 .quote-bar { display: flex; align-items: center; gap: .5rem; padding: .3rem 1rem; border-top: 1px solid var(--line); background: var(--rail); font-size: .85rem; }
-.quote-bar[hidden], .conninfo[hidden] { display: none; }
+.quote-bar[hidden], .conninfo[hidden], .waiting[hidden] { display: none; }
 .quote-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.conninfo { padding: .4rem 1rem; font: .8rem/1.5 var(--mono); background: var(--rail); border-block: 1px solid var(--line); overflow-wrap: anywhere; }
+.conninfo, .waiting { padding: .4rem 1rem; font: .8rem/1.5 var(--mono); background: var(--rail); border-block: 1px solid var(--line); overflow-wrap: anywhere; }
 .text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .file { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; }
 .file-name { font-weight: 600; overflow-wrap: anywhere; }
@@ -244,3 +244,10 @@ button.icon { padding: .35rem .55rem; line-height: 1; }
 .devices-list { list-style: none; padding: 0; display: grid; gap: .4rem; }
 .devices-list li { display: flex; align-items: center; gap: .5rem; }
 .device-alias { flex: 1 1 8rem; min-width: 0; }
+
+/* shown by src/boot-guard.js when the app does not start */
+.boot-fail { max-width: 36rem; margin: 3rem auto; padding: 0 1.25rem; }
+.boot-fail pre, .boot-fail .boot-report { width: 100%; box-sizing: border-box; font-size: 0.8rem;
+  white-space: pre-wrap; overflow-wrap: anywhere; }
+.boot-fail .boot-report { min-height: 10rem; }
+.boot-fail .boot-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }

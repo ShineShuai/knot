@@ -11,6 +11,7 @@ import { peerIdOf, verifySignature } from '../crypto/identity.js';
 const VERSION = 1;
 const CODE_PREFIX = 'knot1-';
 const MAX_CANDIDATES = 8;
+const REACH = { srflx: 0, relay: 1, prflx: 2, host: 3 }; // which to keep first
 export const HANDSHAKE_TTL_MS = 10 * 60 * 1000;
 const CANDIDATE_TYPES = ['host', 'srflx', 'relay', 'prflx'];
 const ADDR = { V4: 0, V6: 1, MDNS: 2 };
@@ -79,10 +80,12 @@ function packBody(h) {
   if (h.founder) w.str(h.founder);
   w.str(h.name.slice(0, 32)).str(sdp.ufrag).str(sdp.pwd).str(sdp.mid)
     .raw(sdp.fingerprint).u16(sdp.sctpPort).u32(sdp.maxMessage);
-  const candidates = sdp.candidates
-    .map((c) => ({ c, a: packAddress(c.host) }))
-    .filter(({ a }) => a)
-    .slice(0, MAX_CANDIDATES);
+  const usable = sdp.candidates.map((c) => ({ c, a: packAddress(c.host) })).filter(({ a }) => a);
+  // A machine with many interfaces (VPN, Docker) has more host candidates than fit: the ones
+  // that reach beyond the LAN (server-reflexive, relay) must not be the ones cut off.
+  const keep = new Set([...usable].sort((x, y) => REACH[x.c.type] - REACH[y.c.type])
+    .slice(0, MAX_CANDIDATES));
+  const candidates = usable.filter((x) => keep.has(x)); // in their own order
   w.u8(candidates.length);
   for (const { c, a } of candidates) w.u8(
     (CANDIDATE_TYPES.indexOf(c.type) << 2) | a.kind,

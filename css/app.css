@@ -124,8 +124,10 @@ dialog p { color: var(--muted); margin: .25rem 0 .6rem; }
 .scan { width: 100%; border-radius: 8px; background: #000; }
 .sas { font: 1.4rem var(--mono); letter-spacing: .08em; color: var(--ink); }
 .sas-line { color: var(--ink); }
+.storage-box button { align-self: flex-start; }
+.storage { color: var(--ink); font-weight: 600; }
 
-.toast { position: fixed; left: 50%; bottom: 1.25rem; transform: translateX(-50%); background: var(--ink); color: var(--paper); padding: .5rem 1rem; border-radius: 8px; opacity: 0; pointer-events: none; transition: opacity .2s; max-width: 90vw; z-index: 10; }
+.toast { position: fixed; top: auto; right: auto; margin: 0; border: 0; left: 50%; bottom: 1.25rem; transform: translateX(-50%); background: var(--ink); color: var(--paper); padding: .5rem 1rem; border-radius: 8px; opacity: 0; pointer-events: none; transition: opacity .2s; max-width: 90vw; z-index: 10; }
 .toast.show { opacity: 1; }
 
 @media (max-width: 720px) {

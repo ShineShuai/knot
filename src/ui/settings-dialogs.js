@@ -192,18 +192,26 @@ export class SettingsDialogs {
       showBrokers();
       this.ui.dialog.addEventListener('close', health.on('change', showBrokers), { once: true });
     }
-    // Ask the browser to keep our data; a refusal is explained, never an error.
+    // Ask the browser to keep our data. The answer is shown in the dialog itself (a refusal is
+    // explained with what helps, never an error); browsers often refuse without any prompt.
     const storage = this.ui.opts.storage ?? globalThis.navigator?.storage;
     const kept = h('p', { class: 'storage' });
+    const help = h('p', { hidden: true }, t('storageHelp'));
+    const result = h('p', { class: 'storage-result', role: 'status' });
     const keep = h('button', { hidden: true, onclick: async () => {
-      if (!(await keepStorage(storage))) this.ui.notify(t('storageDenied'));
+      keep.disabled = true;
+      result.textContent = t('storageAsking');
+      const granted = await keepStorage(storage);
+      keep.disabled = false;
+      result.textContent = t(granted ? 'storageGranted' : 'storageDenied');
       showStorage();
     } }, t('storageKeep'));
     const showStorage = async () => {
       const state = await storageState(storage);
-      kept.textContent = !state.supported ? ''
-        : t(state.persisted ? 'storageKept' : 'storageAtRisk');
-      keep.hidden = !state.supported || state.persisted;
+      const atRisk = state.supported && !state.persisted;
+      kept.textContent = t(!state.supported ? 'storageUnsupported'
+        : state.persisted ? 'storageKept' : 'storageAtRisk');
+      keep.hidden = help.hidden = !atRisk;
     };
     showStorage();
     const relay = h('input', { type: 'checkbox', checked: s.relayFallback });
@@ -267,7 +275,8 @@ export class SettingsDialogs {
       check(t('useBrokers'), useBrokers),
       check(t('relayText'), relay),
       this.ui.notifier.supported ? check(t('notifications'), notifications) : null,
-      h('div', { class: 'field' }, kept, keep),
+      h('div', { class: 'field storage-box' },
+        h('strong', {}, t('storageTitle')), h('p', {}, t('storageWhy')), kept, help, keep, result),
       h('div', { class: 'field' },
         h('button', { onclick: () => this.devices() }, t('devices')),
         h('button', { onclick: () => this.diagnostics() }, t('diagnostics'))),

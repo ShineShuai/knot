@@ -21,7 +21,7 @@ test.afterEach(() => {
   setLanguage('en');
 });
 
-async function person() {
+async function person(opts) {
   const settings = { ...DEFAULTS, name: 'Ada', brokersEnabled: false, brokers: [] };
   const kv = new MemoryKV();
   const model = new AppModel({
@@ -29,7 +29,7 @@ async function person() {
     linkFactory: () => new FakeLink(), callEnv: callParty().env,
   });
   const root = new rootA.constructor('div');
-  return { kv, model, root, ui: mountUi(root, model) };
+  return { kv, model, root, ui: mountUi(root, model, opts) };
 }
 
 test('ui: the version is shown in the room list', async () => {
@@ -111,9 +111,11 @@ test('ui: Settings: broker status, keep my data, diagnostics', async () => {
 
   await until(() => find(dialog, 'button', 'Keep my data').length === 1
     && find(dialog, 'button', 'Keep my data')[0].hidden === false);
-  assert.match(dialog.querySelector('.storage').textContent, /may delete/);
+  assert.match(dialog.querySelector('.storage').textContent, /Not protected.*may delete/);
+  assert.equal(dialog.querySelector('.storage-result').textContent, '');
   find(dialog, 'button', 'Keep my data')[0].click();
-  await until(() => /keeps this app/.test(dialog.querySelector('.storage').textContent));
+  await until(() => /^✓ Protected/.test(dialog.querySelector('.storage').textContent));
+  assert.match(dialog.querySelector('.storage-result').textContent, /agreed to keep/);
   assert.equal(find(dialog, 'button', 'Keep my data')[0].hidden, true);
 
   find(dialog, 'button', 'Check brokers')[0].click();
@@ -133,6 +135,35 @@ test('ui: without storage support or broker health, Settings shows neither', asy
   const dialog = root.querySelector('dialog');
   assert.equal(dialog.querySelector('.broker-health'), null);
   assert.equal(find(dialog, 'button', 'Keep my data')[0].hidden, true, 'nothing to keep');
-  assert.equal(dialog.querySelector('.storage').textContent, '');
+  await until(() => /cannot be asked/.test(dialog.querySelector('.storage').textContent));
   assert.equal(find(dialog, 'button', 'Check brokers').length, 0);
+});
+
+test('ui: Keep my data: a refusal is answered inside the dialog, with hints', async () => {
+  const storage = { persisted: async () => false, persist: async () => false };
+  const { root, ui, model } = await person({ storage });
+  const room = await model.addRoom(newRoomSecret(), 'Club');
+  rooms.push(room);
+  ui.select(room);
+  find(root, 'button', 'Settings')[0].click();
+  const dialog = root.querySelector('dialog');
+  const button = () => find(dialog, 'button', 'Keep my data')[0];
+  await until(() => button().hidden === false);
+  assert.equal(dialog.querySelectorAll('p').filter((p) => /decides by its own rules/.test(
+    p.textContent) && !p.hidden).length, 1, 'hints are shown while unprotected');
+  button().click();
+  await until(() => /did not agree/.test(dialog.querySelector('.storage-result').textContent));
+  assert.equal(button().hidden, false, 'can be asked again');
+  assert.equal(button().disabled, false);
+  assert.match(dialog.querySelector('.storage').textContent, /Not protected/);
+});
+
+test('ui: a notice is put in the top layer, above an open modal dialog', async () => {
+  const { ui } = await person();
+  const calls = [];
+  ui.toast.hidePopover = () => calls.push('hide');
+  ui.toast.showPopover = () => calls.push('show');
+  ui.notify('hello');
+  assert.deepEqual(calls, ['hide', 'show']);
+  assert.equal(ui.toast.textContent, 'hello');
 });

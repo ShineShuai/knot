@@ -442,6 +442,7 @@ class Ui {
       }),
       room.on('peers', drawPeers),
       room.on('pending', drawWaiting),
+      room.on('delivery', redraw),
       room.on('files', () => drawLog()), // image previews start or wait with the transfers
       room.on('brokers', () => { drawBrokers(); drawPeers(); }),
       holdToReveal(room, peers, conn));

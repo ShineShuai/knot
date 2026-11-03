@@ -67,7 +67,9 @@ dl.help dd { margin: .1rem 0 0; color: var(--muted); }
 .log { list-style: none; margin: 0; padding: 1rem; flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: .6rem; background: var(--surface); border-block: 1px solid var(--line); }
 .msg { max-width: min(36rem, 85%); padding: .45rem .75rem; border-radius: 10px; background: var(--paper); border: 1px solid var(--line); }
 .msg.own { align-self: flex-end; background: var(--own); border-color: transparent; }
-.meta { display: flex; align-items: baseline; gap: .4rem; font-size: .75rem; color: var(--muted); }
+.tick { font-size: .7rem; letter-spacing: -.15em; }
+.tick.delivered { color: var(--accent, #0b6e5c); }
+.meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: .4rem; font-size: .75rem; color: var(--muted); }
 .acts { margin-left: auto; display: inline-flex; gap: .1rem; opacity: 0; }
 .msg:hover .acts, .msg:focus-within .acts { opacity: 1; }
 @media (hover: none) { .acts { opacity: 1; } }

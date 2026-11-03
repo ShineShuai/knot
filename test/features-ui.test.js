@@ -116,6 +116,15 @@ test('ui: react with an emoji, see it on both screens, take it back', async () =
   assert.equal(message(b, 'lunch?').querySelector('.rx'), null);
 });
 
+test('ui: our message shows a tick, and two once the other side has it', async () => {
+  const { a, b, ra } = await chatting();
+  await ra.sendText('tick me');
+  await until(() => message(b, 'tick me'));
+  await until(() => message(a, 'tick me')?.querySelector('.delivered'));
+  assert.equal(message(a, 'tick me').querySelector('.tick').textContent, '✓✓');
+  assert.equal(message(b, 'tick me').querySelector('.tick'), null, 'only our own messages');
+});
+
 test('ui: a quote shows what the quoted message says, not what the replier claims', async () => {
   const { a, b, ra, rb } = await chatting();
   await ra.sendText('I will pay the bill');
@@ -128,6 +137,22 @@ test('ui: a quote shows what the quoted message says, not what the replier claim
   assert.match(quote.textContent, /Ada/);
   assert.match(quote.textContent, /I will pay the bill/);
   assert.doesNotMatch(quote.textContent, /Carol|NOT/);
+});
+
+test('ui: on a phone Enter makes a new line and only Send sends', async () => {
+  const { a, b } = await chatting();
+  globalThis.matchMedia = () => ({ matches: true }); // (pointer: coarse)
+  try {
+    const box = a.root.querySelector('textarea');
+    box.value = 'line one';
+    const event = { key: 'Enter', prevented: false, preventDefault() { this.prevented = true; } };
+    box.fire('keydown', event);
+    assert.equal(event.prevented, false, 'the browser inserts the new line');
+    await wait(150);
+    assert.equal(message(b, 'line one'), undefined, 'not sent');
+    button(a.root, 'Send').click();
+    await until(() => message(b, 'line one'));
+  } finally { delete globalThis.matchMedia; }
 });
 
 test('ui: edit your own message through the message box; Escape backs out', async () => {

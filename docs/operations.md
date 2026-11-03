@@ -12,6 +12,12 @@ STUN. Channels connect to the fast ones first; a broker whose probe failed is le
 only every minute or so, at once if a real connection works) and probed again every five minutes.
 Settings shows each broker with its time or "not reachable", with a *Check brokers* button.
 
+## Install icons
+
+iOS ignores the manifest and wants `apple-touch-icon.png` (180 px); Chrome wants 192 and 512 px
+PNGs to offer an install, and a maskable one. On Safari only an app on the Home Screen keeps its
+storage. `tools/make-icons.py` (Pillow) draws them from the same shapes as `icons/icon.svg`.
+
 ## When the app does not start
 
 `index.html` shows "Loading…" until the app is on screen, and loads `src/boot-guard.js` first (a

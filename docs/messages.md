@@ -21,6 +21,16 @@ passed on in `give` batches (50 per frame), never one frame per message. The log
 While some known room member has no direct link, text is also published, AES-GCM sealed, on the
 room's broker topic. A link is a path only while it is open *and* synced. Files never use it.
 
+## Delivery receipts
+
+A receiver confirms every `text`, `reply` and `file` it keeps (and, for a repeat of a message
+younger than 5 minutes, again: the first confirmation may have been lost): `ack` {ids, by}, sent in
+groups after 250 ms, on the direct link of the author's devices or, if there is none, over the
+brokers with `to` (the author's member id). The sender shows ✓ (sent) and ✓✓ (confirmed by another
+member; its own devices do not count) for the messages of this session. If nobody confirms, and
+somebody else is around, it sends the message again through the brokers after 5 s, 20 s, 60 s and
+180 s: a link can look open and carry nothing. Older versions ignore `ack`; they just never confirm.
+
 ## Over the brokers: member list and history
 
 Pairs that cannot connect directly (NAT with no way through, no TURN) have only the brokers, and a

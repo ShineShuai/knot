@@ -21,6 +21,21 @@ passed on in `give` batches (50 per frame), never one frame per message. The log
 While some known room member has no direct link, text is also published, AES-GCM sealed, on the
 room's broker topic. A link is a path only while it is open *and* synced. Files never use it.
 
+## Over the brokers: member list and history
+
+Pairs that cannot connect directly (NAT with no way through, no TURN) have only the brokers, and a
+room with an owner needs more than messages there: a message from someone the receiver's member
+list does not know is refused, and the list used to travel only on direct links. So the relay also
+carries control frames (JSON with a `t`; older versions ignore them, they have no `id`):
+`admin?` {head} asks for the member list, `admin` {es} answers it, `have` {ids, full} lists the
+newest 40 messages, `give` {es} brings what the asker lacks. They are sent when a broker connects,
+after `wake`, every minute while some member has no direct link, and `admin?` also when a message
+is refused for its unknown author. Members answer after a random 0.1 - 0.9 s, and not at all if
+somebody's answer was heard in the last 1.5 s. A message whose author is not yet in the list is
+kept (200, 10 minutes) and shown as soon as the list learns the author; a banner says how many wait.
+Every refusal is counted by reason (`room.dropped`) and Diagnostics prints them with what each
+usually means. An `admin` frame holds at most 100 envelopes (all a receiver reads).
+
 ## Reactions and edits
 
 Two more signed envelope kinds that ride on another message. `react` {id, emoji, on}: per author,

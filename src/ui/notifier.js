@@ -2,6 +2,7 @@
 // room, another tab or window). Nothing is sent through any server: they only work while the
 // app is open somewhere, and messages arriving together (history catching up) become one
 // notification per room.
+import { plain } from '../util/text.js';
 import { t } from './i18n.js';
 
 const WAIT_MS = 400;
@@ -68,7 +69,7 @@ export class Notifier {
   }
 
   #preview(room, env) {
-    const text = env.kind === 'file' ? `📎 ${env.body.name}` : room.log.textOf(env);
-    return `${env.name}: ${text.replace(/\s+/g, ' ').trim().slice(0, PREVIEW_CHARS)}`;
+    const text = env.kind === 'file' ? `📎 ${plain(env.body.name)}` : room.log.textOf(env);
+    return `${plain(env.name)}: ${text.replace(/\s+/g, ' ').trim().slice(0, PREVIEW_CHARS)}`;
   }
 }

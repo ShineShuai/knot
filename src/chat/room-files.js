@@ -45,7 +45,7 @@ export class RoomFiles {
   async #pull(env, ref) {
     const author = authorIdOf(env);
     const links = [...this.room.peers.values()]
-      .filter((p) => p.state === 'p2p' && p.link.state === 'open')
+      .filter((p) => p.state === 'p2p' && p.synced && p.link.state === 'open')
       .sort((a, b) => ((b.member ?? b.id) === author) - ((a.member ?? a.id) === author))
       .map((p) => p.link);
     if (!links.length) throw new Error('The sender is not connected right now');
@@ -80,7 +80,7 @@ export class RoomFiles {
   /** Open direct links to the devices of one member. */
   #linksOf(memberId) {
     return [...this.room.peers.values()]
-      .filter((p) => p.state === 'p2p' && p.link.state === 'open')
+      .filter((p) => p.state === 'p2p' && p.synced && p.link.state === 'open')
       .filter((p) => (p.member ?? p.id) === memberId)
       .map((p) => p.link);
   }

@@ -47,6 +47,8 @@ export class AppModel extends Emitter {
   #deviceRoom = null; // where our devices meet when they share no room (see #syncChannel)
   #deviceSecret = '';
   #forgotten = false; // forgetLinking ran: this page is on its way out
+  /** Rooms that could not be opened at start: [{ label, message }] (the others open as usual). */
+  loadErrors = [];
 
   /** `WS`, `linkFactory`, `callEnv`: injectable network and media pieces (tests); the
    *  defaults are the browser's. */
@@ -63,16 +65,18 @@ export class AppModel extends Emitter {
     });
   }
 
-  async load() {
+  /** `progress(text)`: what is being opened now (for a page that is slow to start). */
+  async load({ progress = () => {} } = {}) {
     await this.sync.load();
     await this.#refreshPaired();
     await this.#sharePrevious();
     this.#applyOwnAlias();
-    for (const saved of (await this.kv.get('rooms')) ?? []) await this.#open(
-      fromB64u(saved.secret),
-      saved.label,
-      saved.owner ?? null,
-    );
+    const saved = (await this.kv.get('rooms')) ?? [];
+    for (const [i, entry] of saved.entries()) {
+      progress(`${i + 1} of ${saved.length} (${entry.label ?? ''})`);
+      await this.#openSafely(entry.secret, entry.label, entry.owner ?? null);
+    }
+    progress('the rest');
     await this.#finishGrant(); // a link that a reload interrupted
     // what our other devices changed while this one was closed, then what only this one has
     await this.#applyRoomItems(this.sync.items, {});
@@ -100,7 +104,18 @@ export class AppModel extends Emitter {
       await saveSettings(this.kv, this.settings);
     }
     this.#broadcastSync(changed);
+    this.#brokersChanged(Object.keys(changed));
   }
+
+  /** The brokers or their switch changed: running rooms must follow, not wait for a reload. */
+  #brokersChanged(keys) {
+    if (!keys.some((k) => k === 'brokers' || k === 'brokersEnabled')) return;
+    for (const room of this.#allRooms()) room.refreshBrokers().catch(() => {});
+  }
+
+  /** The page came back from the background, or the network did: reconnect now, compare
+   *  histories. */
+  wake() { for (const room of this.#allRooms()) room.wake(); }
 
   /** Our public key, and the main device's: the keys of the device list. */
   get #ownPub() { return toB64u(this.identity.pub); }
@@ -211,8 +226,7 @@ export class AppModel extends Emitter {
         if ((await deriveRoomKeys(fromB64u(value.s))).id !== id) continue; // not that room's secret
         if (epochs[id]) await this.kv.put(`epoch:${id}`, epochs[id]);
         this.#removed.delete(id);
-        await this.#open(fromB64u(value.s), value.l, value.o);
-        changed = true;
+        if (await this.#openSafely(value.s, value.l, value.o)) changed = true;
       } else if (room.label !== value.l) {
         room.label = value.l;
         changed = true;
@@ -313,6 +327,7 @@ export class AppModel extends Emitter {
     }
     if (CHANNEL in accepted) await this.#syncChannel();
     this.#broadcastSync(accepted);
+    this.#brokersChanged(Object.keys(accepted));
   }
 
   // ---- linked devices (see chat/devices.js) ------------------------------------------------
@@ -411,11 +426,21 @@ export class AppModel extends Emitter {
       this.settings.name = name;
       await saveSettings(this.kv, this.settings);
     }
+    let failed = 0;
     for (const r of rooms) {
-      await this.completeJoin(
-        { secret: fromB64u(r.secret), label: r.label, founder: r.founder, epoch: r.epoch },
-      );
+      try {
+        await this.completeJoin(
+          { secret: fromB64u(r.secret), label: r.label, founder: r.founder, epoch: r.epoch },
+        );
+      } catch (err) { // keep the grant: the next start tries this room again
+        failed++;
+        console.error('could not take over room', r.label, err);
+        this.loadErrors.push({
+          label: String(r.label ?? ''), message: String(err?.message ?? err),
+        });
+      }
     }
+    if (failed) return;
     await this.kv.put('delegate', { cert: record.cert });
     this.#applyOwnAlias();
   }
@@ -532,6 +557,17 @@ export class AppModel extends Emitter {
     };
   }
 
+  /** Open a room (its secret as saved, base64url). If that fails the others still open: one
+   *  damaged room must not keep the whole app from starting. The failure is kept in
+   *  `loadErrors`. */
+  async #openSafely(secretText, label, owner = null) {
+    try { return await this.#open(fromB64u(secretText), label, owner); } catch (err) {
+      console.error('could not open room', label, err);
+      this.loadErrors.push({ label: String(label ?? ''), message: String(err?.message ?? err) });
+      return null;
+    }
+  }
+
   async #open(secret, label, owner = null) {
     // The owner is also kept under a key of its own: an older version of the app, perhaps in
     // another tab, rewrites the room list without it, and the room would silently turn into
@@ -580,7 +616,11 @@ export class AppModel extends Emitter {
     ));
     const others = [];
     for (const entry of (await this.kv.get('rooms')) ?? []) {
-      const { id } = await deriveRoomKeys(fromB64u(entry.secret));
+      let id;
+      try { ({ id } = await deriveRoomKeys(fromB64u(entry.secret))); } catch {
+        others.push(entry); // damaged: kept as it is (see loadErrors), not lost, not in the way
+        continue;
+      }
       if (!this.rooms.has(id) && !this.#removed.has(id)) others.push(entry);
     }
     await this.kv.put('rooms', [...mine, ...others]);

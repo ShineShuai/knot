@@ -203,3 +203,60 @@ test('a room the owner made says nothing about admissions or the owner being awa
   assert.equal(home.unadmitted, false);
   assert.equal(home.ownerOnline, true);
 });
+
+/** A device that started over with a new identity (a device that leaves its main device does
+ *  that, see AppModel.forgetLinking) and kept its rooms: it is a stranger in every owned room. */
+async function startOver(broker, who) {
+  goOffline(who);
+  const identity = await newIdentity();
+  return { ...who, identity, model: await boot(broker, identity, who.kv, who.name) };
+}
+
+async function clubWithBob() {
+  const broker = new FakeBroker();
+  const [owner, bob] = [await person(broker, 'Olga'), await person(broker, 'Bob')];
+  const home = await owner.model.createRoom('Club');
+  await join(broker, home, bob);
+  await wait(300);
+  return { broker, owner, bob, home };
+}
+
+test('a device with a new identity asks the owner to let it in; the owner decides', async () => {
+  const { broker, bob, home } = await clubWithBob();
+  const again = await startOver(broker, bob);
+  await room(again).sendText('I am back');
+  await until(() => home.joinRequests.length === 1, 8000);
+  const [ask] = home.joinRequests;
+  assert.equal(ask.name, 'Bob');
+  assert.equal(ask.greeting, 'rejoining');
+  assert.equal(home.roster.isMember(again.identity.id), false, 'never let in on its own');
+  assert.equal(room(again).unadmitted, true);
+  await until(() => home.pendingCount === 1, 8000); // what he wrote waits at the owner
+
+  await home.approveJoin(ask.id);
+  await until(() => !room(again).unadmitted, 8000);
+  await until(() => texts(home).includes('I am back'), 8000); // and shows up now
+  assert.equal(home.pendingCount, 0);
+  await home.sendText('welcome back');
+  await until(() => texts(room(again)).includes('welcome back'), 8000);
+  await wait(300);
+  assert.equal(room(again).knocking, false);
+});
+
+test('it does not knock while the owner is away, and not again once declined', async () => {
+  const { broker, owner, bob, home } = await clubWithBob();
+  goOffline(owner);
+  const again = await startOver(broker, bob);
+  await wait(1500);
+  assert.equal(room(again).unadmitted, true);
+  assert.equal(room(again).knocking, false, 'nobody to ask');
+
+  const back = await comeBack(broker, owner);
+  await until(() => room(back).joinRequests.length === 1, 10_000);
+  await room(back).declineJoin(room(back).joinRequests[0].id);
+  await until(() => !room(again).knocking, 8000);
+  await wait(800);
+  assert.equal(room(back).joinRequests.length, 0, 'it took no for an answer');
+  assert.equal(room(again).unadmitted, true);
+  assert.equal(home.roster.isMember(again.identity.id), false);
+});

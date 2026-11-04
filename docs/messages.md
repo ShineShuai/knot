@@ -67,6 +67,16 @@ on the banner of waiting messages when the owner is offline (the list comes from
 from a member who has it). Diagnostics adds, per room, the owner (online or not), our own id, the
 members, the author of the last refused message and which direct links are not synced.
 
+A device can be in a room without being on its list: one that left its main device (or was
+withdrawn) starts over with a new identity (`AppModel.forgetLinking`) and keeps its rooms, so in
+every room with an owner it is a stranger, and what it writes is refused without a word (rooms
+without an owner do not care, which hides it). When our own member is not on our list, and the
+owner is online, the room asks them to let it in again, as a join link would (`rejoining`): the
+owner gets the usual join request, with the name, and decides; nothing is admitted on its own.
+The answer carries the member list and any key rotation missed. It asks again every few minutes,
+not at all while the owner is away, and never again after a no. On the owner's side the banner of
+waiting messages points to the join requests.
+
 ## App versions
 
 Presence carries `pv`, a whole number that only goes up (`PROTOCOL` in `src/version.js`, with what

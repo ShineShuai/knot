@@ -315,7 +315,9 @@ class Ui {
       waiting.hidden = !n;
       waiting.textContent = n ? [
         t('waitingMembers', { n }),
-        room.roster && !room.ownerOnline && t('waitingOwner', { owner: plain(room.ownerName) }),
+        room.isOwner && t('waitingAsOwner'),
+        room.roster && !room.isOwner && !room.ownerOnline
+          && t('waitingOwner', { owner: plain(room.ownerName) }),
       ].filter(Boolean).join(' ') : '';
     };
     // Members whose app is older or newer than ours: say so, rather than fail without a word.

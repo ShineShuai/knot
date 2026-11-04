@@ -349,3 +349,20 @@ test('ui: one hold-to-reveal panel (.conninfo); the member-list banner has its o
   assert.equal(a.root.querySelectorAll('.conninfo').length, 1);
   assert.equal(a.root.querySelectorAll('.waiting').length, 1);
 });
+
+test('ui: a note names members whose app is older or newer than ours', async () => {
+  const { a, ra } = await chatting();
+  const note = () => a.root.querySelector('.appnote');
+  assert.equal(note().hidden, true);
+  const member = { pub: new Uint8Array(32), name: 'Olly', seen: Date.now() };
+  ra.members.set('olly', { ...member, pv: 1 });
+  ra.emit('peers', []);
+  assert.equal(note().hidden, false);
+  assert.match(note().textContent, /Olly: older app than yours/);
+  ra.members.set('olly', { ...member, pv: 99 });
+  ra.emit('peers', []);
+  assert.match(note().textContent, /Olly: newer app than yours/);
+  ra.members.delete('olly');
+  ra.emit('peers', []);
+  assert.equal(note().hidden, true);
+});

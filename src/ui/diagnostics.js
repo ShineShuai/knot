@@ -1,7 +1,7 @@
 // A plain-text report for when something works in one browser and not in another (Safari!):
 // what the browser supports, how each room's links look, the brokers, and the last errors
 // the page hit. Copied from Settings > Diagnostics; contains no message text or keys.
-import { VERSION } from '../version.js';
+import { PROTOCOL, VERSION } from '../version.js';
 import { buildInfo, versionDetail } from '../build.js';
 import { storageState } from '../store/persist.js';
 
@@ -115,7 +115,8 @@ export function dropLines(room, now = Date.now()) {
   const out = Object.entries(room.dropped ?? {}).map(([reason, { n, last }]) => {
     const ago = last ? `, last ${Math.round((now - last.at) / 1000)} s ago` : '';
     const hint = DROP_HINTS[reason] ? ` (${DROP_HINTS[reason]})` : '';
-    return `  refused ${n}x: ${reason}${ago}${hint}`;
+    const by = last?.by ? `, author ${last.by.slice(0, 6)} ${last.name ?? ''}`.trimEnd() : '';
+    return `  refused ${n}x: ${reason}${ago}${by}${hint}`;
   });
   if (room.pendingCount) out.push(`  ${room.pendingCount} message(s) wait for the member list`);
   return out;
@@ -130,8 +131,20 @@ export function rosterLines(room) {
   const forks = r.forks ? `, ${r.forks} refused as fork` : '';
   const size = `${r.members.size + 1} member(s), ${r.chain.length} change(s)`;
   const out = [`  member list: ${size}, head ${head}${forks}`];
+  const who = (id) => `${id.slice(0, 6)} ${room.nameOf(id)}`;
+  out.push(`  owner ${who(r.owner)} (${room.ownerOnline ? 'online' : 'offline'}); `
+    + `you ${room.identity.member.slice(0, 6)}${room.unadmitted ? ' (NOT in the list)' : ''}`);
+  out.push(`  members: ${[...r.members.keys()].map(who).join(', ') || 'none besides the owner'}`);
   if (r.gap) out.push(`  member list gap: ${r.gap} change(s) wait for a missing earlier one`);
   return out;
+}
+
+/** Which app each member online runs, and whether it speaks an older or newer protocol. */
+export function appLines(room) {
+  const seen = [...room.members.values()].filter((m) => m.pv);
+  if (!seen.length) return [];
+  const gap = (pv) => (pv < PROTOCOL ? ' (older)' : pv > PROTOCOL ? ' (newer)' : '');
+  return [`  apps seen: ${seen.map((m) => `${m.app ?? '?'} p${m.pv}${gap(m.pv)}`).join(', ')}`];
 }
 
 /** The whole report. */
@@ -148,7 +161,12 @@ export async function diagnosticsReport(model, env = globalThis) {
     const b = room.brokerStatus ?? {};
     lines.push(`room ${room.id.slice(0, 6)}: peers [${peers.join(', ')}]`
       + ` brokers ${b.connected ?? '?'}/${b.total ?? '?'}`);
-    lines.push(...rosterLines(room), ...dropLines(room), ...callLines(room));
+    const links = room.peerList.filter((p) => p.state === 'p2p' && p.member).map(
+      (p) => `${p.member.slice(0, 6)}${p.synced === false ? ' NOT synced' : ''}`,
+    );
+    if (links.length) lines.push(`  direct links to: ${links.join(', ')}`);
+    lines.push(...rosterLines(room), ...appLines(room), ...dropLines(room),
+      ...callLines(room));
   }
   for (const f of model.loadErrors ?? []) {
     lines.push(`room "${f.label}" could not be opened: ${f.message}`);

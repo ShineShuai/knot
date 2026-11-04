@@ -54,6 +54,28 @@ The joiner checks each envelope like one from a peer; an older owner sends none.
 list has a gap asks for it again every minute. Diagnostics shows per room the size and head of the
 member list (the same head on two devices means the same list), a gap if one is known, and forks.
 
+## Member list: what survives, what is said
+
+An admin envelope that cannot be applied yet (an earlier link is missing) waits in memory, and is
+also saved (`wait:<room>`), because a joiner's own admission may exist nowhere else: it came with
+the grant, and a restart before the rest of the list arrived used to lose it, leaving the owner
+the only holder. Our own member (and so every device of ours) is trusted by us without being in the
+list, and links to our own devices count as synced: a linked device used to refuse the main
+device's messages when the list lacked their common admission. What is still missing is said in
+the room: a note when our own admission is not in our list (others will not see our messages), and
+on the banner of waiting messages when the owner is offline (the list comes from the owner, or
+from a member who has it). Diagnostics adds, per room, the owner (online or not), our own id, the
+members, the author of the last refused message and which direct links are not synced.
+
+## App versions
+
+Presence carries `pv`, a whole number that only goes up (`PROTOCOL` in `src/version.js`, with what
+each level added), and `app`, the version string; both inside the sealed payload, so only members
+see them. No `pv` means level 1 (an app from before it was announced). A room lists the members
+online whose level is lower or higher than ours (`Room.appGaps`) in a note ("Ada: older app than
+yours"), and Diagnostics lists the apps seen. Raise `PROTOCOL` with every change an older app
+would not understand, and before the next one that changes the wire format.
+
 ## Reactions and edits
 
 Two more signed envelope kinds that ride on another message. `react` {id, emoji, on}: per author,

@@ -183,7 +183,8 @@ export class SettingsDialogs {
       brokers.value.split('\n').map((l) => l.trim()).filter(Boolean),
     ) ?? []).map((r) => h('li', { class: r.ok ? 'up' : r.ok === false ? 'down' : '' },
       `${r.ok ? '✓' : r.ok === false ? '✗' : '…'} `
-      + t(r.ok ? 'brokerUp' : r.ok === false ? 'brokerDown' : 'brokerUnknown', r))));
+      + t(r.ok ? 'brokerUp' : r.relay === false ? 'brokerNoRelay'
+        : r.ok === false ? 'brokerDown' : 'brokerUnknown', r))));
     const checkBrokers = h('button', { onclick: async () => {
       await health.check(brokers.value.split('\n').map((l) => l.trim()).filter(Boolean));
       showBrokers();

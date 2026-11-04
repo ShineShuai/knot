@@ -3,9 +3,9 @@
 import { DEFAULTS } from '../src/config.js';
 import { hasNative } from '../src/crypto/curves.js';
 import { loadIdentity } from '../src/crypto/identity.js';
+import { probeBroker } from '../src/net/broker-health.js';
 import { decodeCode, encodeCode, signHandshake, verifyHandshake } from '../src/net/handshake.js';
 import { probeNat, probeStun } from '../src/net/ice-probe.js';
-import { MqttClient } from '../src/net/mqtt.js';
 import { PeerLink } from '../src/net/peer-link.js';
 import { MemoryKV } from '../src/store/kv.js';
 import { randomBytes } from '../src/util/bytes.js';
@@ -90,14 +90,9 @@ async function checkStun() {
 
 async function checkBrokers() {
   await Promise.all(DEFAULTS.brokers.map(async (url) => {
-    const t0 = performance.now();
-    const client = new MqttClient(url, { connectTimeoutMs: 6000 });
-    try {
-      await client.connect();
-      add('Broker', url, 'ok', `${Math.round(performance.now() - t0)} ms`);
-    }
-    catch (err) { add('Broker', url, 'fail', err.message); }
-    finally { client.close(); }
+    const r = await probeBroker(url, { timeoutMs: 6000 }); // connects, subscribes, round-trips
+    if (r.ok) add('Broker', url, 'ok', `${r.ms} ms, relays`);
+    else add('Broker', url, 'fail', r.relay === false ? `connects, ${r.error}` : r.error);
   }));
 }
 

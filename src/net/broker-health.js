@@ -17,13 +17,13 @@ export async function probeBroker(url, {
   timeoutMs = 5000, WS = globalThis.WebSocket, topicPrefix = DEFAULTS.topicPrefix,
 } = {}) {
   const t0 = now();
-  const client = new MqttClient(url, {
-    WS, connectTimeoutMs: timeoutMs, subscribeTimeoutMs: timeoutMs,
-  });
+  const client = new MqttClient(url, { WS, connectTimeoutMs: timeoutMs });
   try {
     await client.connect();
     const ms = Math.round(now() - t0);
-    try { await client.roundTrip(`${topicPrefix}/probe/${toB64u(randomBytes(9))}`, timeoutMs); }
+    const topic = `${topicPrefix}/probe/${toB64u(randomBytes(9))}`;
+    // a slow network is slow again for the round trip: scale the wait with the connect time
+    try { await client.roundTrip(topic, timeoutMs + 2 * ms); }
     catch (err) { return { url, ok: false, relay: false, ms, error: `no relay: ${err.message}` }; }
     return { url, ok: true, ms };
   } catch (err) {

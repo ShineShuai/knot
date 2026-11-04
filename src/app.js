@@ -520,9 +520,13 @@ export class AppModel extends Emitter {
   }
 
   /** The owner said yes: open the room, with the approval that came with the grant. */
-  async completeJoin({ secret, label, admit, founder, epoch }) {
+  async completeJoin({ secret, label, admit, chain, founder, epoch }) {
     if (epoch) await this.kv.put(`epoch:${(await deriveRoomKeys(secret)).id}`, epoch);
     const room = await this.addRoom(secret, label, founder);
+    // The member list as the owner has it (every envelope is checked like one from a peer).
+    for (const env of Array.isArray(chain) ? chain.slice(0, 200) : []) {
+      await room.receiveAdmin(env).catch(() => {});
+    }
     if (admit) await room.receiveAdmin(admit);
     return room;
   }

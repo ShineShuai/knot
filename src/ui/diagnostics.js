@@ -102,7 +102,8 @@ export function callLines(room) {
 /** Why a room may look empty: what it refused, and what that usually means. */
 const DROP_HINTS = {
   'author not in member list': 'their admission is not in this copy of the member list yet; it is '
-    + 'asked for over direct links and the brokers (are the brokers reachable?)',
+    + 'asked for over direct links and the brokers (are the brokers reachable?); if it stays, '
+    + 'the owner, or a member who has the whole list, has to be online',
   'invalid or forged': 'signature, size or format is wrong: a clock more than 10 minutes off, or '
     + 'a different app version',
   'device was unlinked': 'a device that was unlinked still writes',
@@ -120,6 +121,19 @@ export function dropLines(room, now = Date.now()) {
   return out;
 }
 
+/** The member list as this copy knows it: compare `head` between two devices. A gap means a
+ *  link is missing that only the owner (or a member who was given it) can supply. */
+export function rosterLines(room) {
+  const r = room.roster;
+  if (!r) return [];
+  const head = r.head ? r.head.split('-').slice(0, 2).join('-') : 'none';
+  const forks = r.forks ? `, ${r.forks} refused as fork` : '';
+  const size = `${r.members.size + 1} member(s), ${r.chain.length} change(s)`;
+  const out = [`  member list: ${size}, head ${head}${forks}`];
+  if (r.gap) out.push(`  member list gap: ${r.gap} change(s) wait for a missing earlier one`);
+  return out;
+}
+
 /** The whole report. */
 export async function diagnosticsReport(model, env = globalThis) {
   const build = buildInfo(env.document ?? null);
@@ -134,7 +148,7 @@ export async function diagnosticsReport(model, env = globalThis) {
     const b = room.brokerStatus ?? {};
     lines.push(`room ${room.id.slice(0, 6)}: peers [${peers.join(', ')}]`
       + ` brokers ${b.connected ?? '?'}/${b.total ?? '?'}`);
-    lines.push(...dropLines(room), ...callLines(room));
+    lines.push(...rosterLines(room), ...dropLines(room), ...callLines(room));
   }
   for (const f of model.loadErrors ?? []) {
     lines.push(`room "${f.label}" could not be opened: ${f.message}`);

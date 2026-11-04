@@ -46,6 +46,14 @@ kept (200, 10 minutes) and shown as soon as the list learns the author; a banner
 Every refusal is counted by reason (`room.dropped`) and Diagnostics prints them with what each
 usually means. An `admin` frame holds at most 100 envelopes (all a receiver reads).
 
+The owner's answer to a join request carries the member list too (`chain`: the start of it, up to
+30 kB), not only the joiner's own admission: a joiner given only that one envelope has a hole in
+their list that nobody may be able to fill when the owner is away, and every member who missed the
+same change then refuses their messages for good (the joiner sees theirs, they do not see his).
+The joiner checks each envelope like one from a peer; an older owner sends none. A member whose
+list has a gap asks for it again every minute. Diagnostics shows per room the size and head of the
+member list (the same head on two devices means the same list), a gap if one is known, and forks.
+
 ## Reactions and edits
 
 Two more signed envelope kinds that ride on another message. `react` {id, emoji, on}: per author,

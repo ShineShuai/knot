@@ -79,12 +79,13 @@ export async function readRequest(bytes, lobbyId, now = Date.now()) {
   } catch { return null; }
 }
 
-/** `payload`: { secret: Uint8Array, label, admit: envelope, founder: id of the room's creator,
- *  epoch: { n, s } of the current key rotation, or null } */
+/** `payload`: { secret: Uint8Array, label, admit: envelope, chain: the member list's envelopes
+ *  (the start of it), founder: id of the room's creator, epoch: { n, s } of the current key
+ *  rotation, or null } */
 export async function makeGrant(identity, { lobbyId, to, boxPub, payload }) {
   const plain = utf8.encode(JSON.stringify({
     secret: toB64u(payload.secret), label: payload.label, admit: payload.admit,
-    founder: payload.founder, epoch: payload.epoch,
+    chain: payload.chain, founder: payload.founder, epoch: payload.epoch,
   }));
   const box = toB64u(await sealBox(boxPub, plain, text('knot/grant', lobbyId, to)));
   const sig = await identity.sign(text('knot/grant-sig', lobbyId, to, box));
@@ -103,7 +104,7 @@ export async function makeDeny(identity, { lobbyId, to }) {
 }
 
 /** The owner's answer to us, or null if it is not one (wrong lobby, owner, receiver or key).
- *  -> { t:'grant', secret, label, admit, founder, epoch } | { t:'deny' } */
+ *  -> { t:'grant', secret, label, admit, chain, founder, epoch } | { t:'deny' } */
 export async function readDecision(bytes, { lobbyId, ownerId, selfId, boxKey }) {
   try {
     const m = JSON.parse(fromUtf8(bytes));
@@ -124,9 +125,12 @@ export async function readDecision(bytes, { lobbyId, ownerId, selfId, boxKey }) 
     const plain = await openBox(
       boxKey.privateKey, fromB64u(m.box), text('knot/grant', lobbyId, selfId),
     );
-    const { secret, label, admit, founder, epoch } = JSON.parse(fromUtf8(plain));
+    const { secret, label, admit, chain, founder, epoch } = JSON.parse(fromUtf8(plain));
     const room = fromB64u(secret);
     if (room.length !== 16 || typeof founder !== 'string') return null;
-    return { t: 'grant', secret: room, label: String(label), admit, founder, epoch: epoch ?? null };
+    return {
+      t: 'grant', secret: room, label: String(label), admit, founder, epoch: epoch ?? null,
+      chain: Array.isArray(chain) ? chain : [], // an older owner sends none
+    };
   } catch { return null; }
 }

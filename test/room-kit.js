@@ -15,7 +15,7 @@ export const stopRooms = () => made.splice(0).forEach((r) => r.stop());
  *  `owner`: the owner's id for a room with an owner; `broker`: a FakeBroker, to find peers. */
 export async function makeRoom({
   secret = newRoomSecret(), name = 'Ada', kv = new MemoryKV(), identity, owner = null, broker,
-  extra = {},
+  extra = {}, linkFactory = () => new FakeLink(),
 } = {}) {
   const settings = {
     ...DEFAULTS, name, presenceIntervalMs: 60, gatherTimeoutMs: 10, connectTimeoutMs: 2000,
@@ -23,7 +23,7 @@ export async function makeRoom({
   };
   const room = await Room.open({
     identity: identity ?? await newIdentity(), secret, label: name, kv, settings, owner,
-    iceServers: () => [], linkFactory: () => new FakeLink(), WS: broker?.ws(),
+    iceServers: () => [], linkFactory, WS: broker?.ws(),
   });
   made.push(room);
   return room;

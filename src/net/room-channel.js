@@ -122,7 +122,8 @@ export class RoomChannel extends Emitter {
         this.#clients.set(url, client);
         this.emit('status', this.status);
         const topics = [`${this.base}/p`, `${this.base}/s/${this.selfId}`, `${this.base}/m`];
-        try { await Promise.all(topics.map((topic) => client.subscribe(topic))); }
+        const wait = Math.max(15_000, 3 * ms); // far brokers answer late, they are not broken
+        try { await Promise.all(topics.map((topic) => client.subscribe(topic, wait))); }
         catch (err) { // refused or never answered: it takes our messages but would not pass them on
           if (client.connected) this.health?.fail(url, `no relay: ${err.message}`);
           throw err;

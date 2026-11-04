@@ -59,6 +59,10 @@ brokers, reconnection is automatic).
 * No forward secrecy for broker-relayed text (static room key, rotated when a member is removed).
   MLS is the upgrade path. Rooms made before owners existed are open to anyone with the link.
 * Brokers see metadata (topic id, message sizes and timing), not content.
+* The member list of an owned room, and the history over the brokers, come from other members that
+  are online: a member who missed a change while away learns it from the owner or from a member
+  who has it. If the owner is away and nobody online has that change, messages of members it
+  admitted wait (banner, Diagnostics) until one of them is back.
 * Chat links have no in-band renegotiation or ICE restart: a dropped link reconnects through the
   brokers or needs a new code. Calls offer a dead media connection again by themselves.
 * Files: whole file in memory (default cap 100 MB), no resume; files never use the brokers.

@@ -9,6 +9,7 @@ import { lobbyKeys, lobbySecretOf, makeDeny, makeGrant, readRequest } from './lo
 import { encodeRecoveryCode } from './recovery.js';
 
 const MAX_JOIN_REQUESTS = 50;
+const GRANT_CHAIN_BYTES = 30_000; // the member list a joiner is given (a frame must stay small)
 
 export class OwnerDesk {
   #joinRequests = new Map(); // joiner id -> request waiting for the owner's decision
@@ -131,8 +132,10 @@ export class OwnerDesk {
     const admit = roster.chain.findLast((e) => e.kind === 'admit' && e.body.id === req.id);
     const { n, secret: epochSecret } = this.hooks.epoch();
     const epoch = n ? { n, s: toB64u(epochSecret) } : null;
+    // The whole member list, not only their own admission: they may be the only one who has it
+    // when the owner is offline, and a member who lacks any part of it refuses their messages.
     const payload = {
-      secret, label, admit, founder: roster.founder, epoch,
+      secret, label, admit, chain: roster.prefix(GRANT_CHAIN_BYTES), founder: roster.founder, epoch,
     };
     await this.#lobby?.sendSignal(req.device, await makeGrant(
       this.room.identity,

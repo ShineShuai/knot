@@ -89,7 +89,7 @@ export class MqttClient extends Emitter {
     url,
     {
       WS = globalThis.WebSocket, keepAliveSec = 30, connectTimeoutMs = 8000,
-      subscribeTimeoutMs = 8000,
+      subscribeTimeoutMs = 15_000,
     } = {},
   ) {
     super();
@@ -130,8 +130,8 @@ export class MqttClient extends Emitter {
   }
 
   /** Resolves when the broker grants the subscription (SUBACK); rejects when it refuses, stays
-   *  silent for `subscribeTimeoutMs`, or the connection ends first. */
-  subscribe(topic) {
+   *  silent for `timeoutMs` (default: `subscribeTimeoutMs`), or the connection ends first. */
+  subscribe(topic, timeoutMs = this.opts.subscribeTimeoutMs) {
     if (!this.connected) return Promise.reject(new Error('not connected'));
     const id = this.#nextId;
     this.#nextId = (id % 0xffff) + 1; // packet ids are 1..65535
@@ -139,7 +139,7 @@ export class MqttClient extends Emitter {
       const timer = setTimeout(() => {
         this.#acks.delete(id);
         reject(new Error('subscribe timeout'));
-      }, this.opts.subscribeTimeoutMs);
+      }, timeoutMs);
       this.#acks.set(id, { resolve, reject, timer });
       this.#send(encodeSubscribe(id, topic));
     });
@@ -161,7 +161,7 @@ export class MqttClient extends Emitter {
     });
     echoed.catch(() => {}); // it may fail while still subscribing; `await echoed` reports it
     try {
-      await this.subscribe(topic);
+      await this.subscribe(topic, timeoutMs);
       this.publish(topic, probe);
       await echoed;
       return Date.now() - t0;

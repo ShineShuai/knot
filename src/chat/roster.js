@@ -27,6 +27,7 @@ export class Roster {
   revoked = new Set();
   recoveryKey = null; // base64url public key of the current recovery code, if any
   epoch = { n: 0, commit: null }; // the latest key rotation the owner announced
+  forks = 0; // envelopes refused because the chain had moved on from their `prev`
   #applied = new Set();
   #waiting = new Map(); // prev id -> envelope that follows it
 
@@ -38,13 +39,33 @@ export class Roster {
    *  (so that a peer who has the missing part can complete the chain). */
   envs() { return [...this.chain, ...this.#waiting.values()]; }
 
+  /** Envelopes held back because an earlier link of the chain is missing here. Only a peer that
+   *  has that link (the owner, or a member who was given it) can complete the list. */
+  get gap() { return this.#waiting.size; }
+
+  /** The start of the chain, as many envelopes as fit in `maxBytes`: what a joiner is given
+   *  with their admission, so that they can hand the whole list on to the others. */
+  prefix(maxBytes) {
+    const out = [];
+    let size = 0;
+    for (const env of this.envs()) {
+      size += JSON.stringify(env).length;
+      if (size > maxBytes) break;
+      out.push(env);
+    }
+    return out;
+  }
+
   /** Apply one admin envelope. Returns the envelopes that took effect (this one and any
    *  that were waiting for it), or [] if it was refused or must wait for a predecessor. */
   apply(env) {
     if (this.#applied.has(env.id)) return [];
     const { prev } = env.body;
     if (prev !== this.head) {
-      if (prev === '' || this.#applied.has(prev)) return []; // forks settled history
+      if (prev === '' || this.#applied.has(prev)) { // forks settled history
+        this.forks++;
+        return [];
+      }
       if (this.#waiting.size < WAIT_LIMIT && !this.#waiting.has(prev)) this.#waiting.set(prev, env);
       return [];
     }

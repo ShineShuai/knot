@@ -1,6 +1,6 @@
 // A pending request to join an owner-run room, made from a join link.
 // Events: 'status'('connecting' | 'waiting' | 'declined' | 'offline' | 'timeout' | 'approved'),
-//         'approved'({ secret, label, admit })
+//         'approved'({ secret, label, admit, chain, founder, epoch })
 import { Emitter } from '../util/emitter.js';
 import { newBoxKey } from '../crypto/box.js';
 import { RoomChannel } from '../net/room-channel.js';

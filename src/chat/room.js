@@ -347,7 +347,10 @@ export class Room extends Emitter {
     this.#announcing = true;
     this.#every(this.settings.presenceIntervalMs, () => this.#announce());
     // Messages and the member list that only the brokers can bring are asked for now and then.
-    this.#every(RELAY_SYNC_MS, () => { if (this.#needsRelay()) this.#relaySync(); });
+    this.#every(RELAY_SYNC_MS, () => {
+      if (this.#needsRelay()) this.#relaySync();
+      else if (this.roster?.gap) this.#needChain(); // a link of the member list is missing
+    });
   }
 
   #relaySyncQueued = false;

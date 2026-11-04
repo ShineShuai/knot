@@ -313,7 +313,22 @@ class Ui {
     const drawWaiting = () => {
       const n = room.pendingCount;
       waiting.hidden = !n;
-      waiting.textContent = n ? t('waitingMembers', { n }) : '';
+      waiting.textContent = n ? [
+        t('waitingMembers', { n }),
+        room.roster && !room.ownerOnline && t('waitingOwner', { owner: plain(room.ownerName) }),
+      ].filter(Boolean).join(' ') : '';
+    };
+    // Members whose app is older or newer than ours: say so, rather than fail without a word.
+    const appNote = h('div', { class: 'appnote', hidden: true, role: 'status' });
+    const drawAppNote = () => {
+      const { older, newer } = room.appGaps;
+      const names = (list) => list.map(plain).join(', ');
+      appNote.textContent = [
+        room.unadmitted && t('notAdmitted', { owner: plain(room.ownerName) }),
+        older.length && t('appOlder', { names: names(older) }),
+        newer.length && t('appNewer', { names: names(newer) }),
+      ].filter(Boolean).join(' ');
+      appNote.hidden = !appNote.textContent;
     };
     const log = h('ol', { class: 'log', 'aria-live': 'polite' });
     /** Run `change`, and keep the newest messages in view if that is where we were. */
@@ -425,7 +440,7 @@ class Ui {
         membersBtn,
         h('button', { onclick: () => this.roomDialogs.invite(room) }, t('invite')),
         h('button', { class: 'ghost', onclick: () => this.roomDialogs.leave(room) }, t('leave'))),
-      callBanner, searchBar, peers, conn, waiting, log, composer.quoteBar, composer.chips,
+      callBanner, searchBar, peers, conn, waiting, appNote, log, composer.quoteBar, composer.chips,
       composer.bar,
     );
 
@@ -440,13 +455,14 @@ class Ui {
         redraw.cancel();
         return draw();
       }),
-      room.on('peers', drawPeers),
+      room.on('peers', () => { drawPeers(); drawAppNote(); }),
       room.on('pending', drawWaiting),
+      room.on('peers', drawWaiting), // the owner may have come or gone
       room.on('delivery', redraw),
       room.on('files', () => drawLog()), // image previews start or wait with the transfers
       room.on('brokers', () => { drawBrokers(); drawPeers(); }),
       holdToReveal(room, peers, conn));
-    drawPeers(); drawBrokers(); drawLog(true); drawCall(); drawWaiting();
+    drawPeers(); drawBrokers(); drawLog(true); drawCall(); drawWaiting(); drawAppNote();
     composer.draw();
   }
 

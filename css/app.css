@@ -80,9 +80,9 @@ dl.help dd { margin: .1rem 0 0; color: var(--muted); }
 .msg.gone .text { margin: 0; }
 .msg.flash { outline: 2px solid var(--link); }
 .quote-bar { display: flex; align-items: center; gap: .5rem; padding: .3rem 1rem; border-top: 1px solid var(--line); background: var(--rail); font-size: .85rem; }
-.quote-bar[hidden], .conninfo[hidden], .waiting[hidden] { display: none; }
+.quote-bar[hidden], .conninfo[hidden], .waiting[hidden], .appnote[hidden] { display: none; }
 .quote-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.conninfo, .waiting { padding: .4rem 1rem; font: .8rem/1.5 var(--mono); background: var(--rail); border-block: 1px solid var(--line); overflow-wrap: anywhere; }
+.conninfo, .waiting, .appnote { padding: .4rem 1rem; font: .8rem/1.5 var(--mono); background: var(--rail); border-block: 1px solid var(--line); overflow-wrap: anywhere; }
 .text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .file { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; }
 .file-name { font-weight: 600; overflow-wrap: anywhere; }

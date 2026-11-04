@@ -12,7 +12,7 @@ import { DEFAULTS } from '../src/config.js';
 import { applyDelegation } from '../src/crypto/delegation.js';
 import { newBoxKey } from '../src/crypto/box.js';
 import { MemoryKV } from '../src/store/kv.js';
-import { rosterLines } from '../src/ui/diagnostics.js';
+import { dropLines, rosterLines } from '../src/ui/diagnostics.js';
 import { HLC } from '../src/util/hlc.js';
 import { newIdentity } from './helpers.js';
 import { FakeBroker, FakeLink, until } from './fakes.js';
@@ -59,6 +59,17 @@ async function join(broker, ownerRoom, guest, grantOf = (g) => g) {
   const grant = await approved;
   ask.stop();
   return guest.model.completeJoin(grantOf(grant));
+}
+
+async function linkPhone(broker, main, name) {
+  const [identity, kv] = [await newIdentity(), new MemoryKV()];
+  const fresh = await boot(broker, identity, kv, '');
+  const { code, read } = await fresh.startLinking(name);
+  const answer = await main.model.linkDevice(code);
+  await (await read(answer.code)).apply();
+  goOffline({ model: fresh });
+  const model = await boot(broker, identity, kv, '');
+  return { identity, kv, name: `${main.name}-${name}`, model };
 }
 
 const room = (who) => [...who.model.rooms.values()][0];
@@ -144,3 +155,51 @@ test('the grant carries the member list; an older owner sends none, a junk list 
     assert.equal(joined.roster.members.size, 0);
     assert.equal(joined.roster.gap, 0);
   });
+
+test('a joiner who restarts keeps the admission that waits for the rest of the list', async () => {
+  const { broker, bob } = await lateJoiner((grant) => ({ ...grant, chain: [] }));
+  assert.equal(room(bob).roster.gap, 1, 'his admission waits for the link before it');
+  goOffline(bob);
+  const again = await comeBack(broker, bob);
+  assert.equal(room(again).roster.gap, 1, 'not lost with the page');
+});
+
+test('a member\'s other device accepts what the main device writes, whatever the list says',
+  async () => {
+    const { broker, bob } = await lateJoiner((grant) => ({ ...grant, chain: [] }));
+    const phone = await linkPhone(broker, bob, 'phone');
+    await wait(1200);
+    await room(bob).sendText('from my main device');
+    await room(phone).sendText('from my phone');
+    await until(() => texts(room(phone)).includes('from my main device'), 8000);
+    await until(() => texts(room(bob)).includes('from my phone'), 8000);
+    assert.equal(room(phone).pendingCount, 0);
+  });
+
+test('what is missing is said: owner offline, own admission missing, who was refused', async () => {
+  const { broker, owner, ada, bob } = await lateJoiner((grant) => ({ ...grant, chain: [] }));
+  await wait(800);
+  await room(bob).sendText('hello Ada');
+  await until(() => room(ada).pendingCount === 1, 8000);
+  assert.equal(room(bob).unadmitted, true, 'Bob\'s list lacks his own admission');
+  assert.equal(room(ada).unadmitted, false);
+  assert.equal(room(ada).ownerOnline, false);
+  const report = rosterLines(room(ada)).concat(dropLines(room(ada))).join('\n');
+  assert.match(report, /owner \S+ Olga \(offline\); you \S+\n/);
+  assert.match(report, /members: \S+ Ada/);
+  assert.match(report, /author \S+ Bob/);
+  const mine = rosterLines(room(bob)).join('\n');
+  assert.match(mine, /\(NOT in the list\)/);
+
+  await comeBack(broker, owner);
+  await until(() => room(ada).ownerOnline && !room(bob).unadmitted, 10_000);
+});
+
+test('a room the owner made says nothing about admissions or the owner being away', async () => {
+  const broker = new FakeBroker();
+  const olga = await person(broker, 'Olga');
+  const home = await olga.model.createRoom('Club');
+  await wait(700);
+  assert.equal(home.unadmitted, false);
+  assert.equal(home.ownerOnline, true);
+});

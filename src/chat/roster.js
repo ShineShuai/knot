@@ -43,6 +43,10 @@ export class Roster {
    *  has that link (the owner, or a member who was given it) can complete the list. */
   get gap() { return this.#waiting.size; }
 
+  /** The envelopes held back (see `gap`): a joiner's own admission may be one of them, and it
+   *  must survive a restart, because nobody else may have it. */
+  waitingEnvs() { return [...this.#waiting.values()]; }
+
   /** The start of the chain, as many envelopes as fit in `maxBytes`: what a joiner is given
    *  with their admission, so that they can hand the whole list on to the others. */
   prefix(maxBytes) {

@@ -42,6 +42,7 @@ import { Pairing } from './pairing.js';
 import { ReadMarks } from './read-marks.js';
 import { RoomFiles } from './room-files.js';
 import { Roster } from './roster.js';
+import { PROTOCOL, VERSION } from '../version.js';
 import { lobbySecretOf } from './lobby.js';
 
 const MAX_FRAME_BYTES = 48 * 1024; // keep chat frames well under every browser's SCTP limit
@@ -182,6 +183,7 @@ export class Room extends Emitter {
       const who = p.member ?? seen?.member ?? p.id;
       return {
         id: p.id, name: p.name, via: p.via, sas: p.sas, member: who, owner: owner(who),
+        synced: p.synced,
         mine: who === this.identity.member,
         device: this.deviceOf(who, p.alias ?? seen?.alias ?? p.device ?? seen?.device),
         state: p.state === 'p2p' || !viaRelay(p.id) ? p.state : 'relay',
@@ -211,6 +213,10 @@ export class Room extends Emitter {
       && authorIdOf(e) === this.identity.member;
     if (!this.roster && stored.some(ours)) this.roster = new Roster(this.identity.member);
     this.roster?.load(stored);
+    // Envelopes that were still waiting for an earlier link when we last ran (see #saveWaiting).
+    const held = this.roster ? await this.#kv.get(`wait:${this.id}`) : null;
+    if (Array.isArray(held)) this.roster.load(held);
+    this.#waitingSaved = this.roster ? this.#waitingKey() : '';
     this.removed = !!this.roster?.revoked.has(this.identity.member);
     for (const e of this.log.where((x) => x.kind === 'unlink')) this.#noteUnlink(e);
     await this.#marks.load();
@@ -282,6 +288,29 @@ export class Room extends Emitter {
   get channelId() { return this.#chan.id; }
 
   get isOwner() { return !!this.roster && this.roster.owner === this.identity.member; }
+
+  /** The owner's name, as we know it (null in a room without an owner). */
+  get ownerName() { return this.roster ? this.#nameOf(this.roster.owner) : null; }
+
+  /** Is the owner (any device) here: connected, or announcing on the brokers? */
+  get ownerOnline() {
+    if (!this.roster || this.isOwner) return !!this.roster;
+    const { owner } = this.roster;
+    const direct = [...this.peers.values()].some(
+      (p) => p.state === 'p2p' && (p.member ?? p.id) === owner,
+    );
+    return direct || [...this.members].some(
+      ([id, m]) => (m.member ?? id) === owner && this.#isFresh(m),
+    );
+  }
+
+  /** Our own admission is missing from our copy of the member list (and has been for a while):
+   *  others refuse what we write until it arrives, from the owner or a member who has it. */
+  get unadmitted() {
+    return !!this.roster && !this.removed && !this.roster.isMember(this.identity.member)
+      && Date.now() - this.#openedAt > this.settings.adminTimeoutMs;
+  }
+  #openedAt = Date.now();
   get ownerId() { return this.roster?.owner ?? null; }
 
   /** Connection details of everyone we know, for the hold-V reveal:
@@ -333,6 +362,8 @@ export class Room extends Emitter {
   // ---- lifecycle -------------------------------------------------------------------
 
   start() {
+    // a new member's list needs a moment to arrive: then the notes about it may show
+    if (this.roster) this.#after(this.settings.adminTimeoutMs, () => this.#emitPeers());
     if (this.removed || !this.#brokersOn()) return;
     this.#openChannel();
     this.#announceEvery();
@@ -628,6 +659,19 @@ export class Room extends Emitter {
 
   #isFresh(member) { return Date.now() - member.seen < 3 * this.settings.presenceIntervalMs; }
 
+  /** Members online whose app speaks an older or newer protocol than ours (see PROTOCOL), by
+   *  name, once per person. Their devices count as one; our own devices are left out. */
+  get appGaps() {
+    const [older, newer] = [new Map(), new Map()];
+    for (const [id, m] of this.members) {
+      const who = m.member ?? id;
+      if (!m.pv || !this.#isFresh(m) || this.isMine(who)) continue;
+      if (m.pv < PROTOCOL) older.set(who, this.#nameOf(who));
+      else if (m.pv > PROTOCOL) newer.set(who, this.#nameOf(who));
+    }
+    return { older: [...older.values()], newer: [...newer.values()] };
+  }
+
   // ---- receiving -------------------------------------------------------------------------
 
   /** `gossip`: pass a new message on to our other links (not for history, see #gossipBatch). */
@@ -660,7 +704,7 @@ export class Room extends Emitter {
    *  we have not seen (it travels on direct links and, now, over the brokers): keep it, ask. */
   #refuse(env) {
     const author = authorIdOf(env);
-    const stranger = this.roster && !ADMIN_KINDS.includes(env.kind) && !this.roster.isMember(author)
+    const stranger = this.roster && !ADMIN_KINDS.includes(env.kind) && !this.#knows(author)
       && !this.roster.revoked.has(author);
     if (!stranger) {
       const removed = this.roster?.revoked.has(author);
@@ -790,7 +834,7 @@ export class Room extends Emitter {
     if (entry.invited && this.isOwner && member !== entry.id && !this.roster.isMember(member)) {
       await this.#desk.admit(member, entry.name).catch(() => {});
     }
-    if (this.roster && !entry.synced && this.roster.isMember(member)) this.#markSynced(entry);
+    if (this.roster && !entry.synced && this.#knows(member)) this.#markSynced(entry);
     this.#maybeSibling(entry);
     this.#emitPeers();
   }
@@ -807,8 +851,14 @@ export class Room extends Emitter {
     if (env.kind === 'del' && authorOfId(env.body.id) !== author && author !== owner) return false;
     if (env.kind === 'edit' && authorOfId(env.body.id) !== author) return false; // own only
     if (!this.roster) return !ADMIN_KINDS.includes(env.kind); // open rooms have no admin
-    return ADMIN_KINDS.includes(env.kind) || this.roster.isMember(author);
+    return ADMIN_KINDS.includes(env.kind) || this.#knows(author);
   }
+
+  /** Is `id` a member as far as we know, or one of our own devices (the main identity this
+   *  device writes as)? Our own messages need no admission to be trusted by us: our list may
+   *  lack our own admission (it can wait for a link nobody online has), and a device of ours
+   *  must not refuse the others. */
+  #knows(id) { return this.roster.isMember(id) || this.isMine(id); }
 
   async #accept(env, source, gossip = true) {
     const batch = this.roster && ADMIN_KINDS.includes(env.kind) ? this.roster.apply(env) : [env];
@@ -817,10 +867,28 @@ export class Room extends Emitter {
       const done = await this.#keep(e, source, gossip);
       if (e === env) kept = done;
     }
+    if (this.roster && ADMIN_KINDS.includes(env.kind)) await this.#saveWaiting();
     if (this.roster && this.#pending.size && batch.some((e) => ADMIN_KINDS.includes(e.kind))) {
       this.#after(0, () => this.#retryPending());
     }
     return kept;
+  }
+
+  #waitingSaved = '';
+  #waitingKey() { return this.roster.waitingEnvs().map((e) => e.id).join(); }
+
+  /** An admin envelope that cannot be applied yet (its predecessor is missing) is not part of
+   *  the log, so it is kept on its own: a joiner's own admission may only ever have come with
+   *  the grant, and was lost when the page restarted before the rest of the list arrived. */
+  async #saveWaiting() {
+    const key = this.#waitingKey();
+    if (key === this.#waitingSaved) return;
+    this.#waitingSaved = key;
+    const held = this.roster.waitingEnvs();
+    try {
+      if (held.length) await this.#kv.put(`wait:${this.id}`, held);
+      else await this.#kv.delete(`wait:${this.id}`);
+    } catch (err) { console.error('could not save the member list', err); }
   }
 
   /** Older edits / reactions that `env` replaces; null if a newer one is already here. For one
@@ -981,7 +1049,7 @@ export class Room extends Emitter {
     }
     if (this.roster && m?.t === 'admin' && Array.isArray(m.es)) {
       for (const e of m.es.slice(0, 100)) await this.#ingest(e, null);
-      if (!entry.synced && this.roster.isMember(entry.member ?? entry.id)) this.#markSynced(entry);
+      if (!entry.synced && this.#knows(entry.member ?? entry.id)) this.#markSynced(entry);
       return;
     }
     if (this.roster && !entry.synced) return; // not (yet) known to be a member: ignored
@@ -1147,7 +1215,7 @@ export class Room extends Emitter {
         this.#maybeSibling(entry);
       } else {
         this.#sendAdmin(link);
-        if (this.roster.isMember(peer.id)) this.#markSynced(entry);
+        if (this.#knows(peer.id)) this.#markSynced(entry);
         const wait = setTimeout(() => !entry.synced && link.close(), this.settings.adminTimeoutMs);
         wait.unref?.();
       }
@@ -1239,17 +1307,19 @@ export class Room extends Emitter {
   #announce() {
     this.#channel?.announce({
       pub: this.identity.pub, name: this.#name, cert: this.identity.cert,
-      alias: this.identity.alias,
+      alias: this.identity.alias, pv: PROTOCOL, app: VERSION,
     });
   }
 
-  async #onPresence({ id, pub, name, member, device, alias }) {
+  async #onPresence({ id, pub, name, member, device, alias, pv, app }) {
     if (this.roster?.revoked.has(member ?? id)) return;
     if (member && this.#isUnlinked({ d: toB64u(pub) }, member)) return; // a withdrawn device
     if (member || alias) this.#multi.add(member ?? id);
-    const isNew = !this.members.has(id);
-    this.members.set(id, { pub, name, seen: Date.now(), member, device, alias });
+    const before = this.members.get(id);
+    const isNew = !before;
+    this.members.set(id, { pub, name, seen: Date.now(), member, device, alias, pv, app });
     if (isNew) { this.#emitPeers(); this.#announceSoon(); }
+    else if (before.pv !== pv) this.#emitPeers(); // they updated (or went back)
     const state = this.peers.get(id)?.state;
     // Glare rule: the peer with the smaller id always makes the offer.
     if (!state && this.identity.id < id) await this.#pairing.dial({ id, pub, name });

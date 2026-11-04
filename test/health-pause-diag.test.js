@@ -29,6 +29,35 @@ test('a broker that answers is up with its time; a dead one is not', async () =>
   assert.match(bad.error, /socket error/);
 });
 
+test('a broker that connects but does not relay is down, with the reason', async () => {
+  for (const [mode, error] of [
+    ['drop', /no relay: publish not relayed/], ['refuse', /no relay: subscribe refused/],
+    ['silent', /no relay: subscribe timeout/],
+  ]) {
+    const r = await probeBroker('wss://fake', { WS: new FakeBroker(mode).ws(), timeoutMs: 100 });
+    assert.equal(r.ok, false, mode);
+    assert.equal(r.relay, false, mode);
+    assert.match(r.error, error, mode);
+  }
+});
+
+test('BrokerHealth: fail() marks down; only a probe clears a no-relay broker', async () => {
+  let probed = { ok: true, ms: 9 };
+  const health = new BrokerHealth({ probe: async (url) => ({ url, ...probed }) });
+  let changes = 0;
+  health.on('change', () => changes++);
+  health.fail('wss://x', 'no relay: subscribe timeout');
+  health.fail('wss://x', 'no relay: subscribe timeout');
+  assert.equal(changes, 1);
+  assert.equal(health.isDown('wss://x'), true);
+  health.report('wss://x', 5);
+  assert.equal(health.isDown('wss://x'), true);
+  await health.check(['wss://x']);
+  assert.equal(health.isDown('wss://x'), false);
+  health.report('wss://x', 5);
+  assert.equal(health.rows(['wss://x'])[0].ms, 5, 'after that, reports count again');
+});
+
 test('rankBrokers: fastest first, the ones that failed last', async () => {
   const WS = new FakeBroker().ws();
   const ranked = await rankBrokers(['wss://a', 'wss://b'], { WS });

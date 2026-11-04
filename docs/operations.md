@@ -7,10 +7,14 @@ see why it does not.
 
 ## Broker health
 
-At startup every configured broker is probed (WebSocket and MQTT CONNACK, with its time), like
+At startup every configured broker is probed (WebSocket and MQTT CONNACK, with its time, then a
+loopback: subscribe to a probe topic, publish to it, wait for the message to come back), like
 STUN. Channels connect to the fast ones first; a broker whose probe failed is left alone (a retry
 only every minute or so, at once if a real connection works) and probed again every five minutes.
-Settings shows each broker with its time or "not reachable", with a *Check brokers* button.
+A broker that connects but refuses a subscription (SUBACK failure or none within 8 s) or does not
+relay is down too, shown as "does not pass messages on"; a connection alone does not clear that,
+only a passing probe does. Settings shows each broker with its time, "not reachable" or "does not
+pass messages on", with a *Check brokers* button. The lab runs the same probe.
 
 ## Install icons
 

@@ -5,12 +5,14 @@ import {
   decodePublish,
   encodePublish,
   encodeSubscribe,
+  encodeSuback,
   MqttClient,
 } from '../src/net/mqtt.js';
 import { RoomChannel } from '../src/net/room-channel.js';
 import { deriveRoomKeys, newRoomSecret } from '../src/crypto/room-keys.js';
 import { newIdentity } from './helpers.js';
 import { FakeBroker, until } from './fakes.js';
+import { BrokerHealth } from '../src/net/broker-health.js';
 
 test('PacketParser reassembles packets split into single bytes and merged frames', () => {
   // forces a 2-byte remaining length
@@ -37,6 +39,50 @@ test('MqttClient connects, subscribes and receives its own publish', async () =>
   client.publish('t/1', Uint8Array.of(1, 2, 3));
   assert.deepEqual(await got, ['t/1', Uint8Array.of(1, 2, 3)]);
   client.close();
+});
+
+test('subscribe resolves on SUBACK and rejects on refusal, silence and close', async () => {
+  const connect = async (mode, opts) => {
+    const client = new MqttClient('wss://fake', { WS: new FakeBroker(mode).ws(), ...opts });
+    await client.connect();
+    return client;
+  };
+  const ok = await connect('ok');
+  await ok.subscribe('t/1');
+  ok.close();
+  const refused = await connect('refuse');
+  await assert.rejects(refused.subscribe('t/1'), /subscribe refused/);
+  refused.close();
+  const silent = await connect('silent', { subscribeTimeoutMs: 20 });
+  await assert.rejects(silent.subscribe('t/1'), /subscribe timeout/);
+  const pending = silent.subscribe('t/2');
+  silent.close();
+  await assert.rejects(pending, /connection closed/);
+  await assert.rejects(silent.subscribe('t/3'), /not connected/);
+  assert.deepEqual(
+    new PacketParser().push(encodeSuback(0x0102, 0x80))[0],
+    { type: 9, flags: 0, body: Uint8Array.of(1, 2, 0x80) },
+  );
+});
+
+test('roundTrip passes only through a broker that relays', async () => {
+  const connect = async (mode) => {
+    const client = new MqttClient('wss://fake', {
+      WS: new FakeBroker(mode).ws(), subscribeTimeoutMs: 50,
+    });
+    await client.connect();
+    return client;
+  };
+  const ok = await connect('ok');
+  assert.ok(await ok.roundTrip('t/probe', 500) >= 0);
+  ok.close();
+  for (const [mode, error] of [
+    ['drop', /publish not relayed/], ['refuse', /refused/], ['silent', /subscribe timeout/],
+  ]) {
+    const client = await connect(mode);
+    await assert.rejects(client.roundTrip('t/probe', 200), error, mode);
+    client.close();
+  }
 });
 
 test('MqttClient rejects when the socket fails', async () => {
@@ -85,4 +131,34 @@ test('RoomChannel: presence, signaling and relay across brokers; needs the room 
   assert.deepEqual(seen.signal[0], Uint8Array.of(9, 9));
   assert.equal(seen.outsider, 0);
   [a, b, outsider].forEach((c) => c.stop());
+});
+
+test('RoomChannel: a broker that refuses subscriptions is marked down; others carry', async () => {
+  const brokers = [['wss://good', 'ok'], ['wss://bad', 'refuse']].map(
+    ([url, mode]) => ({ url, broker: new FakeBroker(mode) }),
+  );
+  const keys = await deriveRoomKeys(newRoomSecret());
+  const [ida, idb] = [await newIdentity(), await newIdentity()];
+  const health = new BrokerHealth();
+  const make = (identity) => new RoomChannel({
+    roomId: keys.id, aes: keys.aes, selfId: identity.id, topicPrefix: 't',
+    brokers: brokers.map((b) => b.url), health,
+    WS: class {
+      constructor(url) { return new (brokers.find((b) => b.url === url).broker.ws())(); }
+    },
+  });
+  const [a, b] = [make(ida), make(idb)];
+  const got = [];
+  b.on('relay', (r) => got.push(r));
+  [a, b].forEach((c) => c.start());
+  await until(() => health.isDown('wss://bad') && health.rows(['wss://good'])[0].ok);
+  const [down] = health.rows(['wss://bad']);
+  assert.equal(down.relay, false);
+  assert.match(down.error, /no relay: subscribe refused/);
+  health.report('wss://bad', 5); // connecting is not enough to clear it
+  assert.equal(health.isDown('wss://bad'), true);
+  await a.sendRelay(Uint8Array.of(7));
+  await until(() => got.length);
+  assert.deepEqual(got, [Uint8Array.of(7)]);
+  [a, b].forEach((c) => c.stop());
 });

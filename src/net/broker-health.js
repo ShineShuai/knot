@@ -1,20 +1,31 @@
-// Which public MQTT brokers answer, and how fast. Probed once at startup (like STUN, see
-// ice-probe.js) and again every few minutes for the ones that failed; real connections that
+// Which public MQTT brokers answer and relay, and how fast. Probed once at startup (like STUN,
+// see ice-probe.js) and again every few minutes for the ones that failed; real connections that
 // succeed report their time too. Channels connect to the fast ones first and retry a broker
 // that is known to be down only slowly, instead of hammering it with reconnects.
+import { DEFAULTS } from '../config.js';
 import { Emitter } from '../util/emitter.js';
+import { randomBytes, toB64u } from '../util/bytes.js';
 import { MqttClient } from './mqtt.js';
 
 const now = () => performance.now();
 export const DOWN_RETRY_MS = 60_000; // how long a channel waits before trying a down broker
 
-/** Can we open a WebSocket to the broker and get its MQTT CONNACK? How long did it take? */
-export async function probeBroker(url, { timeoutMs = 5000, WS = globalThis.WebSocket } = {}) {
+/** Can we open a WebSocket to the broker and get its MQTT CONNACK (`ms`: how long that took)?
+ *  Does it also relay: a message published to a topic we subscribed to comes back? A broker that
+ *  connects but does not is down, with `relay: false`. */
+export async function probeBroker(url, {
+  timeoutMs = 5000, WS = globalThis.WebSocket, topicPrefix = DEFAULTS.topicPrefix,
+} = {}) {
   const t0 = now();
-  const client = new MqttClient(url, { WS, connectTimeoutMs: timeoutMs });
+  const client = new MqttClient(url, {
+    WS, connectTimeoutMs: timeoutMs, subscribeTimeoutMs: timeoutMs,
+  });
   try {
     await client.connect();
-    return { url, ok: true, ms: Math.round(now() - t0) };
+    const ms = Math.round(now() - t0);
+    try { await client.roundTrip(`${topicPrefix}/probe/${toB64u(randomBytes(9))}`, timeoutMs); }
+    catch (err) { return { url, ok: false, relay: false, ms, error: `no relay: ${err.message}` }; }
+    return { url, ok: true, ms };
   } catch (err) {
     return { url, ok: false, ms: Math.round(now() - t0), error: err.message };
   } finally { client.close(); }
@@ -29,7 +40,7 @@ export async function rankBrokers(urls, opts) {
 
 /** Events: 'change' (something about a broker's health changed). */
 export class BrokerHealth extends Emitter {
-  #state = new Map(); // url -> { url, ok, ms, error }
+  #state = new Map(); // url -> { url, ok, ms, error, relay: false: connects, does not relay }
   #timer = null;
   #probe; #recheckMs;
 
@@ -61,11 +72,20 @@ export class BrokerHealth extends Emitter {
     return results;
   }
 
-  /** A real connection worked: that is as good as a probe. */
+  /** A real connection worked and its subscriptions were granted: as good as a probe, except
+   *  that it does not clear a broker found not to relay (only a passing probe does). */
   report(url, ms) {
     const before = this.#state.get(url);
+    if (before?.relay === false) return;
     this.#state.set(url, { url, ok: true, ms });
     if (before?.ok !== true) this.emit('change');
+  }
+
+  /** A real connection reached the broker, but it refused or ignored our subscriptions. */
+  fail(url, error) {
+    const before = this.#state.get(url);
+    this.#state.set(url, { url, ok: false, relay: false, ms: before?.ms ?? 0, error });
+    if (before?.ok !== false) this.emit('change');
   }
 
   /** True only for a broker whose probe failed (and that has not connected since). */

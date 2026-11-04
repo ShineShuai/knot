@@ -115,14 +115,20 @@ export class RoomChannel extends Emitter {
       const t0 = Date.now();
       try {
         await client.connect();
-        this.health?.report(url, Date.now() - t0);
+        const ms = Date.now() - t0;
         delay = 1000;
+        const closed = new Promise((resolve) => client.on('close', resolve));
         client.on('message', (topic, payload) => this.#onMessage(topic, payload));
-        const topics = [`${this.base}/p`, `${this.base}/s/${this.selfId}`, `${this.base}/m`];
-        for (const topic of topics) client.subscribe(topic);
         this.#clients.set(url, client);
         this.emit('status', this.status);
-        await new Promise((resolve) => client.on('close', resolve));
+        const topics = [`${this.base}/p`, `${this.base}/s/${this.selfId}`, `${this.base}/m`];
+        try { await Promise.all(topics.map((topic) => client.subscribe(topic))); }
+        catch (err) { // refused or never answered: it takes our messages but would not pass them on
+          if (client.connected) this.health?.fail(url, `no relay: ${err.message}`);
+          throw err;
+        }
+        this.health?.report(url, ms);
+        await closed;
       } catch { /* unreachable broker: back off and retry */ }
       this.#clients.delete(url);
       client.close();

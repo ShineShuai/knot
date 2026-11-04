@@ -1,7 +1,9 @@
 // In-memory stand-ins for the network so Room logic can be tested in Node.
 import { Emitter } from '../src/util/emitter.js';
 import { randomBytes, toB64u } from '../src/util/bytes.js';
-import { PacketParser, decodePublish, encodeConnack, encodePublish } from '../src/net/mqtt.js';
+import {
+  PacketParser, decodePublish, encodeConnack, encodePublish, encodeSuback,
+} from '../src/net/mqtt.js';
 
 const sdpInfo = (ufrag) => (
   {
@@ -72,9 +74,11 @@ export class DeadLink extends FakeLink {
   async acceptAnswer() {}
 }
 
-/** An in-memory MQTT broker; WebSocket-compatible class bound to it via `ws()`. */
+/** An in-memory MQTT broker; WebSocket-compatible class bound to it via `ws()`.
+ *  `mode`: 'ok' | 'refuse' (SUBACK failure) | 'silent' (no SUBACK) | 'drop' (acks, no relay). */
 export class FakeBroker {
   sockets = new Set();
+  constructor(mode = 'ok') { this.mode = mode; }
   ws() {
     const broker = this;
     return class FakeWS {
@@ -98,10 +102,13 @@ export class FakeBroker {
   handle(sock, { type, flags, body }) {
     if (type === 1) sock.deliver(encodeConnack(0));
     else if (type === 8) {
+      if (this.mode === 'silent') return;
+      if (this.mode === 'refuse') return sock.deliver(encodeSuback((body[0] << 8) | body[1], 0x80));
       const n = (body[2] << 8) | body[3];
       sock.topics.add(new TextDecoder().decode(body.subarray(4, 4 + n)));
+      sock.deliver(encodeSuback((body[0] << 8) | body[1]));
     }
-    else if (type === 3) {
+    else if (type === 3 && this.mode !== 'drop') {
       const { topic, payload } = decodePublish({ flags, body });
       for (const s of this.sockets) if (s.topics.has(topic)) s.deliver(
         encodePublish(topic, payload),

@@ -1,10 +1,11 @@
-// Minimal MQTT 3.1.1 client over WebSocket: CONNECT, SUBSCRIBE and PUBLISH at
-// QoS 0, keep-alive pings. That is all a rendezvous channel needs, and it keeps
+// Minimal MQTT 3.1.1 client over WebSocket: CONNECT, SUBSCRIBE (acknowledged by SUBACK) and
+// PUBLISH at QoS 0, keep-alive pings. That is all a rendezvous channel needs, and it keeps
 // the app free of third-party code.
 import { Emitter } from '../util/emitter.js';
-import { concat, fromUtf8, randomBytes, toB64u, utf8 } from '../util/bytes.js';
+import { concat, equalBytes, fromUtf8, randomBytes, toB64u, utf8 } from '../util/bytes.js';
 
-const TYPE = { CONNECT: 1, CONNACK: 2, PUBLISH: 3, PINGREQ: 12, DISCONNECT: 14 };
+const TYPE = { CONNECT: 1, CONNACK: 2, PUBLISH: 3, SUBACK: 9, PINGREQ: 12, DISCONNECT: 14 };
+const SUBACK_FAILURE = 0x80;
 
 const varInt = (n) => {
   const out = [];
@@ -33,6 +34,10 @@ export const encodePublish = (topic, payload) => packet(
   concat(lp(topic), payload),
 );
 export const encodeConnack = (code = 0) => Uint8Array.of(TYPE.CONNACK << 4, 2, 0, code);
+export const encodeSuback = (packetId, code = 0) => packet(
+  TYPE.SUBACK << 4,
+  Uint8Array.of(packetId >> 8, packetId & 255, code),
+);
 export const PING = Uint8Array.of(TYPE.PINGREQ << 4, 0);
 export const DISCONNECT = Uint8Array.of(TYPE.DISCONNECT << 4, 0);
 
@@ -78,14 +83,18 @@ export function decodePublish({ flags, body }) {
 export class MqttClient extends Emitter {
   connected = false;
   #ws; #parser = new PacketParser(); #pingTimer; #lastRx = 0; #nextId = 1; #closed = false;
+  #acks = new Map(); // packet id -> { resolve, reject, timer } of a SUBSCRIBE awaiting its SUBACK
 
   constructor(
     url,
-    { WS = globalThis.WebSocket, keepAliveSec = 30, connectTimeoutMs = 8000 } = {},
+    {
+      WS = globalThis.WebSocket, keepAliveSec = 30, connectTimeoutMs = 8000,
+      subscribeTimeoutMs = 8000,
+    } = {},
   ) {
     super();
     Object.assign(this, { url });
-    this.opts = { WS, keepAliveSec, connectTimeoutMs };
+    this.opts = { WS, keepAliveSec, connectTimeoutMs, subscribeTimeoutMs };
   }
 
   connect() {
@@ -109,6 +118,8 @@ export class MqttClient extends Emitter {
             this.connected = true;
             this.#startPings(keepAliveSec);
             resolve();
+          } else if (p.type === TYPE.SUBACK) {
+            this.#ack(p.body);
           } else if (p.type === TYPE.PUBLISH) {
             const { topic, payload } = decodePublish(p);
             this.emit('message', topic, payload);
@@ -118,8 +129,44 @@ export class MqttClient extends Emitter {
     });
   }
 
-  subscribe(topic) { this.#send(encodeSubscribe(this.#nextId++ & 0xffff, topic)); }
+  /** Resolves when the broker grants the subscription (SUBACK); rejects when it refuses, stays
+   *  silent for `subscribeTimeoutMs`, or the connection ends first. */
+  subscribe(topic) {
+    if (!this.connected) return Promise.reject(new Error('not connected'));
+    const id = this.#nextId;
+    this.#nextId = (id % 0xffff) + 1; // packet ids are 1..65535
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#acks.delete(id);
+        reject(new Error('subscribe timeout'));
+      }, this.opts.subscribeTimeoutMs);
+      this.#acks.set(id, { resolve, reject, timer });
+      this.#send(encodeSubscribe(id, topic));
+    });
+  }
+
   publish(topic, payload) { this.#send(encodePublish(topic, payload)); }
+
+  /** Subscribe to `topic`, publish random bytes to it and wait for them to come back. A broker
+   *  that accepts connections but does not relay fails here. Resolves to the time it took. */
+  async roundTrip(topic, timeoutMs = 5000) {
+    const t0 = Date.now();
+    const probe = randomBytes(8);
+    let off, timer;
+    const echoed = new Promise((resolve, reject) => {
+      off = this.on('message', (t, payload) => {
+        if (t === topic && equalBytes(payload, probe)) resolve();
+      });
+      timer = setTimeout(() => reject(new Error('publish not relayed')), timeoutMs);
+    });
+    echoed.catch(() => {}); // it may fail while still subscribing; `await echoed` reports it
+    try {
+      await this.subscribe(topic);
+      this.publish(topic, probe);
+      await echoed;
+      return Date.now() - t0;
+    } finally { off(); clearTimeout(timer); }
+  }
 
   close() {
     if (this.#closed) return;
@@ -127,6 +174,11 @@ export class MqttClient extends Emitter {
     clearInterval(this.#pingTimer);
     const wasConnected = this.connected;
     this.connected = false;
+    for (const { reject, timer } of this.#acks.values()) {
+      clearTimeout(timer);
+      reject(new Error('connection closed'));
+    }
+    this.#acks.clear();
     const ws = this.#ws;
     try {
       if (wasConnected && (ws.readyState === undefined || ws.readyState === 1)) ws.send(
@@ -138,6 +190,16 @@ export class MqttClient extends Emitter {
   }
 
   #send(bytes) { if (this.connected) this.#ws.send(bytes); }
+
+  #ack([hi, lo, code]) {
+    const id = (hi << 8) | lo;
+    const pending = this.#acks.get(id);
+    if (!pending) return;
+    this.#acks.delete(id);
+    clearTimeout(pending.timer);
+    if (code === SUBACK_FAILURE) pending.reject(new Error('subscribe refused'));
+    else pending.resolve();
+  }
 
   #startPings(keepAliveSec) {
     this.#lastRx = Date.now();

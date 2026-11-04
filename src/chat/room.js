@@ -37,6 +37,7 @@ import {
 } from './envelope.js';
 import { MessageLog, byStamp } from './log.js';
 import { MessageStore } from './message-store.js';
+import { JoinRequest } from './join.js';
 import { OwnerDesk } from './owner-desk.js';
 import { Pairing } from './pairing.js';
 import { ReadMarks } from './read-marks.js';
@@ -54,6 +55,7 @@ const ACK_DUP_MS = 5 * 60_000; // a repeated message is confirmed again if it is
 const ACK_TRACKED = 500; // own messages whose delivery is followed
 const PENDING_MAX = 200; // messages kept while their author's admission is unknown
 const PENDING_TTL_MS = 10 * 60 * 1000;
+const KNOCK_AGAIN_MS = 5 * 60_000; // how often a member who is not on the list asks to be let in
 const CHAIN_ASK_MS = 5000; // at most one question for the member list this often
 const ANSWER_QUIET_MS = 1500; // a relayed answer was heard: do not repeat it
 const RELAY_HAVE_IDS = 40; // ids in a `have` over the brokers (they carry less than a link does)
@@ -363,7 +365,9 @@ export class Room extends Emitter {
 
   start() {
     // a new member's list needs a moment to arrive: then the notes about it may show
-    if (this.roster) this.#after(this.settings.adminTimeoutMs, () => this.#emitPeers());
+    if (this.roster) {
+      this.#after(this.settings.adminTimeoutMs, () => { this.#emitPeers(); this.#knockAgain(); });
+    }
     if (this.removed || !this.#brokersOn()) return;
     this.#openChannel();
     this.#announceEvery();
@@ -378,6 +382,7 @@ export class Room extends Emitter {
     this.#announcing = true;
     this.#every(this.settings.presenceIntervalMs, () => this.#announce());
     // Messages and the member list that only the brokers can bring are asked for now and then.
+    this.#every(KNOCK_AGAIN_MS, () => this.#knockAgain());
     this.#every(RELAY_SYNC_MS, () => {
       if (this.#needsRelay()) this.#relaySync();
       else if (this.roster?.gap) this.#needChain(); // a link of the member list is missing
@@ -435,6 +440,52 @@ export class Room extends Emitter {
     channel.start();
   }
 
+  // ---- not on the list: ask the owner to let us in again ---------------------------------------
+
+  #knock = null; #declined = false;
+
+  /** This device holds the room but its own identity is not on the member list: typically it
+   *  started over with a new identity (a device that left its main device keeps its rooms), or
+   *  its admission was lost. Others refuse everything it writes, and nothing says so. Ask the
+   *  owner, as a join link would: they see a request and decide (a new identity is never let in
+   *  without them). Only while the owner is online, and not again once they declined. */
+  async #knockAgain() {
+    if (this.#knock || this.#declined || this.isOwner || !this.unadmitted) return;
+    if (!this.#brokersOn() || !this.ownerOnline) return;
+    const { lobbySecret, ownerId } = await this.joinLinkParts();
+    const ask = new JoinRequest({
+      identity: this.identity, lobbySecret, ownerId, name: this.#name, greeting: 'rejoining',
+      settings: this.settings, WS: this.WS,
+    });
+    this.#knock = ask;
+    ask.on('approved', (grant) => this.#letIn(grant));
+    ask.on('status', (status) => {
+      if (!['declined', 'timeout', 'offline'].includes(status)) return;
+      this.#declined = status === 'declined';
+      this.#knock = null;
+      this.#emitPeers();
+    });
+    await ask.start();
+    this.#emitPeers();
+  }
+
+  /** The owner let us in again: take the member list (and a key rotation we missed) they sent. */
+  async #letIn({ secret, admit, chain, epoch }) {
+    this.#knock = null;
+    if (this.removed || toB64u(secret) !== toB64u(this.secret)) return;
+    for (const env of Array.isArray(chain) ? chain.slice(0, 200) : []) {
+      await this.#ingest(env, null).catch(() => {});
+    }
+    if (admit) await this.#ingest(admit, null).catch(() => {});
+    if (epoch?.n > this.#epoch.n && typeof epoch.s === 'string') {
+      await this.#applyEpoch(epoch.n, fromB64u(epoch.s)).catch(() => {});
+    }
+    this.#emitPeers();
+  }
+
+  /** Have we asked the owner to let us in, and are waiting for the answer? */
+  get knocking() { return !!this.#knock; }
+
   // ---- key rotation ----------------------------------------------------------------------------
 
   /** Switch to the keys of rotation `n`. Whoever left (or lost the secret) cannot follow:
@@ -477,6 +528,7 @@ export class Room extends Emitter {
   }
 
   stop() {
+    this.#knock?.stop();
     for (const t of this.#timers) { clearInterval(t); clearTimeout(t); }
     this.call.leave();
     this.#channel?.stop();
@@ -1320,6 +1372,7 @@ export class Room extends Emitter {
     this.members.set(id, { pub, name, seen: Date.now(), member, device, alias, pv, app });
     if (isNew) { this.#emitPeers(); this.#announceSoon(); }
     else if (before.pv !== pv) this.#emitPeers(); // they updated (or went back)
+    if ((member ?? id) === this.roster?.owner) this.#knockAgain(); // the owner is here
     const state = this.peers.get(id)?.state;
     // Glare rule: the peer with the smaller id always makes the offer.
     if (!state && this.identity.id < id) await this.#pairing.dial({ id, pub, name });

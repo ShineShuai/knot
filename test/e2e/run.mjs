@@ -396,12 +396,13 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
   });
   // Settings: broker status (probed at startup), diagnostics report, storage line.
   await a.getByRole('button', { name: 'Settings' }).click();
+  await a.getByRole('button', { name: 'Network', exact: true }).click();
   await a.waitForFunction(() => document.querySelectorAll('.broker-health li').length === 3
     && [...document.querySelectorAll('.broker-health li')]
       .every((li) => !li.textContent.startsWith('…')),
   null, { timeout: 20000 });
+  await a.getByRole('button', { name: 'About', exact: true }).click();
   await a.getByRole('button', { name: 'Diagnostics' }).click();
-  await a.locator('dialog h2', { hasText: 'Diagnostics' }).waitFor();
   const report = await a.locator('dialog textarea').inputValue();
   assert.match(report, /^knot \d/);
   assert.match(report, /WebCrypto Ed25519: yes/);

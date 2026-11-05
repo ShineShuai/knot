@@ -56,6 +56,44 @@ export const DEFAULTS = Object.freeze({
   callAloneMs: 5 * 60 * 1000, // leave a call this long after the last other person left (0: never)
 });
 
+/** The network settings as they are by default, as fresh copies ("Reset to defaults"). */
+export const networkDefaults = () => structuredClone({
+  brokersEnabled: DEFAULTS.brokersEnabled, relayFallback: DEFAULTS.relayFallback,
+  brokers: DEFAULTS.brokers, stunServers: DEFAULTS.stunServers, turnServers: DEFAULTS.turnServers,
+});
+
+const MAX_LIST = 10; // as many entries and
+const MAX_URL = 200; // as many characters as the shared settings accept (chat/device-sync.js)
+const MAX_TURN_JSON = 2000;
+const ICE_URL = /^(turns?|stuns?):/;
+
+/** What is wrong with the network lists, as [{ field, code, n }]: the field ('stun', 'brokers',
+ *  'turn'), the text to show (an i18n key) and the entry's number from 1. [] if all is well. */
+export function networkProblems({ stunServers, brokers, turnServers }) {
+  const found = [];
+  const list = (field, urls, ok, code) => {
+    const bad = urls.findIndex((u) => !ok(u));
+    if (bad >= 0) found.push({ field, code, n: bad + 1 });
+    else if (urls.length > MAX_LIST || urls.some((u) => u.length > MAX_URL)) {
+      found.push({ field, code: 'listLimits', n: MAX_LIST });
+    }
+  };
+  list('stun', stunServers, (u) => /^stuns?:/.test(u), 'badStun');
+  list('brokers', brokers, (u) => u.startsWith('wss://'), 'badBroker');
+  turnServers.forEach((server, i) => {
+    const urls = [server.urls].flat().filter(Boolean);
+    if (!urls.every((u) => ICE_URL.test(u))) {
+      found.push({ field: 'turn', code: 'badTurn', n: i + 1 });
+    } else if (urls.some((u) => u.startsWith('turn')) && !(server.username && server.credential)) {
+      found.push({ field: 'turn', code: 'turnLogin', n: i + 1 }); // browsers refuse it without
+    }
+  });
+  if (turnServers.length > MAX_LIST || JSON.stringify(turnServers).length > MAX_TURN_JSON) {
+    found.push({ field: 'turn', code: 'listLimits', n: MAX_LIST });
+  }
+  return found;
+}
+
 export async function loadSettings(kv) {
   return { ...DEFAULTS, ...((await kv.get('settings')) ?? {}) };
 }

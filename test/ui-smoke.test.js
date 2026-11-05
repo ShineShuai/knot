@@ -213,12 +213,10 @@ test('ui: every dialog ends with Save and Cancel, or with Close when it changes 
   await open('invite', () => button(a.root, 'Invite').click());
   await open('members', () => button(a.root, 'Members').click());
   await open('settings', () => button(a.root, 'Settings').click());
-  await open('devices', () => { shut(); button(a.root, 'Settings').click(); });
-  button(dialog, 'Linked devices').click();
+  button(dialog, 'Devices').click(); // the pages are in the dialog: the footer stays
   await tick();
   seen.devices = footer();
-  button(a.root, 'Settings').click();
-  await tick();
+  button(dialog, 'About').click();
   button(dialog, 'Diagnostics').click();
   await tick();
   seen.diagnostics = footer();
@@ -226,8 +224,8 @@ test('ui: every dialog ends with Save and Cancel, or with Close when it changes 
   assert.deepEqual(seen.join, ['Join', 'Cancel']);
   assert.deepEqual(seen.invite, ['Close']);
   assert.deepEqual(seen.members, ['Close']);
-  assert.deepEqual(seen.settings, ['Save', 'Cancel']);
-  assert.deepEqual(seen.devices, ['Save', 'Cancel']);
+  assert.deepEqual(seen.settings, ['Close'], 'its pages apply their changes themselves');
+  assert.deepEqual(seen.devices, ['Close']);
   assert.deepEqual(seen.diagnostics, ['Close']);
   shut();
 });

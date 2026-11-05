@@ -77,6 +77,14 @@ The answer carries the member list and any key rotation missed. It asks again ev
 not at all while the owner is away, and never again after a no. On the owner's side the banner of
 waiting messages points to the join requests.
 
+The owner can also let in a sender who does not ask (an app from before the request above, or one
+that was declined): Members lists "Wrote, but not on the list", each with the short id the messages
+are signed with and how many wait. *Let in* admits that key under the name it signs (after a
+confirmation: anyone with the room's secret can sign any name); *Ignore* drops what waits and holds
+nothing more from them until the page restarts. A device that separates from its main device
+(`leaveLink`) or is withdrawn keeps its rooms but gets a new identity: rooms its main identity owns
+stay with that identity, and in other owned rooms the owner has to let it in again.
+
 ## App versions
 
 Presence carries `pv`, a whole number that only goes up (`PROTOCOL` in `src/version.js`, with what

@@ -134,7 +134,12 @@ const en = {
   tickDelivered: 'Delivered to {n}',
   waitingMembers: 'Messages waiting for the member list: {n}. Asking the others for it…',
   notAdmitted: 'Others may not see your messages: you are not on this room\'s member list (this device may have a new identity). {owner}, the room owner, has to let you in again; a request goes to them when they are online.',
-  waitingAsOwner: 'These are from someone who is not on the member list, perhaps a member whose device has a new identity. If you know them, look under Members → Join requests.',
+  wroteNotOnList: 'Wrote, but not on the list',
+  letIn: 'Let in',
+  dismiss: 'Ignore',
+  waitingCount: '{n} message(s) waiting',
+  letInConfirm: 'Let {name} ({id}) in? They have this room\'s secret and wrote these messages, but anyone with the secret can use any name.',
+  waitingAsOwner: 'These are from someone who is not on the member list, perhaps a member whose device has a new identity. If you know them, you can let them in under Members.',
   waitingOwner: '{owner} owns this room and is offline: the list comes from them or from a member who has it.',
   appOlder: '{names}: older app than yours. Some messages may not get through until they update.',
   appNewer: '{names}: newer app than yours. Reload or update this app if messages stop arriving.',
@@ -256,7 +261,7 @@ const en = {
   linkedTo: 'This is a linked device: it uses the identity of your main device ({id}), so in rooms you appear as one person. To use it on its own again, separate it from the main device below.',
   unlinkedNotice: 'This device is no longer linked. It restarts as a device of its own, with a new identity.',
   leaveLink: 'Separate this device from the main device',
-  leaveLinkConfirm: 'Separate this device from your main device? It stops sharing your identity, rooms and settings, restarts with a new identity and keeps the history of its rooms. It can then link other devices.',
+  leaveLinkConfirm: 'Separate this device from your main device? It stops sharing your identity, rooms and settings, restarts with a new identity and keeps the history of its rooms. It can then link other devices. In rooms with an owner, the owner has to let it in again; rooms owned by your main device stay with that device.',
 };
 const zh = {
   newRoom: '新建房间',
@@ -387,7 +392,12 @@ const zh = {
   tickDelivered: '已送达 {n} 人',
   waitingMembers: '正在等待成员列表，待处理的消息：{n}。正在向其他人询问…',
   notAdmitted: '其他人可能看不到你的消息：你不在这个房间的成员列表中（此设备可能换了新身份）。需要房主 {owner} 重新批准；房主在线时会自动向其发出申请。',
-  waitingAsOwner: '这些消息来自不在成员列表中的人，可能是设备换了新身份的成员。如果你认识对方，请在“成员”→“加入申请”中查看。',
+  wroteNotOnList: '发过消息，但不在列表中',
+  letIn: '让其加入',
+  dismiss: '忽略',
+  waitingCount: '{n} 条消息待处理',
+  letInConfirm: '让 {name}（{id}）加入？对方持有此房间的密钥并发来了这些消息，但任何持有密钥的人都可以使用任意名字。',
+  waitingAsOwner: '这些消息来自不在成员列表中的人，可能是设备换了新身份的成员。如果你认识对方，可在“成员”中让其加入。',
   waitingOwner: '房主 {owner} 不在线：成员列表只能来自房主或持有它的成员。',
   appOlder: '{names}：应用版本比你的旧，更新前部分消息可能无法送达。',
   appNewer: '{names}：应用版本比你的新。如果消息不再送达，请刷新或更新本应用。',
@@ -509,7 +519,7 @@ const zh = {
   linkedTo: '这是一台已关联设备：它使用主设备（{id}）的身份，因此在房间里你显示为同一个人。若要单独使用，请在下面与主设备分离。',
   unlinkedNotice: '此设备已不再关联，将作为独立设备以新身份重新启动。',
   leaveLink: '将此设备与主设备分离',
-  leaveLinkConfirm: '将此设备与主设备分离？它将不再共享你的身份、房间和设置，以新身份重新启动，并保留房间的聊天记录。之后它可以关联其他设备。',
+  leaveLinkConfirm: '将此设备与主设备分离？它将不再共享你的身份、房间和设置，以新身份重新启动，并保留房间的聊天记录。之后它可以关联其他设备。在有房主的房间里，需要房主重新批准；由主设备拥有的房间仍归主设备所有。',
 };
 const de = {
   newRoom: 'Neuer Raum',
@@ -646,7 +656,12 @@ const de = {
   tickDelivered: 'Zugestellt an {n}',
   waitingMembers: 'Nachrichten, die auf die Mitgliederliste warten: {n}. Frage die anderen danach …',
   notAdmitted: 'Andere sehen deine Nachrichten womöglich nicht: Du stehst nicht auf der Mitgliederliste dieses Raums (dieses Gerät hat vielleicht eine neue Identität). {owner}, der Raumbesitzer, muss dich erneut hereinlassen; eine Anfrage geht an ihn, sobald er online ist.',
-  waitingAsOwner: 'Diese stammen von jemandem, der nicht auf der Mitgliederliste steht, vielleicht von einem Mitglied, dessen Gerät eine neue Identität hat. Wenn du die Person kennst: Mitglieder → Beitrittsanfragen.',
+  wroteNotOnList: 'Hat geschrieben, steht aber nicht auf der Liste',
+  letIn: 'Hereinlassen',
+  dismiss: 'Ignorieren',
+  waitingCount: '{n} Nachricht(en) wartend',
+  letInConfirm: '{name} ({id}) hereinlassen? Die Person kennt den Schlüssel dieses Raums und hat diese Nachrichten geschrieben, aber jeder mit dem Schlüssel kann einen beliebigen Namen verwenden.',
+  waitingAsOwner: 'Diese stammen von jemandem, der nicht auf der Mitgliederliste steht, vielleicht von einem Mitglied, dessen Gerät eine neue Identität hat. Wenn du die Person kennst, kannst du sie unter Mitglieder hereinlassen.',
   waitingOwner: 'Der Raumbesitzer {owner} ist offline: Die Liste kommt von ihm oder von einem Mitglied, das sie hat.',
   appOlder: '{names}: ältere App-Version als deine. Manche Nachrichten kommen erst nach einem Update an.',
   appNewer: '{names}: neuere App-Version als deine. Lade neu oder aktualisiere, wenn Nachrichten ausbleiben.',
@@ -768,7 +783,7 @@ const de = {
   linkedTo: 'Dies ist ein verknüpftes Gerät: Es nutzt die Identität deines Hauptgeräts ({id}), du erscheinst in Räumen also als eine Person. Um es wieder allein zu nutzen, trenne es unten vom Hauptgerät.',
   unlinkedNotice: 'Dieses Gerät ist nicht mehr verknüpft. Es startet als eigenes Gerät mit neuer Identität neu.',
   leaveLink: 'Dieses Gerät vom Hauptgerät trennen',
-  leaveLinkConfirm: 'Dieses Gerät vom Hauptgerät trennen? Es teilt dann Identität, Räume und Einstellungen nicht mehr, startet mit neuer Identität neu und behält den Verlauf seiner Räume. Danach kann es andere Geräte verknüpfen.',
+  leaveLinkConfirm: 'Dieses Gerät vom Hauptgerät trennen? Es teilt dann Identität, Räume und Einstellungen nicht mehr, startet mit neuer Identität neu und behält den Verlauf seiner Räume. Danach kann es andere Geräte verknüpfen. In Räumen mit Besitzer muss der Besitzer es erneut hereinlassen; Räume, die dem Hauptgerät gehören, bleiben bei diesem.',
 };
 export const dictionaries = { en, zh, de };
 /** Each language's name in that language, so you can find yours whatever the UI speaks now. */

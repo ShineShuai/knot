@@ -260,3 +260,41 @@ test('it does not knock while the owner is away, and not again once declined', a
   assert.equal(room(again).unadmitted, true);
   assert.equal(home.roster.isMember(again.identity.id), false);
 });
+
+test('the owner can let in a sender who does not ask (an older app), or ignore them', async () => {
+  const { broker, bob, home } = await clubWithBob();
+  const again = await startOver(broker, bob);
+  await room(again).sendText('first');
+  await until(() => home.joinRequests.length === 1, 8000);
+  await home.declineJoin(home.joinRequests[0].id); // now it will not ask again, like an old app
+  await until(() => !room(again).knocking, 8000);
+  await room(again).sendText('second');
+  await until(() => home.waitingSenders.length === 1, 8000);
+  const [sender] = home.waitingSenders;
+  assert.deepEqual([sender.id, sender.name], [again.identity.id, 'Bob']);
+  assert.ok(sender.count >= 1);
+  await assert.rejects(room(again).admitSender(sender.id), /Only the room owner/);
+  await assert.rejects(home.admitSender('nobody'), /No messages from them/);
+
+  await home.admitSender(sender.id);
+  assert.equal(home.roster.isMember(again.identity.id), true);
+  await until(() => home.waitingSenders.length === 0 && home.pendingCount === 0, 8000);
+  await until(() => texts(home).includes('first') && texts(home).includes('second'), 8000);
+  await until(() => !room(again).unadmitted, 8000);
+  await home.sendText('welcome');
+  await until(() => texts(room(again)).includes('welcome'), 8000);
+});
+
+test('ignoring a sender drops what waits and stops holding what comes', async () => {
+  const { broker, bob, home } = await clubWithBob();
+  const again = await startOver(broker, bob);
+  await room(again).sendText('hello?');
+  await until(() => home.waitingSenders.length === 1, 8000);
+  home.dismissSender(again.identity.id);
+  assert.equal(home.pendingCount, 0);
+  await room(again).sendText('again');
+  await wait(1200);
+  assert.equal(home.waitingSenders.length, 0);
+  assert.equal(home.pendingCount, 0);
+  assert.equal(home.roster.isMember(again.identity.id), false);
+});

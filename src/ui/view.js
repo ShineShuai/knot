@@ -421,11 +421,12 @@ class Ui {
       ? h('button', { onclick: () => this.roomDialogs.members(room) }) : null;
     const drawMembersBtn = () => {
       if (!membersBtn) return;
-      const open = room.isOwner ? room.joinRequests.length : 0;
+      const open = room.isOwner ? room.joinRequests.length + room.waitingSenders.length : 0;
       membersBtn.textContent = open ? `${t('members')} (${open})` : t('members');
     };
     drawMembersBtn();
-    this.#offStage.push(room.on('requests', drawMembersBtn), room.on('roster', drawMembersBtn));
+    this.#offStage.push(room.on('requests', drawMembersBtn), room.on('roster', drawMembersBtn),
+      room.on('pending', drawMembersBtn));
 
     this.stage.replaceChildren(
       h('header', { class: 'stage-head' },

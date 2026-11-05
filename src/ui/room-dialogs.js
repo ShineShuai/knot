@@ -190,10 +190,22 @@ export class RoomDialogs {
           h('button', { class: 'primary', onclick: () => run(room.approveJoin(r.id)) },
             t('approve')),
           h('button', { onclick: () => run(room.declineJoin(r.id)) }, t('decline')))));
+      const senders = room.waitingSenders.map((s) => h('div', { class: 'request' },
+        h('b', {}, plain(s.name)), ' ',
+        h('span', { class: 'file-size' },
+          `${s.id.slice(0, 6)} · ${t('waitingCount', { n: s.count })}`),
+        h('div', { class: 'actions' },
+          h('button', {
+            class: 'primary',
+            onclick: () => confirm(t('letInConfirm', { name: plain(s.name), id: s.id.slice(0, 6) }))
+              && run(room.admitSender(s.id)),
+          }, t('letIn')),
+          h('button', { onclick: () => room.dismissSender(s.id) }, t('dismiss')))));
       body.replaceChildren(
         h('ul', { class: 'members-list' }, ...rows),
         ...(room.isOwner ? [h('h3', {}, t('requests')),
           ...(asks.length ? asks : [h('p', { class: 'file-size' }, t('noRequests'))]),
+          ...(senders.length ? [h('h3', {}, t('wroteNotOnList')), ...senders] : []),
           h('h3', {}, t('recoveryTitle')),
           h('p', { class: 'file-size' },
             room.roster.recoveryKey ? t('recoverySet') : t('recoveryNotSet')),
@@ -201,7 +213,7 @@ export class RoomDialogs {
             t('newRecoveryCode'))] : []));
     };
     draw();
-    const offs = ['roster', 'requests', 'peers'].map((name) => room.on(name, draw));
+    const offs = ['roster', 'requests', 'peers', 'pending'].map((name) => room.on(name, draw));
     this.ui.dialog.addEventListener('close', () => offs.forEach((off) => off()), { once: true });
     this.ui.kit.open(t('members'), body);
   }

@@ -73,6 +73,7 @@ export class Room extends Emitter {
   // Messages that passed every check but one: their author is not (yet) in our copy of the member
   // list. They wait here for the list to catch up, instead of being lost.
   #pending = new Map(); // envelope id -> { env, at }
+  #dismissed = new Set(); // authors the owner chose to ignore (until the page restarts)
   #chainAskedAt = 0; #adminHeardAt = 0; #giveSentAt = 0;
   // Delivery: our own message id -> members who confirmed it; and the confirmations we owe.
   #acks = new Map();
@@ -762,8 +763,7 @@ export class Room extends Emitter {
       const removed = this.roster?.revoked.has(author);
       return this.#drop(removed ? 'author was removed' : 'not allowed', env);
     }
-    this.#hold(env);
-    this.#needChain();
+    if (!this.#dismissed.has(author)) { this.#hold(env); this.#needChain(); }
     return this.#drop('author not in member list', env);
   }
 
@@ -781,6 +781,38 @@ export class Room extends Emitter {
 
   /** How many messages wait for the member list to learn their author. */
   get pendingCount() { return this.#pending.size; }
+
+  /** Who wrote the messages we hold because they are not on the list: { id, name, count }, with
+   *  the name as they sign it (anyone who has the room's secret can sign any name). The owner can
+   *  let them in, whether or not their app asks (an older one does not). */
+  get waitingSenders() {
+    const by = new Map();
+    for (const { env } of this.#pending.values()) {
+      const id = authorIdOf(env);
+      if (this.#dismissed.has(id)) continue;
+      const row = by.get(id) ?? { id, name: String(env.name ?? '').slice(0, 32), count: 0 };
+      row.count++;
+      by.set(id, row);
+    }
+    return [...by.values()];
+  }
+
+  /** Owner: let in someone who wrote to the room but is not on the list. */
+  async admitSender(id) {
+    if (!this.isOwner) throw new Error('Only the room owner can let someone in');
+    const sender = this.waitingSenders.find((s) => s.id === id);
+    if (!sender) throw new Error('No messages from them are waiting');
+    await this.#desk.admit(id, sender.name || id.slice(0, 6));
+  }
+
+  /** Stop holding (and listing) what this author writes. */
+  dismissSender(id) {
+    this.#dismissed.add(id);
+    for (const [key, { env }] of this.#pending) {
+      if (authorIdOf(env) === id) this.#pending.delete(key);
+    }
+    this.emit('pending', this.#pending.size);
+  }
 
   #retrying = false;
   /** The member list grew: the messages that waited for it get another look. */

@@ -53,9 +53,10 @@ test('ui: choosing a language in Settings redraws the screen and is kept', async
     language.querySelectorAll('option').map((o) => o.textContent),
     ['Automatic (browser)', 'English', '中文', 'Deutsch'],
   );
-  language.value = 'de';
-  find(dialog, 'button', 'Save')[0].click();
+  language.value = 'de'; // applied at once, no Save
+  language.fire('change');
   await until(() => kv.get('settings').then((s) => s?.language === 'de'));
+  await until(() => root.querySelector('.toast').textContent === dictionaries.de.saved);
 
   assert.equal(model.settings.language, 'de');
   assert.ok(find(root, 'button', dictionaries.de.settings).length, 'room list');
@@ -68,9 +69,10 @@ test('ui: choosing a language in Settings redraws the screen and is kept', async
   const again = root.querySelector('dialog').querySelectorAll('select')[0];
   assert.equal(again.querySelectorAll('option')[0].textContent, dictionaries.de.languageAuto);
   again.value = 'auto';
-  find(root.querySelector('dialog'), 'button', dictionaries.de.saveSettings)[0].click();
+  again.fire('change');
   await until(() => find(root, 'button', 'Settings').length > 0);
   assert.equal(model.settings.language, 'auto');
+  assert.ok(find(root.querySelector('dialog'), 'button', 'Network').length, 'dialog redrawn');
 });
 
 test('ui: a dialog never prints "null" for a field the browser cannot offer', async () => {
@@ -106,9 +108,12 @@ test('ui: Settings: broker status, keep my data, diagnostics', async () => {
 
   find(root, 'button', 'Settings')[0].click();
   const dialog = root.querySelector('dialog');
+  const page = (name) => find(dialog, 'button', name)[0].click();
   const lines = () => dialog.querySelectorAll('li').map((li) => li.textContent);
+  page('Network');
   assert.deepEqual(lines(), ['✓ wss://fast.test: 42 ms', '✗ wss://dead.test: not reachable']);
 
+  page('Data');
   await until(() => find(dialog, 'button', 'Keep my data').length === 1
     && find(dialog, 'button', 'Keep my data')[0].hidden === false);
   assert.match(dialog.querySelector('.storage').textContent, /Not protected.*may delete/);
@@ -118,8 +123,10 @@ test('ui: Settings: broker status, keep my data, diagnostics', async () => {
   assert.match(dialog.querySelector('.storage-result').textContent, /agreed to keep/);
   assert.equal(find(dialog, 'button', 'Keep my data')[0].hidden, true);
 
+  page('Network');
   find(dialog, 'button', 'Check brokers')[0].click();
   await wait(20);
+  page('About');
   find(dialog, 'button', 'Diagnostics')[0].click();
   await until(() => dialog.querySelector('textarea')?.value?.startsWith('knot '));
   assert.match(dialog.querySelector('textarea').value, /room [\w-]{6}: peers/);
@@ -133,10 +140,12 @@ test('ui: without storage support or broker health, Settings shows neither', asy
   ui.select(room);
   find(root, 'button', 'Settings')[0].click();
   const dialog = root.querySelector('dialog');
+  find(dialog, 'button', 'Network')[0].click();
   assert.equal(dialog.querySelector('.broker-health'), null);
+  assert.equal(find(dialog, 'button', 'Check brokers').length, 0);
+  find(dialog, 'button', 'Data')[0].click();
   assert.equal(find(dialog, 'button', 'Keep my data')[0].hidden, true, 'nothing to keep');
   await until(() => /cannot be asked/.test(dialog.querySelector('.storage').textContent));
-  assert.equal(find(dialog, 'button', 'Check brokers').length, 0);
 });
 
 test('ui: Keep my data: a refusal is answered inside the dialog, with hints', async () => {
@@ -147,6 +156,7 @@ test('ui: Keep my data: a refusal is answered inside the dialog, with hints', as
   ui.select(room);
   find(root, 'button', 'Settings')[0].click();
   const dialog = root.querySelector('dialog');
+  find(dialog, 'button', 'Data')[0].click();
   const button = () => find(dialog, 'button', 'Keep my data')[0];
   await until(() => button().hidden === false);
   assert.equal(dialog.querySelectorAll('p').filter((p) => /decides by its own rules/.test(

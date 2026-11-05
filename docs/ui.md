@@ -7,10 +7,30 @@ search, export, language.
 
 ## Dialogs
 
-Each ends with a footer: the action that applies what was changed and Cancel (Settings: Save,
-Linked devices: Save for the device names, New room: Create room, Join: Join, Export: Export), or
-a single Close for a dialog that only shows things (invite, members, diagnostics). The × in the
-corner is a Cancel: whatever was not saved is dropped.
+Each ends with a footer: the action that applies what was changed and Cancel (New room: Create
+room, Join: Join, Export: Export), or a single Close for a dialog that only shows things (invite,
+members) or that applies its changes itself (Settings). The × in the corner is a Cancel: whatever
+was not applied is dropped.
+
+## Settings
+
+One dialog, built by `ui/settings-shell.js`: a list of pages (General, Notifications, Network,
+Devices, Data, About) beside the open page. On a screen narrower than 720px the list and the page
+take turns (a Back button on the page). Only the open page is in the document, but a page keeps
+what was typed while another is visited. A chip on each page says who its settings reach: *All
+your devices* (the keys in `SHARED`, `chat/device-sync.js`: the chip is derived from it) or *This
+device*.
+
+- **Applied at once:** language, name, image previews, notifications (the permission prompt needs
+  that click; if refused the switch goes back off).
+- **Apply and Revert:** network (brokers, relay, STUN, TURN) and device names. A wrong broker or
+  STUN list can cut a person off from every room, so these are checked while typed
+  (`networkProblems` in `config.js`: the message is shown under the field, Apply is off) and saved
+  together. TURN servers are rows (address, user, password); *Reset to defaults* fills the
+  controls and still waits for Apply.
+- **Devices** is the old Linked devices dialog; **About** has the version and the diagnostics
+  report; **Network** has the link to the network test page. `SettingsDialogs.open(page)` and
+  `devices()` open the dialog at a page.
 
 ## Room names
 

@@ -3,7 +3,7 @@
 // The page keeps the room list, the stage and the unread bookkeeping; the rest has its own
 // module: the message box (composer.js), messages (messages.js), image cards
 // (image-cards.js) and the dialogs (dialog-kit.js, room-dialogs.js, join-dialogs.js,
-// settings-dialogs.js).
+// settings-dialogs.js and the settings pages).
 import { authorIdOf } from '../chat/envelope.js';
 import { searchLog } from '../chat/search.js';
 import { plain } from '../util/text.js';

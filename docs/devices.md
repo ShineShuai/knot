@@ -43,11 +43,11 @@ Rooms joined later reach the other devices by themselves (see *Shared state* bel
 ### Unlink and separate
 
 *Unlink* (any device, for any linked device but itself; the main device cannot be unlinked;
-Settings > Linked devices) is a signed `unlink` envelope in every room, kept forever like
+Settings > Devices) is a signed `unlink` envelope in every room, kept forever like
 membership changes: peers drop that device's links and refuse everything it writes with that
 certificate, including history that arrives later; the device itself notices and goes back to its
 own identity. The unlinked device is told first (through our channel, if no room reaches it), then
-dropped from the channel. A linked device can also *separate* itself (Settings > Linked devices):
+dropped from the channel. A linked device can also *separate* itself (Settings > Devices):
 it withdraws itself the same way.
 
 A withdrawn or separated device restarts with a **new key** (the old one stays withdrawn in the
@@ -87,7 +87,7 @@ a line for this device with the brokers it reaches).
 
 The tag is the device's *alias*: it starts as the name given when linking (suggested from the
 device kind: iPhone, iPad, Android, Mac, Windows, Linux; numbered if taken; the main device is
-"main") and can be changed in Settings > Linked devices on any device, for any device. A message
+"main") and can be changed in Settings > Devices on any device, for any device. A message
 carries it as `al` `{ n, sig }`, signed with the writing device's key over the message id (so it
 cannot be moved to another message); old versions ignore the field.
 

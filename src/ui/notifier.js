@@ -46,7 +46,7 @@ export class Notifier {
 
   #incoming(room, env) {
     const on = this.settings.notifications && this.supported && this.env.permission() === 'granted';
-    if (!on || this.isActive(room)) return;
+    if (!on || room.muted || this.isActive(room)) return;
     const entry = this.#pending.get(room.id) ?? { envs: [], timer: null };
     entry.envs.push(env);
     this.#pending.set(room.id, entry);

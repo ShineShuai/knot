@@ -93,7 +93,8 @@ How the code is laid out. Behaviour and protocol details are in the topic docume
         conn.js              text for the hold-V connection reveal
         reveal.js            hold V: how everyone is connected
         dialog-kit.js        the dialog frame and its footer, copy field, QR, code box with scanner
-        room-dialogs.js      new, rename, recovery code, invite, members, export, leave
+        room-dialogs.js      new room, recovery code, invite, member list, export buttons, leave
+        room-settings.js     room settings (the ⚙): overview, members, my preferences, leave
         join-dialogs.js      joining: by link, code, recovery code, or asking the owner
         settings-shell.js    settings frame: list of pages beside the open page; Apply bar, chips
         settings-dialogs.js  settings pages: general, notifications, data, about

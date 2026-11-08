@@ -46,7 +46,8 @@ export class SettingsShell {
 
   constructor(kit) { this.kit = kit; }
 
-  /** `pages`: [{ id, label, scope?: { text, kind }, render({ refresh }) -> node }]. `start`: the
+  /** `pages`: [{ id, label, scope?: { text, kind }, badge?, danger?, render({ refresh }) ->
+   *  node }] (`badge`: a count beside the label). `start`: the
    *  page to open at; without it a wide screen shows the first page and a narrow one the list. */
   open(title, pages, start = null) {
     const cache = new Map();
@@ -70,7 +71,8 @@ export class SettingsShell {
       this.current = id;
     };
     const nav = h('nav', { class: 'snav', 'aria-label': title }, ...pages.map((page) => {
-      const button = h('button', { onclick: () => draw(page.id) }, page.label);
+      const button = h('button', { class: page.danger ? 'dn' : '', onclick: () => draw(page.id) },
+        page.label, page.badge ? h('em', { class: 'count' }, String(page.badge)) : null);
       buttons.set(page.id, button);
       return button;
     }));
@@ -79,6 +81,6 @@ export class SettingsShell {
     draw(first);
     root.dataset.view = start ? 'page' : 'list';
     this.kit.open(title, root);
-    this.kit.dialog.classList.add('shell');
+    this.kit.dialog.classList.add('paged');
   }
 }

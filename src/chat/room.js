@@ -108,6 +108,8 @@ export class Room extends Emitter {
     this.secret = secret;
     this.label = label;
     this.settings = settings; // live object: edits in Settings apply to new connections
+    /** This person's own choices for the room (the model keeps them: AppModel.setRoomPrefs). */
+    this.prefs = {};
     this.id = keys.id; // the room's identity: signatures, storage; never changes
     this.#chan = { id: keys.id, aes: keys.aes }; // where we meet on the brokers: can rotate
     this.#kv = kv;
@@ -327,6 +329,12 @@ export class Room extends Emitter {
   }
 
   // ---- what the room delegates (see the constructor) ----------------------------------------
+
+  /** Image previews here: the person's choice for this room, else the app-wide setting. */
+  get previewMode() { return this.prefs.previews ?? this.settings.imagePreviews; }
+
+  /** No notifications, and not counted in the tab title or the app's badge. */
+  get muted() { return this.prefs.mute === true; }
 
   /** Messages from others that this device has not shown to its user yet. */
   get unread() { return this.#marks.count; }

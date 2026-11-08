@@ -130,13 +130,20 @@ dialog p { color: var(--muted); margin: .25rem 0 .6rem; }
 .storage { color: var(--ink); font-weight: 600; }
 
 /* Settings: a list of pages beside the open page; on a narrow screen they take turns. */
-dialog.shell { width: min(46rem, calc(100vw - 2rem)); }
-.sshell { display: grid; grid-template-columns: 11rem 1fr; gap: 1rem; min-height: 24rem; }
-.snav { display: flex; flex-direction: column; gap: 2px; align-self: start; padding-right: .75rem; border-right: 1px solid var(--line); }
+dialog.paged { width: min(46rem, calc(100vw - 2rem)); padding: 0; }
+dialog.paged[open] { display: flex; flex-direction: column; height: min(37rem, calc(100vh - 2rem)); overflow: hidden; }
+dialog.paged > header { padding: .6rem .8rem .6rem 1.25rem; border-bottom: 1px solid var(--line); }
+dialog.paged > .sshell { flex: 1; min-height: 0; }
+dialog.paged > .dialog-footer { margin: 0; padding: .6rem .8rem; border-top: 1px solid var(--line); justify-content: flex-end; }
+.sshell { display: grid; grid-template-columns: 12.5rem 1fr; }
+.snav { display: flex; flex-direction: column; gap: 2px; padding: .5rem; overflow: auto; background: var(--rail); border-right: 1px solid var(--line); }
 .snav button { text-align: left; border: 0; background: none; }
 .snav button[aria-current=true] { background: var(--own); font-weight: 600; }
-.spage { min-width: 0; }
-.sback { display: none; }
+.spage { min-width: 0; overflow: auto; padding: 1rem 1.25rem; }
+.snav button:hover:not([aria-current=true]) { background: var(--surface); }
+.sback { display: none; padding-left: 0; }
+.field button { align-self: flex-start; }
+.field .actions { margin-top: .25rem; }
 .ph { display: flex; align-items: center; gap: .5rem; margin-bottom: .6rem; }
 .ph h3 { flex: 1; margin: 0; font-size: 1.1rem; }
 .chip { font-style: normal; font-size: .75rem; padding: 0 .55rem; border: 1px solid var(--line); border-radius: 99px; color: var(--muted); white-space: nowrap; }
@@ -161,12 +168,23 @@ summary { cursor: pointer; font-weight: 600; }
 @media (max-width: 720px) {
   .sshell { grid-template-columns: 1fr; }
   .sshell[data-view=list] .spage, .sshell[data-view=page] .snav { display: none; }
-  .snav { padding: 0; border: 0; }
-  .snav button { padding: .75rem .8rem; border-bottom: 1px solid var(--line); }
+  .snav { border: 0; background: none; }
+  .snav button { padding: .75rem .8rem; border-radius: 0; border-bottom: 1px solid var(--line); }
+  .snav button[aria-current=true] { background: none; font-weight: inherit; }
   .sback { display: inline-block; margin-bottom: .4rem; }
   .turn { grid-template-columns: 1fr 1fr auto; }
   .turn input:first-child { grid-column: 1 / -1; }
 }
+
+.count { font-style: normal; font-size: .75rem; min-width: 1.3rem; padding: 0 .35rem; text-align: center; border-radius: 99px; background: var(--link); color: var(--link-ink); }
+.snav .count { margin-left: .5rem; }
+.snav button.dn { color: var(--danger); }
+button.danger { color: var(--danger); border-color: var(--danger); }
+.zone { padding: .8rem; border: 1px solid var(--danger); border-radius: 8px; }
+.muted-mark { margin-left: .3rem; font-size: .8rem; }
+dl.kv { display: grid; grid-template-columns: 8rem 1fr; gap: .4rem .8rem; margin: .8rem 0; }
+dl.kv dt { color: var(--muted); }
+dl.kv dd { margin: 0; }
 
 .toast { position: fixed; top: auto; right: auto; margin: 0; border: 0; left: 50%; bottom: 1.25rem; transform: translateX(-50%); background: var(--ink); color: var(--paper); padding: .5rem 1rem; border-radius: 8px; opacity: 0; pointer-events: none; transition: opacity .2s; max-width: 90vw; z-index: 10; }
 .toast.show { opacity: 1; }

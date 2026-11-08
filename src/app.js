@@ -8,7 +8,7 @@ import { saveSettings } from './config.js';
 import { newBoxKey } from './crypto/box.js';
 import { makeLinkGrant, makeLinkRequest, readLinkGrant, readLinkRequest } from './chat/devices.js';
 import {
-  CHANNEL, DeviceSync, SHARED, deviceKey, readKey, roomKey, suggestAlias, uniqueAlias,
+  CHANNEL, DeviceSync, SHARED, deviceKey, prefKey, readKey, roomKey, suggestAlias, uniqueAlias,
 } from './chat/device-sync.js';
 import { ALIAS_MAX, isAlias } from './chat/envelope.js';
 import { deriveRoomKeys, newRoomSecret } from './crypto/room-keys.js';
@@ -218,6 +218,11 @@ export class AppModel extends Emitter {
         await this.rooms.get(key.slice(2))?.advanceRead(item.v);
         continue;
       }
+      if (key.startsWith('p:')) { // our choices for a room, made on another device
+        const room = this.rooms.get(key.slice(2));
+        if (room) this.#applyPrefs(room);
+        continue;
+      }
       if (!key.startsWith('r:')) continue;
       const [id, room, value] = [key.slice(2), this.rooms.get(key.slice(2)), item.v];
       if (value === null) {
@@ -255,7 +260,7 @@ export class AppModel extends Emitter {
   }
 
   #withoutRooms(items) {
-    return Object.fromEntries(Object.entries(items).filter(([k]) => !/^[rk]:/.test(k)));
+    return Object.fromEntries(Object.entries(items).filter(([k]) => !/^[rkp]:/.test(k)));
   }
 
   /** The chat rooms, and the channel where our devices meet. */
@@ -515,6 +520,9 @@ export class AppModel extends Emitter {
     await this.kv.delete(`owner:${id}`);
     await this.kv.delete(`wait:${id}`);
     await this.kv.delete(`read:${id}`);
+    if (this.sync.value(prefKey(id)) != null) { // our choices for it go too
+      this.#broadcastSync(await this.sync.set({ [prefKey(id)]: null }, { lenient: true }));
+    }
     this.#removed.add(id);
     this.rooms.delete(id);
     await this.#persist();
@@ -584,6 +592,7 @@ export class AppModel extends Emitter {
     if (this.rooms.has(room.id)) return this.rooms.get(room.id);
     const synced = this.sync.value(readKey(room.id));
     if (synced) await room.advanceRead(synced); // read on another device of ours already
+    room.prefs = this.roomPrefs(room.id);
     this.#wire(room);
     room.on('read', (stamp) => {
       if (!this.#paired) return;
@@ -594,6 +603,28 @@ export class AppModel extends Emitter {
     room.start();
     this.rooms.set(room.id, room);
     return room;
+  }
+
+  /** Our own choices for a room: { mute?: true, previews?: 'auto' | 'tap' | 'off' }. */
+  roomPrefs(id) { return { ...this.sync.value(prefKey(id)) }; }
+
+  /** Change them (`patch`: a key to its new value; false or null takes a choice back). They
+   *  follow us to our other devices, but nobody else sees them. */
+  async setRoomPrefs(id, patch) {
+    const room = this.rooms.get(id);
+    if (!room) return;
+    const next = { ...this.roomPrefs(id), ...patch };
+    for (const [key, value] of Object.entries(next)) {
+      if (value == null || value === false) delete next[key];
+    }
+    const value = Object.keys(next).length ? next : null;
+    this.#broadcastSync(await this.sync.set({ [prefKey(id)]: value }));
+    this.#applyPrefs(room);
+  }
+
+  #applyPrefs(room) {
+    room.prefs = this.roomPrefs(room.id);
+    this.emit('prefs', room);
   }
 
   /** The name is only ours (each member names rooms on their own device). */

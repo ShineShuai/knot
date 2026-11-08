@@ -56,7 +56,8 @@ test('networkDefaults: fresh copies, not the shared lists', () => {
 
 test('ui: Settings opens on General; a page is kept while another is visited', async () => {
   const { dialog, page } = await person();
-  assert.ok(dialog.classList.contains('shell'));
+  assert.ok(dialog.classList.contains('paged'));
+  assert.ok(!dialog.classList.contains('shell'), "'shell' is the page's own grid layout");
   assert.deepEqual(
     dialog.querySelector('nav').querySelectorAll('button').map((b) => b.textContent),
     ['General', 'Network', 'Devices', 'Data', 'About'],

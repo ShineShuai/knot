@@ -27,6 +27,8 @@ async function person(name, broker) {
   return { model, root, ui: mountUi(root, model) };
 }
 const button = (root, text) => find(root, 'button', text)[0];
+// the one button for everything about the open room (its count: people waiting to get in)
+const gear = (root) => root.querySelector('[aria-label="Room settings"]');
 const rooms = [];
 test.afterEach(() => { rooms.splice(0).forEach((r) => r.stop()); });
 
@@ -35,7 +37,8 @@ test('ui: a new room is owned, and every owner control is on screen', async () =
   const room = await a.model.createRoom('Club');
   rooms.push(room);
   a.ui.select(room);
-  assert.ok(button(a.root, 'Members'), 'Members button in the room header');
+  assert.ok(gear(a.root), 'the room settings button in the room header');
+  assert.equal(button(a.root, 'Members'), undefined, 'the member list is a page there');
   assert.ok(button(a.root, 'Invite'));
   button(a.root, 'Invite').click();
   await tick();
@@ -46,7 +49,8 @@ test('ui: a new room is owned, and every owner control is on screen', async () =
   assert.match(shown, /#j=/); // the owner's join link
   assert.ok(find(dialog, 'button', 'Create pairing code').length, 'pairing codes: owner only');
   dialog.close();
-  button(a.root, 'Members').click();
+  gear(a.root).click();
+  button(dialog, 'Members').click();
   assert.match(dialog.textContent, /owner/);
   assert.match(dialog.textContent, /Join requests/);
 });
@@ -56,7 +60,12 @@ test('ui: an older room without an owner has no owner controls', async () => {
   const room = await a.model.addRoom(newRoomSecret(), 'Old');
   rooms.push(room);
   a.ui.select(room);
-  assert.equal(button(a.root, 'Members'), undefined);
+  gear(a.root).click();
+  const settings = a.root.querySelector('dialog');
+  assert.equal(find(settings, 'button', 'Members').length, 0, 'no member list without an owner');
+  const pages = settings.querySelector('nav').querySelectorAll('button');
+  assert.deepEqual(pages.map((b) => b.textContent), ['Overview', 'My preferences', 'Leave room']);
+  settings.close();
   button(a.root, 'Invite').click();
   await tick();
   const shown = a.root.querySelector('dialog').querySelectorAll('textarea').map((t) => t.value);
@@ -85,23 +94,27 @@ test('ui: join request, greeting, owner approval, then both are in the room', as
   assert.match(owner.root.querySelector('.toast').textContent, /Bob asks to join/);
   assert.doesNotMatch(owner.root.textContent, /Bob joined/); // not yet
   assert.equal(room.roster.isMember(guest.model.identity.id), false);
-  button(owner.root, 'Members (1)').click();
+  assert.match(gear(owner.root).textContent, /1/, 'the waiting request is counted on the button');
+  gear(owner.root).click();
   const odialog = owner.root.querySelector('dialog');
+  button(odialog, 'Members').click();
   assert.match(odialog.textContent, /Hi, Bob from the club/);
   button(odialog, 'Approve').click();
   await until(() => guest.model.rooms.size === 1, 3000);
   const joined = [...guest.model.rooms.values()][0];
   rooms.push(joined);
   assert.equal(joined.ownerId, owner.model.identity.id);
-  await until(() => button(guest.root, 'Members'), 3000); // the room opens on screen
+  await until(() => gear(guest.root), 3000); // the room opens on screen
   await until(() => /Bob joined/.test(owner.root.textContent), 3000); // a notice, in the log
   for (const { root } of [owner, guest]) assert.doesNotMatch(root.textContent, /\[object Object\]/);
   await until(() => joined.peerList.some((p) => p.state === 'p2p'), 5000);
-  button(guest.root, 'Members').click();
+  gear(guest.root).click();
   const gm = guest.root.querySelector('dialog');
+  button(gm, 'Members').click();
   assert.equal(find(gm, 'button', 'Remove').length, 0); // owner-only
   assert.equal(find(gm, 'h3', 'Join requests').length, 0);
-  button(owner.root, 'Members').click();
+  gear(owner.root).click();
+  button(odialog, 'Members').click();
   assert.ok(find(odialog, 'button', 'Remove').length >= 1); // the owner may remove Bob
 });
 
@@ -121,7 +134,8 @@ test('ui: a new room first shows the recovery code, then the invite', async () =
   await until(() => /Join link/.test(dialog.textContent), 3000);
   assert.equal(dialog.open, true);
   button(dialog, 'Close').click();
-  button(a.root, 'Members').click();
+  gear(a.root).click();
+  button(dialog, 'Members').click();
   assert.ok(find(dialog, 'button', 'New recovery code').length, 'the owner can replace the code');
 });
 
@@ -186,11 +200,11 @@ test('ui: rooms are named, renamed, and never share a default name', async () =>
   rooms.push(three);
   assert.deepEqual([...a.model.rooms.values()].map((r) => r.label).sort(), ['Room 1', 'Room 2']);
   a.ui.select(two);
-  button(a.root, '✎').click();
+  gear(a.root).click(); // the Overview page: the name applies at once
   const dialog = a.root.querySelector('dialog');
   assert.equal(dialog.querySelector('input').value, 'Room 2');
   dialog.querySelector('input').value = 'Book club';
-  button(dialog, 'Save').click();
+  dialog.querySelector('input').fire('change');
   await until(() => two.label === 'Book club', 3000);
   const title = () => a.root.querySelector('.stage-head')?.querySelector('h2')?.textContent ?? '';
   await until(() => /Book club/.test(title()), 3000);
@@ -211,7 +225,7 @@ test('ui: every dialog ends with Save and Cancel, or with Close when it changes 
   await open('new room', () => button(a.root, 'New room').click());
   await open('join', () => button(a.root, 'Join').click());
   await open('invite', () => button(a.root, 'Invite').click());
-  await open('members', () => button(a.root, 'Members').click());
+  await open('room settings', () => gear(a.root).click());
   await open('settings', () => button(a.root, 'Settings').click());
   button(dialog, 'Devices').click(); // the pages are in the dialog: the footer stays
   await tick();
@@ -223,7 +237,7 @@ test('ui: every dialog ends with Save and Cancel, or with Close when it changes 
   assert.deepEqual(seen['new room'], ['Create room', 'Cancel']);
   assert.deepEqual(seen.join, ['Join', 'Cancel']);
   assert.deepEqual(seen.invite, ['Close']);
-  assert.deepEqual(seen.members, ['Close']);
+  assert.deepEqual(seen['room settings'], ['Close']);
   assert.deepEqual(seen.settings, ['Close'], 'its pages apply their changes themselves');
   assert.deepEqual(seen.devices, ['Close']);
   assert.deepEqual(seen.diagnostics, ['Close']);

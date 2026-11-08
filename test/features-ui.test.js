@@ -226,8 +226,9 @@ test('ui: export saves the history as text or JSON', async () => {
   };
   URL.createObjectURL = (blob) => { saved.push(blob); return 'blob:test'; };
   try {
-    a.root.querySelector('[aria-label="Export history"]').click();
+    a.root.querySelector('[aria-label="Room settings"]').click();
     const dialog = a.root.querySelector('dialog');
+    button(dialog, 'My preferences').click();
     assert.match(dialog.textContent, /Saves the 1 messages/);
     button(dialog, 'Text').click();
     button(dialog, 'JSON').click();

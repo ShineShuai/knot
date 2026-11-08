@@ -50,7 +50,7 @@ test('room settings: pages of an owned room, and who is who on the Overview', as
   const { dialog, room } = await inRoom();
   assert.equal(dialog.querySelector('h2').textContent, 'Room settings: Club');
   assert.deepEqual(dialog.querySelector('nav').querySelectorAll('button').map((b) => b.textContent),
-    ['Overview', 'Members', 'My preferences', 'Leave room']);
+    ['Overview', 'Members', 'Rules', 'My preferences', 'Leave room']);
   assert.equal(dialog.querySelector('.chip').textContent, 'Name: only you');
   assert.deepEqual(dialog.querySelectorAll('dd').map((d) => d.textContent),
     ['Owner (you)', 'You', '1']);

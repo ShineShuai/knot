@@ -116,6 +116,33 @@ test('ui: join request, greeting, owner approval, then both are in the room', as
   gear(owner.root).click();
   button(odialog, 'Members').click();
   assert.ok(find(odialog, 'button', 'Remove').length >= 1); // the owner may remove Bob
+
+  // The owner's rules: published from the Rules page, followed by the other person's screen.
+  const writing = (root) => root.querySelectorAll('textarea').find((t) => t.maxLength > 0);
+  assert.equal(writing(guest.root).disabled, false);
+  button(odialog, 'Rules').click();
+  const radio = (dialog, name, value) => dialog.querySelectorAll('input').find(
+    (i) => i.type === 'radio' && i.name.startsWith(name) && i.value === value,
+  );
+  assert.equal(radio(odialog, 'post', 'all').checked, true);
+  assert.equal(odialog.querySelector('.apply').hidden, true, 'nothing to publish yet');
+  radio(odialog, 'post', 'all').checked = false; // (a browser does this for one group)
+  radio(odialog, 'post', 'owner').checked = true;
+  radio(odialog, 'post', 'owner').fire('change');
+  assert.equal(odialog.querySelector('.apply').hidden, false);
+  button(odialog, 'Publish rules').click();
+  await until(() => room.rules.post === 'owner' && joined.rules.post === 'owner', 3000);
+  assert.match(owner.root.querySelector('.toast').textContent, /Rules published/);
+  assert.equal(writing(guest.root).disabled, true, 'Bob can no longer write');
+  assert.equal(writing(guest.root).placeholder, 'Only the owner can write here');
+  assert.equal(writing(owner.root).disabled, false, 'Ada can');
+  await until(() => /Ada changed the room rules/.test(guest.root.textContent), 3000);
+  gear(guest.root).click();
+  button(gm, 'Rules').click();
+  assert.match(gm.textContent, /Set by Ada/);
+  assert.equal(radio(gm, 'post', 'owner').checked, true);
+  assert.equal(radio(gm, 'post', 'owner').disabled, true, 'members only read them');
+  assert.equal(find(gm, 'button', 'Publish rules').length, 0);
 });
 
 test('ui: a new room first shows the recovery code, then the invite', async () => {
@@ -211,7 +238,7 @@ test('ui: rooms are named, renamed, and never share a default name', async () =>
   assert.match(a.root.textContent, /Book club/); // also in the room list
 });
 
-test('ui: every dialog ends with Save and Cancel, or with Close when it changes nothing', async () => {
+test('ui: dialogs end with Save and Cancel, or with Close when they change nothing', async () => {
   const a = await person('Ada');
   const room = await a.model.createRoom('Club');
   rooms.push(room);

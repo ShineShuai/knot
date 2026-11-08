@@ -1,8 +1,8 @@
 // A chat envelope is one signed, self-contained message. It can travel over any
 // path (P2P link, broker relay, history sync) and be verified by anyone in the room.
 //
-//   { v, id, room, kind:'text'|'reply'|'file'|'del'|'edit'|'react'|<admin kinds>, name, ms, c,
-//     body, pub, sig }
+//   { v, id, room, kind:'text'|'reply'|'file'|'del'|'edit'|'react'|'policy'|<admin kinds>, name,
+//     ms, c, body, pub, sig }
 //
 // id = "<ms36>-<counter36>-<authorPeerId>", so the id itself pins author and stamp.
 import { fromB64u, toB64u, utf8 } from '../util/bytes.js';
@@ -10,6 +10,7 @@ import { peerIdOf, verifySignature } from '../crypto/identity.js';
 import { MAX_FUTURE_MS } from '../util/hlc.js';
 import { certShape, verifyCert } from '../crypto/delegation.js';
 import { LIMITS, PREVIEW_TYPES, THUMB_TYPES } from '../files/image.js';
+import { POLICY, validPolicyBody } from './policy.js';
 
 const B64U = /^[A-Za-z0-9_-]+$/;
 const signingBytes = (e) => utf8.encode(
@@ -66,6 +67,8 @@ export const isEmoji = (s) => typeof s === 'string' && s.length <= 16 && EMOJI.t
 export const ADMIN_KINDS = Object.freeze(
   ['admit', 'revoke', 'transfer', 'recovery', 'recover'],
 );
+/** What the conversation shows as a quiet line: membership changes and new room rules. */
+export const NOTICE_KINDS = Object.freeze([...ADMIN_KINDS, POLICY]);
 export const admitBody = ({ id, name }, prev) => ({ id, name, prev });
 /** `epoch` { n, commit }: the channel keys rotate; `commit` is the hash of the new secret. */
 export const revokeBody = ({ id, epoch }, prev) => (
@@ -177,6 +180,7 @@ function wellFormed(e, roomId, { maxText, maxFileBytes, now }) {
     return !!b && typeof b === 'object' && isMessageId(b.id) && b.id !== e.id
       && isEmoji(b.emoji) && typeof b.on === 'boolean';
   }
+  if (e.kind === POLICY) return validPolicyBody(e.body);
   if (ADMIN_KINDS.includes(e.kind)) {
     const b = e.body;
     const prev = typeof b?.prev === 'string' && (b.prev === '' || isMessageId(b.prev));

@@ -3,8 +3,8 @@
 import { compareStamps } from '../util/hlc.js';
 import { ADMIN_KINDS, authorIdOf } from './envelope.js';
 
-/** Membership and unlinking must outlive the chat history. */
-const isKept = (e) => ADMIN_KINDS.includes(e.kind) || e.kind === 'unlink';
+/** Membership, the room rules and unlinking must outlive the chat history. */
+const isKept = (e) => ADMIN_KINDS.includes(e.kind) || ['unlink', 'policy'].includes(e.kind);
 
 export const byStamp = (a, b) => compareStamps(a, b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const stampOfId = (id) => parseInt(String(id).split('-')[0], 36) || 0;

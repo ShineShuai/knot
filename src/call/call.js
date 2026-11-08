@@ -61,13 +61,14 @@ export class CallManager extends Emitter {
    * RTC, Stream, media, now, every: injectable browser pieces (tests)
    */
   constructor({
-    selfId, send, iceServers, settings, media = browserMedia,
+    selfId, send, iceServers, settings, media = browserMedia, allowed = () => true,
     RTC = globalThis.RTCPeerConnection, Stream = globalThis.MediaStream,
     now = () => performance.now(), every = everyMs,
   }) {
     super();
     this.selfId = selfId;
     this.#send = send;
+    this.allowed = allowed; // the room's rules may turn calls off
     this.#opts = { iceServers, settings, RTC, Stream };
     this.#media = media;
     this.#now = now;
@@ -114,6 +115,7 @@ export class CallManager extends Emitter {
    */
   async join({ video = false } = {}) {
     if (this.joined || this.#joining) return this.#devices();
+    if (!this.allowed()) throw new Error('Calls are turned off in this room');
     if (!this.supported) throw new Error('Calls need a secure page and a recent browser');
     if (this.members.size >= this.max) throw new Error('The call is full');
     this.#joining = true;
@@ -285,6 +287,7 @@ export class CallManager extends Emitter {
 
   /** A {t:'call'} frame from a member. Malformed or out-of-place frames are ignored. */
   onFrame(id, m) {
+    if (!this.allowed()) return; // calls are off here: nobody's frames count
     if (m?.k === 'in') {
       this.members.set(id, { a: m.a === true, v: m.v === true, s: m.s === true });
       this.emit('change');

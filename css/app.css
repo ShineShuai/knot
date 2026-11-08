@@ -185,6 +185,13 @@ button.danger { color: var(--danger); border-color: var(--danger); }
 dl.kv { display: grid; grid-template-columns: 8rem 1fr; gap: .4rem .8rem; margin: .8rem 0; }
 dl.kv dt { color: var(--muted); }
 dl.kv dd { margin: 0; }
+.seg { display: inline-flex; align-self: flex-start; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg label { position: relative; }
+.seg input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+.seg span { display: block; padding: .35rem .8rem; background: var(--surface); color: var(--ink); cursor: pointer; }
+.seg input:checked + span { background: var(--link); color: var(--link-ink); }
+.seg input:focus-visible + span { outline: 2px solid var(--link); outline-offset: -2px; }
+.seg input:disabled + span { cursor: default; opacity: .7; }
 
 .toast { position: fixed; top: auto; right: auto; margin: 0; border: 0; left: 50%; bottom: 1.25rem; transform: translateX(-50%); background: var(--ink); color: var(--paper); padding: .5rem 1rem; border-radius: 8px; opacity: 0; pointer-events: none; transition: opacity .2s; max-width: 90vw; z-index: 10; }
 .toast.show { opacity: 1; }

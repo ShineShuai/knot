@@ -4,7 +4,7 @@
 import { plain } from '../util/text.js';
 import { h } from './dom.js';
 import { t } from './i18n.js';
-import { SettingsShell, field, switchRow } from './settings-shell.js';
+import { SettingsShell, applyBar, field, switchRow } from './settings-shell.js';
 
 const PREVIEWS = { auto: 'previewAuto', tap: 'previewTap', off: 'previewOff' };
 
@@ -17,6 +17,7 @@ export class RoomSettings {
   /** Open the settings of `room`, at `page` or at the first one. */
   open(room, page = null) {
     const only = (text) => ({ text, kind: 'me' });
+    const shared = { text: t('scopeRoom'), kind: 'room' }; // what everyone in the room is bound by
     const requests = room.isOwner ? room.joinRequests.length + room.waitingSenders.length : 0;
     this.shell = new SettingsShell(this.ui.kit);
     this.shell.open(t('roomSettingsTitle', { name: room.label || t('roomDefault') }), [
@@ -24,6 +25,8 @@ export class RoomSettings {
         render: () => this.#overview(room) },
       room.roster ? { id: 'members', label: t('members'), badge: requests,
         render: () => this.#members(room) } : null,
+      room.roster ? { id: 'rules', label: t('roomRules'), scope: shared,
+        render: (ctx) => this.#rules(room, ctx) } : null,
       { id: 'prefs', label: t('roomPrefs'), scope: only(t('scopeYou')),
         render: () => this.#prefs(room) },
       { id: 'leave', label: t('leave'), danger: true, render: () => this.#leave(room) },
@@ -65,7 +68,60 @@ export class RoomSettings {
   #members(room) {
     const { roomDialogs } = this.ui;
     return h('div', {}, roomDialogs.membersPanel(room, () => this.open(room, 'members')),
+      room.rules.join === 'closed' ? h('p', { class: 'err' }, t('rulesJoinClosed')) : null,
       ...roomDialogs.inviteSections(room));
+  }
+
+  /** What the owner decided for the room. The owner edits and publishes them together; everyone
+   *  else sees them. */
+  #rules(room, { refresh }) {
+    const { ui } = this;
+    const mine = room.isOwner;
+    const { rules } = room;
+    /** A choice of one value: a row of radio buttons. */
+    const seg = (name, label, value, choices) => {
+      const inputs = Object.keys(choices).map((key) => h('input', {
+        type: 'radio', name: `${name}-${room.id}`, value: key, checked: key === value,
+        disabled: !mine,
+      }));
+      const labels = Object.values(choices).map((text, i) => h('label', {}, inputs[i],
+        h('span', {}, text)));
+      return {
+        inputs,
+        node: h('div', { class: 'field' }, h('span', {}, label),
+          h('div', { class: 'seg', role: 'radiogroup' }, ...labels)),
+        value: () => inputs.find((i) => i.checked)?.value ?? value,
+      };
+    };
+    const join = seg('join', t('ruleJoin'), rules.join,
+      { approve: t('ruleJoinApprove'), closed: t('ruleJoinClosed') });
+    const post = seg('post', t('rulePost'), rules.post,
+      { all: t('rulePostAll'), owner: t('rulePostOwner') });
+    const box = (checked) => h('input', {
+      type: 'checkbox', role: 'switch', checked, disabled: !mine,
+    });
+    const [files, calls] = [box(rules.files), box(rules.calls)];
+    const read = () => ({
+      join: join.value(), post: post.value(), files: files.checked, calls: calls.checked,
+    });
+    const bar = applyBar(async () => {
+      try {
+        await room.setRules(read());
+        ui.notify(t('rulesPublished'));
+        bar.hide();
+      } catch (err) { ui.notify(t('badSettings', { why: err.message })); }
+    }, refresh, t('rulesPublish'));
+    for (const el of [...join.inputs, ...post.inputs, files, calls]) {
+      el.addEventListener('change', bar.show);
+    }
+    ui.dialog.addEventListener('close', room.on('policy', refresh), { once: true });
+    return h('div', {},
+      mine ? null : h('p', {}, t('rulesBy', { name: plain(room.ownerName) })),
+      join.node, post.node, switchRow(t('ruleFiles'), files), switchRow(t('ruleCalls'), calls),
+      h('p', {}, t('rulesNote')),
+      mine ? h('div', {}, bar.node,
+        room.policy.rev ? h('p', { class: 'hint' }, t('rulesRev', { n: room.policy.rev })) : null)
+        : null);
   }
 
   #prefs(room) {

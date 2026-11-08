@@ -1,6 +1,6 @@
 // One message of the conversation as a list item: text with links, replies, files and image
 // cards, reactions with their emoji palette, notices and what is left of a deleted message.
-import { ADMIN_KINDS, authorIdOf, deviceNameOf, isEmoji, quoteOf } from '../chat/envelope.js';
+import { NOTICE_KINDS, authorIdOf, deviceNameOf, isEmoji, quoteOf } from '../chat/envelope.js';
 import { noticeLine } from '../chat/notice.js';
 import { plain } from '../util/text.js';
 import { fmtSize, h, safeFileName } from './dom.js';
@@ -30,7 +30,7 @@ export class Messages {
   /** `opts.onShow`: this is a search hit; its only action is to show it in the conversation. */
   render(room, env, redraw, opts = {}) {
     if (env.kind === 'gone') return this.#renderGone(room, env);
-    if (ADMIN_KINDS.includes(env.kind)) return this.#renderNotice(room, env);
+    if (NOTICE_KINDS.includes(env.kind)) return this.#renderNotice(room, env);
     const own = room.isMine(authorIdOf(env));
     const edited = room.log.isEdited(env);
     const parts = env.kind === 'file' ? [this.#renderFile(room, env, redraw)] : [

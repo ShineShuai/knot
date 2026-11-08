@@ -170,3 +170,12 @@ test('room choices: another device of ours changes them, and this one follows', 
   assert.equal(room.muted, true);
   assert.equal(heard.length, 1);
 });
+
+test('room settings: the Rules page names online members whose app is older', async () => {
+  const { dialog, page, room } = await inRoom();
+  page('Rules');
+  assert.equal(find(dialog, 'p', 'Online with an older app').length, 0);
+  Object.defineProperty(room, 'appGaps', { get: () => ({ older: ['Bob', 'Cy'], newer: [] }) });
+  find(dialog, 'button', 'Revert')[0].click(); // the page is drawn again
+  assert.match(dialog.textContent, /older app, so they may not follow these rules: Bob, Cy\./);
+});

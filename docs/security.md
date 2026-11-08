@@ -40,7 +40,9 @@ again (automatically, on their next start) and a removed owner cannot change the
 version adds are kept in the envelope and ignored. A rule is enforced by every honest member on
 what comes in, judged only for what was written after the rules were set (so history never loses
 messages when they change), and by the sender's own app before it signs. It is a rule of the
-room, not a lock: a modified app can ignore it, or back-date a message to before the rules.
+room, not a lock: a modified app can ignore it, or back-date a message to before the rules. The
+rules came with protocol level 3 (`PROTOCOL`, see messages.md): members online on an older level
+are named on the Rules page and in the room's "older app" note.
 
 **Key rotation.** Removing a member also moves the room to new broker keys (topic, presence,
 signalling, relay and join links all derive from the room secret mixed with a fresh per-removal

@@ -70,7 +70,8 @@ test('a room tells which members run an older or newer app, and when that change
   await until(() => room.appGaps.newer.length);
   assert.deepEqual(room.appGaps, { older: [], newer: ['Olly'] });
   assert.ok(changes > before, 'the room says its peers changed');
-  assert.match(appLines(room).join(), /apps seen: 9\.9\.9 p3 \(newer\)/);
+  const newer = new RegExp(`apps seen: 9\\.9\\.9 p${PROTOCOL + 1} \\(newer\\)`);
+  assert.match(appLines(room).join(), newer);
 
   await theirs.announce({ pub: other.pub, name: 'Olly', pv: PROTOCOL, app: '0.4.0' });
   await until(() => room.members.get(other.id).pv === PROTOCOL);

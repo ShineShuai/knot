@@ -78,6 +78,7 @@ export class RoomSettings {
     const { ui } = this;
     const mine = room.isOwner;
     const { rules } = room;
+    const older = room.appGaps.older.map(plain); // online, and their app does not know the rules
     /** A choice of one value: a row of radio buttons. */
     const seg = (name, label, value, choices) => {
       const inputs = Object.keys(choices).map((key) => h('input', {
@@ -119,6 +120,7 @@ export class RoomSettings {
       mine ? null : h('p', {}, t('rulesBy', { name: plain(room.ownerName) })),
       join.node, post.node, switchRow(t('ruleFiles'), files), switchRow(t('ruleCalls'), calls),
       h('p', {}, t('rulesNote')),
+      older.length ? h('p', { class: 'warn' }, t('rulesOlder', { names: older.join(', ') })) : null,
       mine ? h('div', {}, bar.node,
         room.policy.rev ? h('p', { class: 'hint' }, t('rulesRev', { n: room.policy.rev })) : null)
         : null);

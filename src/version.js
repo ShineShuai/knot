@@ -6,5 +6,6 @@ export const VERSION = '0.4.0';
  *  announces nothing is level 1. Raise it with every change an older app would not understand,
  *  and say here what it was:
  *    1  everything up to 0.4.0
- *    2  the owner's answer to a join request carries the member list */
-export const PROTOCOL = 2;
+ *    2  the owner's answer to a join request carries the member list
+ *    3  the owner's room rules: a `policy` envelope (an older app drops it, ignores the rules) */
+export const PROTOCOL = 3;

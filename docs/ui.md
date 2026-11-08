@@ -52,10 +52,11 @@ rename, export, the member list and Leave moved in.
   recovery code, and the join link and pairing code. Members see the list only.
 - **Rules** (rooms with an owner): what the owner decided for everyone: *Joining* (owner approves,
   or closed), *Who can write* (everyone, or owner only), *Sharing files*, *Calls*. The owner edits
-  them and publishes them together (*Publish rules*); members see them, read-only, with the name of
-  the owner. The message box shows *Only the owner can write here* when writing is closed to you,
-  the attach button and the call buttons are not offered when files or calls are off, and the
-  conversation notes "Ada changed the room rules". See security.md.
+  them and publishes them together (*Publish rules*) and is told which members online run an app
+  too old to know them; members see them, read-only, with the name of the owner. The message box
+  shows *Only the owner can write here* when writing is closed to you, the attach button and the
+  call buttons are not offered when files or calls are off, and the conversation notes "Ada
+  changed the room rules". See security.md.
 - **My preferences:** *Mute this room* (no notifications, not counted in the tab title or the app
   badge; the room list shows 🔕) and *Image previews in this room* (use the app setting, or
   auto / on tap / off). Export of the history (text or signed JSON) is here too.

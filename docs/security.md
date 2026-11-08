@@ -28,6 +28,20 @@ anyone's message and hand the room to a member (`transfer`; old join links then 
 trust stays rooted in the creator's id). Rooms made before this update have no owner and stay open
 to anyone with the link.
 
+**Room rules.** The owner can also set rules for the whole room: who may join (`approve` or
+`closed`: the owner stops answering join requests), who may write (`all` or `owner`, an
+announcement room), whether files may be shared and whether calls are allowed. They are one signed
+`policy` envelope `{ rev, rules }` of the owner, held like the membership chain (never trimmed, only
+the newest kept, sent to everyone with the history) but **not part of the chain**: a version that
+does not know the kind drops the envelope and goes on following the chain, so it keeps working,
+without the rules. The highest `rev` wins (the same `rev`: the greater id); a policy counts only if
+the *current* owner signed it, so after a `transfer` or `recover` the new owner signs the rules
+again (automatically, on their next start) and a removed owner cannot change them. Rules a newer
+version adds are kept in the envelope and ignored. A rule is enforced by every honest member on
+what comes in, judged only for what was written after the rules were set (so history never loses
+messages when they change), and by the sender's own app before it signs. It is a rule of the
+room, not a lock: a modified app can ignore it, or back-date a message to before the rules.
+
 **Key rotation.** Removing a member also moves the room to new broker keys (topic, presence,
 signalling, relay and join links all derive from the room secret mixed with a fresh per-removal
 secret). The owner commits to that secret's hash in the removal envelope and hands the secret to

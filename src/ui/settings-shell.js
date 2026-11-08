@@ -25,10 +25,11 @@ export const switchRow = (label, input, hint = null) => h(
   h('span', { class: 'sw' }, input, h('i')),
 );
 
-/** Apply and Revert, hidden until something is changed (`watch` the part of the page that holds
- *  the controls). Revert is up to the page: it draws itself again from what is saved. */
-export function applyBar(onApply, onRevert) {
-  const apply = h('button', { class: 'primary', onclick: () => onApply() }, t('apply'));
+/** Apply (or `label`) and Revert, hidden until something is changed (`watch` the part of the
+ *  page that holds the controls). Revert is up to the page: it draws itself again from what is
+ *  saved. */
+export function applyBar(onApply, onRevert, label = t('apply')) {
+  const apply = h('button', { class: 'primary', onclick: () => onApply() }, label);
   const node = h('div', { class: 'apply', hidden: true }, apply,
     h('button', { onclick: () => onRevert() }, t('revert')));
   const show = () => { node.hidden = false; };

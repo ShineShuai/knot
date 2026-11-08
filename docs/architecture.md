@@ -53,6 +53,7 @@ How the code is laid out. Behaviour and protocol details are in the topic docume
         log.js               ordered, de-duplicated, capped message log + sync delta
         message-store.js     persists a room's messages, one record per message
         roster.js            who belongs to the room: the owner's chain of admit / revoke / transfer
+        policy.js            the owner's rules for the room (join, post, files, calls): newest wins
         lobby.js             how someone with a join link asks the owner to let them in
         join.js              a pending request to join an owner-run room
         owner-desk.js        the owner's part: join requests, lobby, removal, recovery, transfer

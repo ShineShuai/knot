@@ -88,6 +88,9 @@ export class Composer {
 
     const sendButton = h('button', { class: 'primary', onclick: () => send() }, t('send'));
     let sending = false;
+    // The owner may keep the room to themselves (an announcement room): no one else can write.
+    const mayPost = () => !room.roster
+      || !room.policy.denies('text', room.identity.member, room.roster.owner);
     const send = async () => {
       const text = input.value;
       const files = [...(this.#staged.get(room.id) ?? [])];
@@ -118,7 +121,7 @@ export class Composer {
         ui.notify(err.message);
       } finally {
         sending = false;
-        sendButton.disabled = false;
+        sendButton.disabled = room.removed || !mayPost();
       }
     };
     // On a phone there is no Shift+Enter: Enter makes a new line there, and Send sends.
@@ -160,8 +163,18 @@ export class Composer {
       'aria-label': t('attach'),
       onclick: () => (room.fileTransfer ? picker.click() : ui.notify(t('filesOff'))),
     }, '+');
+    /** Follow the room's rules: who may write, and whether files may be shared. */
+    const drawRules = () => {
+      if (room.removed) return;
+      const post = mayPost();
+      input.disabled = !post;
+      input.placeholder = post ? t('typeMessage') : t('rulesOwnerOnly');
+      sendButton.disabled = !post || sending;
+      attach.hidden = !post || !room.rules.files;
+    };
+    drawRules();
     return {
-      quoteBar, chips, draw: () => this.#drawStaged(),
+      quoteBar, chips, draw: () => this.#drawStaged(), drawRules,
       bar: h('div', { class: 'composer' }, input, picker, attach, sendButton),
     };
   }
@@ -193,6 +206,7 @@ export class Composer {
   /** Put files into the message box (picker, paste, drop). They are only sent, to everyone
    *  in the room, when the user presses Enter or Send. */
   add(room, files, folders = 0) {
+    if (!room.rules.files) return this.ui.notify(t('rulesNoFiles')); // the owner turned it off
     if (!room.fileTransfer) return this.ui.notify(t('filesOff')); // paused for a call
     if (folders) this.ui.notify(t('noFolders'));
     const { list, tooBig, tooMany } = stageFiles(

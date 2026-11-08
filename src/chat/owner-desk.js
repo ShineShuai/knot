@@ -147,7 +147,7 @@ export class OwnerDesk {
   async sync() {
     const { settings } = this.room;
     const want = this.room.isOwner && !this.room.removed && settings.brokersEnabled
-      && settings.brokers.length > 0;
+      && settings.brokers.length > 0 && this.room.rules.join === 'approve';
     if (!want) {
       this.#lobby?.stop();
       this.#lobby = null;
@@ -175,6 +175,7 @@ export class OwnerDesk {
     if (this.room.roster.isMember(req.id)) { // knocked twice
       return void this.#grant(req).catch(() => {});
     }
+    if (this.room.rules.join !== 'approve') return; // closed: nobody new asks
     const isNew = !this.#joinRequests.has(req.id);
     if (isNew && this.#joinRequests.size >= MAX_JOIN_REQUESTS) return;
     this.#joinRequests.set(req.id, req);

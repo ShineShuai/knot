@@ -9,6 +9,7 @@ export function noticeLine(room, env, t) {
     revoke: () => t('sysRemoved', { name: plain(room.nameOf(body.id)), by: plain(env.name) }),
     transfer: () => t('sysOwner', { name: plain(room.nameOf(body.to)) }),
     recover: () => t('sysRecovered', { name: plain(env.name) }),
+    policy: () => t('sysRules', { name: plain(env.name) }),
   };
   return lines[env.kind]?.() ?? '';
 }

@@ -1,6 +1,6 @@
 // Save a room's history: readable text, or the signed envelopes as they are (so anyone can
 // check them). Only what this device holds; shared files themselves are not included.
-import { ADMIN_KINDS, authorIdOf, deviceNameOf } from '../chat/envelope.js';
+import { NOTICE_KINDS, authorIdOf, deviceNameOf } from '../chat/envelope.js';
 import { noticeLine } from '../chat/notice.js';
 import { plain } from '../util/text.js';
 import { VERSION } from '../version.js';
@@ -30,7 +30,7 @@ export function exportText(room, now = Date.now()) {
         ? t('youDeleted') : t('deletedBy', { name: plain(env.name) })}`);
       continue;
     }
-    if (ADMIN_KINDS.includes(env.kind)) {
+    if (NOTICE_KINDS.includes(env.kind)) {
       lines.push(`${at} * ${noticeLine(room, env, t)}`);
       continue;
     }

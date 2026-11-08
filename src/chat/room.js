@@ -37,6 +37,7 @@ import {
 } from './envelope.js';
 import { MessageLog, byStamp } from './log.js';
 import { MessageStore } from './message-store.js';
+import { POLICY, Policy, policyBody, validPolicyBody } from './policy.js';
 import { JoinRequest } from './join.js';
 import { OwnerDesk } from './owner-desk.js';
 import { Pairing } from './pairing.js';
@@ -110,6 +111,8 @@ export class Room extends Emitter {
     this.settings = settings; // live object: edits in Settings apply to new connections
     /** This person's own choices for the room (the model keeps them: AppModel.setRoomPrefs). */
     this.prefs = {};
+    /** What the owner decided for the whole room (see policy.js); the defaults in an open room. */
+    this.policy = new Policy();
     this.id = keys.id; // the room's identity: signatures, storage; never changes
     this.#chan = { id: keys.id, aes: keys.aes }; // where we meet on the brokers: can rotate
     this.#kv = kv;
@@ -134,7 +137,8 @@ export class Room extends Emitter {
     this.health = health; // BrokerHealth: which brokers to try first, which to leave alone
     this.call = new CallManager({
       selfId: identity.id, settings, iceServers: () => this.iceServers(),
-      send: (id, frame) => this.#sendCall(id, frame), ...callEnv,
+      send: (id, frame) => this.#sendCall(id, frame), allowed: () => this.policy.rules.calls,
+      ...callEnv,
     });
     // File transfers paused for a call end with it.
     this.call.on('change', () => {
@@ -218,6 +222,11 @@ export class Room extends Emitter {
       && authorIdOf(e) === this.identity.member;
     if (!this.roster && stored.some(ours)) this.roster = new Roster(this.identity.member);
     this.roster?.load(stored);
+    if (this.roster) { // the rules were checked when they came in; take the newest we kept
+      for (const env of stored.filter((e) => e.kind === POLICY)) {
+        if (this.policy.supersedes(env)) this.policy.set(env);
+      }
+    }
     // Envelopes that were still waiting for an earlier link when we last ran (see #saveWaiting).
     const held = this.roster ? await this.#kv.get(`wait:${this.id}`) : null;
     if (Array.isArray(held)) this.roster.load(held);
@@ -375,7 +384,11 @@ export class Room extends Emitter {
   start() {
     // a new member's list needs a moment to arrive: then the notes about it may show
     if (this.roster) {
-      this.#after(this.settings.adminTimeoutMs, () => { this.#emitPeers(); this.#knockAgain(); });
+      this.#after(this.settings.adminTimeoutMs, () => {
+        this.#emitPeers();
+        this.#knockAgain();
+        this.#reassertRules();
+      });
     }
     if (this.removed || !this.#brokersOn()) return;
     this.#openChannel();
@@ -592,6 +605,46 @@ export class Room extends Emitter {
     return this.#publish('react', reactBody(id, emoji, !mine));
   }
 
+  // ---- the room's rules (see policy.js) ----------------------------------------------------
+
+  /** The rules in force: { join, post, files, calls }. */
+  get rules() { return this.policy.rules; }
+
+  /** Owner only: change the rules (those not given stay as they are). Returns the envelope, or
+   *  null if nothing changes. */
+  async setRules(rules) {
+    if (!this.isOwner) throw new Error('Only the room owner can do this');
+    const next = { ...this.policy.rules, ...rules };
+    if (!validPolicyBody({ rev: 1, rules: next })) throw new Error('Those rules are not valid');
+    if (Object.keys(next).every((key) => next[key] === this.policy.rules[key])) return null;
+    return this.#publish(POLICY, policyBody(this.policy.rev + 1, next));
+  }
+
+  /** Refuse what the rules forbid before it is signed, with the reason (the screen already shows
+   *  it, by not offering the action). Open rooms have no rules. */
+  #checkRules(kind) {
+    if (!this.roster) return;
+    const why = this.policy.denies(kind, this.identity.member, this.roster.owner);
+    if (why === 'files') throw new Error('Sharing files is turned off in this room');
+    if (why === 'post') throw new Error('Only the room owner can write here');
+  }
+
+  /** The rules changed (here or by the owner): lobby and calls follow, and the screen. */
+  async #onPolicy() {
+    if (!this.policy.rules.calls && this.call.joined) this.call.leave();
+    await this.#desk.sync(); // a closed room stops answering join requests, an open one starts
+    this.emit('policy');
+  }
+
+  /** A new owner signs the rules they took over again: only the current owner's envelope is
+   *  accepted, so members who join later would otherwise get the old owner's and drop it. */
+  async #reassertRules() {
+    const held = this.policy.env;
+    if (!this.isOwner || !this.policy.custom || !held || this.isMine(authorIdOf(held))) return;
+    await this.#publish(POLICY, policyBody(this.policy.rev + 1, this.policy.rules))
+      .catch(() => {});
+  }
+
 
 
 
@@ -599,6 +652,7 @@ export class Room extends Emitter {
 
   async #publish(kind, body, signer = this.identity) {
     if (this.removed) throw new Error('You were removed from this room');
+    this.#checkRules(kind);
     if (this.#isUnlinked(signer.cert, signer.member)) throw new Error('This device was unlinked');
     const env = await createEnvelope(signer, this.hlc, this.id, kind, body, this.#name);
     const kept = await this.#accept(env, null);
@@ -769,7 +823,9 @@ export class Room extends Emitter {
       && !this.roster.revoked.has(author);
     if (!stranger) {
       const removed = this.roster?.revoked.has(author);
-      return this.#drop(removed ? 'author was removed' : 'not allowed', env);
+      const rules = this.roster && this.#knows(author) && !removed;
+      return this.#drop(removed ? 'author was removed' : rules ? 'against the room rules'
+        : 'not allowed', env);
     }
     if (!this.#dismissed.has(author)) { this.#hold(env); this.#needChain(); }
     return this.#drop('author not in member list', env);
@@ -942,8 +998,10 @@ export class Room extends Emitter {
     const owner = this.roster?.owner;
     if (env.kind === 'del' && authorOfId(env.body.id) !== author && author !== owner) return false;
     if (env.kind === 'edit' && authorOfId(env.body.id) !== author) return false; // own only
-    if (!this.roster) return !ADMIN_KINDS.includes(env.kind); // open rooms have no admin
-    return ADMIN_KINDS.includes(env.kind) || this.#knows(author);
+    if (!this.roster) return !ADMIN_KINDS.includes(env.kind) && env.kind !== POLICY; // no owner
+    if (ADMIN_KINDS.includes(env.kind)) return true;
+    if (env.kind === POLICY) return author === owner; // only the owner sets the rules
+    return this.#knows(author) && this.policy.permits(env, author, owner);
   }
 
   /** Is `id` a member as far as we know, or one of our own devices (the main identity this
@@ -986,6 +1044,9 @@ export class Room extends Emitter {
   /** Older edits / reactions that `env` replaces; null if a newer one is already here. For one
    *  message only the latest edit counts, and per author and emoji only the latest reaction. */
   #superseded(env) {
+    if (env.kind === POLICY) { // one set of rules at a time: the newest
+      return this.policy.supersedes(env) ? this.log.where((e) => e.kind === POLICY) : null;
+    }
     if (!DECORATIONS.includes(env.kind)) return [];
     const author = authorIdOf(env);
     const sameSlot = (e) => e.kind === env.kind && e.body.id === env.body.id && (
@@ -1008,6 +1069,7 @@ export class Room extends Emitter {
     const orphans = env.kind === 'del' ? this.#decorations(env.body.id) : [];
     if (!this.log.add(env)) return false;
     this.#noteDevice(env);
+    if (env.kind === POLICY) this.policy.set(env);
     this.log.drop([...stale, ...orphans]);
     this.hlc.observe(env);
     const removed = this.log.trim();
@@ -1016,6 +1078,7 @@ export class Room extends Emitter {
       .catch((err) => console.error('could not save message', err));
     if (doomed) await this.#forget(doomed);
     if (ADMIN_KINDS.includes(env.kind)) await this.#onAdmin(env);
+    if (env.kind === POLICY) await this.#onPolicy();
     if (env.kind === 'unlink') this.#onUnlink(env);
     const fresh = this.#marks.isUnread(env); // decided before a viewer can mark it read
     // Membership changes are shown in the conversation too ("Bob joined"): redraw for them.
@@ -1046,7 +1109,10 @@ export class Room extends Emitter {
     if (kind === 'recover' && this.roster.revoked.has(this.identity.member)) {
       return this.#beRemoved();
     }
-    if (kind === 'transfer' || kind === 'recover') await this.#desk.sync();
+    if (kind === 'transfer' || kind === 'recover') {
+      await this.#desk.sync();
+      this.#reassertRules();
+    }
     this.#emitPeers();
     this.emit('roster');
     await this.#desk.tryRecover();

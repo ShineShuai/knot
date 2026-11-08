@@ -373,6 +373,22 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
   await b.getByRole('button', { name: 'Members' }).click();
   assert.equal(await b.getByRole('button', { name: 'Remove' }).count(), 0); // only the owner
   await b.keyboard.press('Escape');
+  // The owner's rules reach the other page: with writing closed, Bob's message box says so.
+  const setWriters = async (who) => {
+    await a.getByRole('button', { name: 'Room settings' }).click();
+    await a.getByRole('button', { name: 'Rules', exact: true }).click();
+    await a.locator('.seg label', { hasText: who }).click();
+    await a.getByRole('button', { name: 'Publish rules' }).click();
+    await a.locator('dialog .apply').waitFor({ state: 'hidden' });
+    await a.keyboard.press('Escape');
+  };
+  await setWriters('Owner only');
+  await b.getByPlaceholder('Only the owner can write here').waitFor();
+  assert.equal(await b.locator('.composer textarea').isDisabled(), true);
+  await b.locator('.msg', { hasText: /changed the room rules/ }).waitFor();
+  await setWriters('Everyone');
+  await b.getByPlaceholder('Write a message').waitFor();
+  assert.equal(await b.locator('.composer textarea').isDisabled(), false);
   // Links and more reactions in the real page.
   await b.getByPlaceholder('Write a message').fill('docs https://example.com/a?b=1, thanks');
   await b.keyboard.press('Enter');

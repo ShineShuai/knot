@@ -405,7 +405,7 @@ class Ui {
     };
     const drawCall = () => {
       const { call } = room;
-      const canStart = call.supported && !call.joined && !room.removed;
+      const canStart = call.supported && !call.joined && !room.removed && room.rules.calls;
       callButtons.replaceChildren(...(canStart ? [
         this.#iconButton('📞', t('callAudio'), () => this.#startCall(room, false)),
         this.#iconButton('🎥', t('callVideo'), () => this.#startCall(room, true)),
@@ -465,6 +465,7 @@ class Ui {
       room.on('peers', drawWaiting), // the owner may have come or gone
       room.on('delivery', redraw),
       room.on('files', () => drawLog()), // image previews start or wait with the transfers
+      room.on('policy', () => { composer.drawRules(); drawCall(); }), // the owner changed the rules
       room.on('brokers', () => { drawBrokers(); drawPeers(); }),
       holdToReveal(room, peers, conn));
     drawPeers(); drawBrokers(); drawLog(true); drawCall(); drawWaiting(); drawAppNote();

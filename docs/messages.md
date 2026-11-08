@@ -94,6 +94,15 @@ online whose level is lower or higher than ours (`Room.appGaps`) in a note ("Ada
 yours"), and Diagnostics lists the apps seen. Raise `PROTOCOL` with every change an older app
 would not understand, and before the next one that changes the wire format.
 
+## Room rules
+
+`policy` {rev, rules}, signed by the room owner: who may join, who may write, whether files and
+calls are allowed (the room settings' Rules page; see security.md). Only the newest is kept (the
+highest `rev`), it is never trimmed from the log, it syncs like a message, and the conversation shows
+it as a quiet line ("Ada changed the room rules"). It is judged on receipt like everything else: the
+author must be the current owner, and the rules apply to what was written after them. A message a
+rule forbids is dropped (the diagnostics count it as "against the room rules").
+
 ## Reactions and edits
 
 Two more signed envelope kinds that ride on another message. `react` {id, emoji, on}: per author,

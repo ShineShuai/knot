@@ -1,200 +1,105 @@
-// Settings, linked devices and the diagnostics report.
-import { suggestAlias } from '../chat/device-sync.js';
-import { ALIAS_MAX } from '../chat/envelope.js';
+// Settings: one dialog with a list of pages (general, notifications, network, devices, data,
+// about), made by SettingsShell. What cannot go wrong applies as soon as it is changed (language,
+// name, previews, notifications); the lists that must be right as a whole (network, devices)
+// have an Apply bar.
+import { SHARED } from '../chat/device-sync.js';
 import { keepStorage, storageState } from '../store/persist.js';
+import { VERSION } from '../version.js';
 import { h } from './dom.js';
 import { diagnosticsReport } from './diagnostics.js';
 import { LANGUAGES, setLanguage, t } from './i18n.js';
+import { DevicesPage } from './settings-devices.js';
+import { NetworkPage } from './settings-network.js';
+import { SettingsShell, field, switchRow } from './settings-shell.js';
+
+/** Who a page's settings reach: all devices of this person (as the app really shares them), or
+ *  only this one. */
+const scope = (shared) => (shared ? { text: t('scopeAll'), kind: '' }
+  : { text: t('scopeDevice'), kind: 'me' });
+const scopeOf = (...keys) => scope(keys.every((k) => SHARED.includes(k)));
 
 export class SettingsDialogs {
   constructor(ui) {
     this.ui = ui;
+    this.shell = null;
   }
 
-  /** Link a second device (main device: answer its code; new device: make a code), and the
-   *  list of linked devices with "Unlink". */
-  async devices() {
-    const { model } = this.ui;
-    const holder = h('div'); // the list of devices; drawn again when a device is added
-    let save = async () => this.ui.dialog.close();
-    const refresh = () => {
-      const section = this.#devicesSection();
-      save = section.save;
-      holder.replaceChildren(...section.nodes);
-    };
-    refresh();
-    const parts = model.isLinked
-      ? [h('p', {}, t('linkIntro')),
-        h('p', {}, t('linkedTo', { id: model.identity.member.slice(0, 4) })), holder,
-        this.#separate()]
-      : [h('p', {}, t('linkIntro')),
-        h('section', {}, h('h3', {}, t('devicesYours')), holder),
-        h('section', {}, h('h3', {}, t('linkNew')), h('p', {}, t('linkNewHelp')),
-          this.#linkNewDevice(refresh)),
-        h('section', {}, h('h3', {}, t('linkThis')), h('p', {}, t('linkThisHelp')),
-          this.#linkThisDevice())];
-    // Save applies the names typed in the list above; Cancel (or ×) drops them.
-    this.ui.kit.open(t('devices'), ...parts,
-      this.ui.kit.footer({ save: t('save'), onSave: () => save() }));
+  /** Open the settings, at `page` (an id below) or at the first one. */
+  open(page = null) {
+    const { ui } = this;
+    this.shell = new SettingsShell(ui.kit);
+    this.shell.open(t('settings'), [
+      { id: 'general', label: t('settingsGeneral'),
+        scope: scopeOf('name', 'language', 'imagePreviews'), render: () => this.#general() },
+      ui.notifier.supported ? { id: 'notifications', label: t('settingsNotifications'),
+        scope: scopeOf('notifications'), render: () => this.#notifications() } : null,
+      { id: 'network', label: t('settingsNetwork'),
+        scope: scopeOf('brokers', 'brokersEnabled', 'relayFallback', 'stunServers', 'turnServers'),
+        render: (ctx) => new NetworkPage(ui).render(ctx) },
+      { id: 'devices', label: t('settingsDevices'), scope: scope(true), // names travel along
+        render: () => new DevicesPage(ui).render() },
+      { id: 'data', label: t('settingsData'), scope: scope(false), render: () => this.#data() },
+      { id: 'about', label: t('settingsAbout'), render: () => this.#about() },
+    ].filter(Boolean), page);
   }
 
-  /** The footer of the settings, with a link to the lab page after the buttons. */
-  #withLab(footer) {
-    footer.append(h('a', { class: 'button', href: 'lab/lab.html' }, t('lab')));
-    return footer;
+  /** The devices page: also where "use this device with your main device" leads. */
+  devices() { this.open('devices'); }
+
+  /** Apply one change at once; says why if it is refused. */
+  async #save(patch) {
+    try {
+      await this.ui.model.updateSettings(patch);
+      this.ui.notify(t('saved'));
+    } catch (err) { this.ui.notify(t('badSettings', { why: err.message })); }
   }
 
-  /** The devices with their aliases, and what Save does with the names typed there. */
-  #devicesSection() {
-    const { model } = this.ui;
-    if (!model.isLinked && model.deviceRows().length < 2) {
-      return { nodes: [h('p', { class: 'muted' }, t('devicesNone'))],
-        save: async () => this.ui.dialog.close() };
-    }
-    const list = this.#deviceList();
-    return {
-      nodes: [h('p', { class: 'muted' }, t('deviceAliasHelp')), list.node], save: list.save,
-    };
-  }
-
-  /** All devices of this identity, each with an alias to edit and, except the main device
-   *  and this one, an Unlink: any device may do either to any other. */
-  #deviceList() {
-    const { model } = this.ui;
-    const fields = [];
-    const node = h('ul', { class: 'devices-list' }, ...model.deviceRows().map((row) => {
-      const input = h('input', {
-        type: 'text', class: 'device-alias', maxLength: ALIAS_MAX, value: row.alias,
-        placeholder: row.main ? t('deviceMain') : '', 'aria-label': t('deviceAlias'),
-      });
-      fields.push({ row, input });
-      return h('li', {}, input,
-        row.self ? h('span', { class: 'muted' }, t('deviceThis')) : null,
-        !row.main && !row.self ? h('button', {
-          class: 'ghost',
-          onclick: async () => {
-            if (!confirm(t('devicesUnlinkConfirm', { name: row.alias }))) return;
-            await model.unlinkDevice(row.pub);
-            this.devices();
-          },
-        }, t('devicesUnlink')) : null);
-    }));
-    const save = async () => {
-      try {
-        for (const { row, input } of fields) {
-          if (input.value.trim() !== row.alias) await model.setDeviceAlias(row.pub, input.value);
-        }
-        this.ui.notify(t('devicesSaved'));
-        this.ui.dialog.close();
-      } catch (err) { this.ui.notify(t('badSettings', { why: err.message })); }
-    };
-    return { node, save };
-  }
-
-  /** A linked device leaves the main device and becomes a device of its own. */
-  #separate() {
-    return h('p', {}, h('button', {
-      class: 'ghost',
-      onclick: async () => {
-        if (!confirm(t('leaveLinkConfirm'))) return;
-        try { await this.ui.model.leaveLink(); } catch (err) { this.ui.notify(err.message); }
-      },
-    }, t('leaveLink')));
-  }
-
-  /** Main device: paste or scan the new device's code, show the answer. */
-  #linkNewDevice(onLinked) {
-    const result = h('div', { class: 'link-result' });
-    const input = this.ui.kit.codeInput(t('linkRequestPlaceholder'), async (text) => {
-      try {
-        const { code, sas, name } = await this.ui.model.linkDevice(text);
-        result.replaceChildren(
-          h('p', {}, t('linkGrantHelp', { name })), h('p', { class: 'sas-line' },
-            h('strong', { class: 'sas' }, sas)),
-          this.ui.kit.copyField(code, 4), this.ui.kit.qr(code),
-        );
-        input.area.value = ''; // the next code must not be pasted behind this one
-        onLinked?.(); // the new device is in the list now
-      } catch (err) { this.ui.notify(err.message); }
-    });
-    return h('div', {}, input.node,
-      h('button', { class: 'primary', onclick: input.submit }, t('linkMake')), result);
-  }
-
-  /** New device: show our code, take the main device's answer, confirm, apply. */
-  #linkThisDevice() {
-    const area = h('div', { class: 'link-result' });
-    const name = h('input', {
-      type: 'text', maxLength: ALIAS_MAX, value: suggestAlias() ?? '',
-      placeholder: t('linkDeviceName'),
-    });
-    const start = h('button', {
-      onclick: async () => {
-        start.disabled = true;
-        try {
-          const { code, read } = await this.ui.model.startLinking(name.value.trim());
-          const confirmBox = h('div');
-          const reply = this.ui.kit.codeInput(t('linkGrantPlaceholder'), async (text) => {
-            const grant = await read(text);
-            if (!grant) return this.ui.notify(t('linkInvalid'));
-            return confirmBox.replaceChildren(
-              h('p', {}, t('linkConfirm', { id: grant.mainId.slice(0, 4), rooms: grant.rooms })),
-              h('p', { class: 'sas-line' }, h('strong', { class: 'sas' }, grant.sas)),
-              h('button', {
-                class: 'primary',
-                onclick: async () => {
-                  if (!confirm(t('linkWarn'))) return;
-                  await grant.apply();
-                  this.ui.notify(t('linkDone'));
-                  location.reload();
-                },
-              }, t('linkDo')),
-            );
-          });
-          area.replaceChildren(this.ui.kit.copyField(code, 4), this.ui.kit.qr(code), reply.node,
-            h('button', { onclick: reply.submit }, t('connect')), confirmBox);
-        } catch (err) { this.ui.notify(err.message); start.disabled = false; }
-      },
-    }, t('linkMakeCode'));
-    return h('div', {}, name, start, area);
-  }
-
-  /** What this browser supports and how the links look: to paste when something fails. */
-  async diagnostics() {
-    const text = await diagnosticsReport(this.ui.model, this.ui.opts.diagnosticsEnv ?? globalThis);
-    const { kit } = this.ui;
-    kit.open(t('diagnostics'), h('p', {}, t('diagnosticsHelp')), kit.copyField(text));
-  }
-
-  open() {
+  #general() {
     const s = this.ui.model.settings;
     const name = h('input', { type: 'text', value: s.name, maxLength: 32 });
+    name.addEventListener('change', () => this.#save({ name: name.value.trim() }));
     const languages = { auto: t('languageAuto'), ...LANGUAGES };
     const language = h('select', {}, ...Object.entries(languages).map(
       ([value, label]) => h('option', { value, selected: value === s.language }, label),
     ));
-    const stun = h('textarea', { class: 'code', rows: 4, value: s.stunServers.join('\n') });
-    const turn = h('textarea', { class: 'code', rows: 3, value: JSON.stringify(s.turnServers) });
-    const brokers = h('textarea', { class: 'code', rows: 3, value: s.brokers.join('\n') });
-    const useBrokers = h('input', { type: 'checkbox', checked: s.brokersEnabled });
-    const health = this.ui.model.brokerHealth;
-    const brokerRows = h('ul', { class: 'broker-health' });
-    const showBrokers = () => brokerRows.replaceChildren(...(health?.rows(
-      brokers.value.split('\n').map((l) => l.trim()).filter(Boolean),
-    ) ?? []).map((r) => h('li', { class: r.ok ? 'up' : r.ok === false ? 'down' : '' },
-      `${r.ok ? '✓' : r.ok === false ? '✗' : '…'} `
-      + t(r.ok ? 'brokerUp' : r.relay === false ? 'brokerNoRelay'
-        : r.ok === false ? 'brokerDown' : 'brokerUnknown', r))));
-    const checkBrokers = h('button', { onclick: async () => {
-      await health.check(brokers.value.split('\n').map((l) => l.trim()).filter(Boolean));
-      showBrokers();
-    } }, t('brokerCheck'));
-    if (health) {
-      showBrokers();
-      this.ui.dialog.addEventListener('close', health.on('change', showBrokers), { once: true });
-    }
-    // Ask the browser to keep our data. The answer is shown in the dialog itself (a refusal is
-    // explained with what helps, never an error); browsers often refuse without any prompt.
+    language.addEventListener('change', async () => {
+      try { await this.ui.model.updateSettings({ language: language.value }); } catch (err) {
+        this.ui.notify(t('badSettings', { why: err.message }));
+        return;
+      }
+      setLanguage(s.language);
+      this.ui.relocalize();
+      this.ui.notify(t('saved'));
+      this.open(this.shell.current); // this dialog too, in the new language
+    });
+    const modes = { auto: 'previewAuto', tap: 'previewTap', off: 'previewOff' };
+    const previews = h('select', {}, ...Object.entries(modes).map(
+      ([value, label]) => h('option', { value, selected: value === s.imagePreviews }, t(label)),
+    ));
+    previews.addEventListener('change', () => this.#save({ imagePreviews: previews.value }));
+    return h('div', {}, field(t('language'), language), field(t('name'), name),
+      field(t('imagePreviews'), previews));
+  }
+
+  #notifications() {
+    const on = h('input', {
+      type: 'checkbox', role: 'switch', checked: this.ui.model.settings.notifications,
+    });
+    on.addEventListener('change', async () => {
+      // asking for permission needs this click; if it is refused, the setting stays off
+      const allowed = !on.checked || await this.ui.notifier.enable();
+      on.checked = on.checked && allowed;
+      try {
+        await this.ui.model.updateSettings({ notifications: on.checked });
+        this.ui.notify(t(allowed ? 'saved' : 'notifyBlocked'));
+      } catch (err) { this.ui.notify(t('badSettings', { why: err.message })); }
+    });
+    return switchRow(t('notifications'), on);
+  }
+
+  /** Ask the browser to keep our data. The answer is shown on the page itself (a refusal is
+   *  explained with what helps, never an error); browsers often refuse without any prompt. */
+  #data() {
     const storage = this.ui.opts.storage ?? globalThis.navigator?.storage;
     const kept = h('p', { class: 'storage' });
     const help = h('p', { hidden: true }, t('storageHelp'));
@@ -215,74 +120,19 @@ export class SettingsDialogs {
       keep.hidden = help.hidden = !atRisk;
     };
     showStorage();
-    const relay = h('input', { type: 'checkbox', checked: s.relayFallback });
-    const notifications = h('input', { type: 'checkbox', checked: s.notifications });
-    const modes = { auto: 'previewAuto', tap: 'previewTap', off: 'previewOff' };
-    const previews = h('select', {}, ...Object.entries(modes).map(
-      ([value, label]) => h('option', { value, selected: value === s.imagePreviews }, t(label)),
-    ));
-    const lines = (el) => el.value.split('\n').map((l) => l.trim()).filter(Boolean);
-    const save = async () => {
-      try {
-        const stunList = lines(stun), brokerList = lines(brokers), turnList = JSON.parse(
-          turn.value || '[]',
-        );
-        if (!stunList.every((u) => /^stuns?:/.test(u))) throw new Error(
-          'STUN URLs start with stun:',
-        );
-        if (!brokerList.every((u) => u.startsWith('wss://'))) throw new Error(
-          'brokers must use wss://',
-        );
-        if (!Array.isArray(turnList)) throw new Error('TURN must be a JSON list');
-        const languageChanged = language.value !== s.language;
-        // asking for permission needs this click; if it is refused, the setting stays off
-        const allowed = !notifications.checked || await this.ui.notifier.enable();
-        await this.ui.model.updateSettings({
-          name: name.value.trim(),
-          language: language.value,
-          stunServers: stunList,
-          turnServers: turnList,
-          brokers: brokerList,
-          brokersEnabled: useBrokers.checked,
-          relayFallback: relay.checked,
-          notifications: notifications.checked && allowed,
-          imagePreviews: previews.value,
-        });
-        if (languageChanged) { setLanguage(s.language); this.ui.relocalize(); }
-        this.ui.notify(t(allowed ? 'saved' : 'notifyBlocked'));
-        this.ui.dialog.close();
-      } catch (err) { this.ui.notify(t('badSettings', { why: err.message })); }
-    };
-    const field = (label, control) => h(
-      'label',
-      { class: 'field' },
-      h('span', {}, label),
-      control,
-    );
-    const check = (label, control) => h(
-      'label',
-      { class: 'check' },
-      control,
-      h('span', {}, label),
-    );
-    this.ui.kit.open(
-      t('settings'),
-      field(t('language'), language),
-      field(t('name'), name),
-      field(t('stun'), stun),
-      field(t('turn'), turn),
-      field(t('brokerList'), brokers),
-      health ? h('div', { class: 'field' }, brokerRows, checkBrokers) : null,
-      check(t('useBrokers'), useBrokers),
-      check(t('relayText'), relay),
-      this.ui.notifier.supported ? check(t('notifications'), notifications) : null,
-      h('div', { class: 'field storage-box' },
-        h('strong', {}, t('storageTitle')), h('p', {}, t('storageWhy')), kept, help, keep, result),
-      h('div', { class: 'field' },
-        h('button', { onclick: () => this.devices() }, t('devices')),
-        h('button', { onclick: () => this.diagnostics() }, t('diagnostics'))),
-      field(t('imagePreviews'), previews),
-      this.#withLab(this.ui.kit.footer({ save: t('saveSettings'), onSave: save })),
-    );
+    return h('div', { class: 'storage-box' }, h('p', {}, t('storageWhy')), kept, help, keep,
+      result);
+  }
+
+  /** The version, and what this browser supports and how the links look: to paste when
+   *  something fails. */
+  #about() {
+    const report = h('div');
+    const show = h('button', { onclick: async () => {
+      const env = this.ui.opts.diagnosticsEnv ?? globalThis;
+      report.replaceChildren(this.ui.kit.copyField(await diagnosticsReport(this.ui.model, env)));
+    } }, t('diagnostics'));
+    return h('div', {}, h('p', {}, `knot v${VERSION}`), h('p', {}, t('diagnosticsHelp')), show,
+      report);
   }
 }

@@ -3,7 +3,7 @@
 // The page keeps the room list, the stage and the unread bookkeeping; the rest has its own
 // module: the message box (composer.js), messages (messages.js), image cards
 // (image-cards.js) and the dialogs (dialog-kit.js, room-dialogs.js, join-dialogs.js,
-// settings-dialogs.js).
+// settings-dialogs.js and the settings pages).
 import { authorIdOf } from '../chat/envelope.js';
 import { searchLog } from '../chat/search.js';
 import { plain } from '../util/text.js';
@@ -22,6 +22,7 @@ import { Messages } from './messages.js';
 import { Notifier } from './notifier.js';
 import { holdToReveal } from './reveal.js';
 import { RoomDialogs } from './room-dialogs.js';
+import { RoomSettings } from './room-settings.js';
 import { SettingsDialogs } from './settings-dialogs.js';
 
 /** `opts`: `updates` (an UpdateWatcher), `notifierEnv` (tests): optional. */
@@ -42,6 +43,7 @@ class Ui {
     this.messages = new Messages(this);
     this.images = new ImageCards(this);
     this.roomDialogs = new RoomDialogs(this);
+    this.roomSettings = new RoomSettings(this);
     this.joinDialogs = new JoinDialogs(this);
     this.settingsDialogs = new SettingsDialogs(this);
     this.notifier = new Notifier({
@@ -90,6 +92,7 @@ class Ui {
       this.notify(t('unlinkedNotice'));
       setTimeout(() => globalThis.location?.reload?.(), 2500);
     });
+    this.model.on('prefs', () => this.#refreshUnread()); // a room was muted or unmuted
     this.model.on('settings', (keys) => { // another device of ours changed them
       if (!keys.includes('language')) return;
       setLanguage(this.model.settings.language);
@@ -138,7 +141,8 @@ class Ui {
 
   /** Unread counts: in the room list, in the tab title and on the installed app's icon. */
   #refreshUnread() {
-    const total = [...this.model.rooms.values()].reduce((sum, room) => sum + room.unread, 0);
+    const total = [...this.model.rooms.values()]
+      .reduce((sum, room) => sum + (room.muted ? 0 : room.unread), 0);
     document.title = total ? `(${total}) knot` : 'knot';
     const badge = total ? navigator.setAppBadge?.(total) : navigator.clearAppBadge?.();
     badge?.catch?.(() => {}); // not every installed app may show a badge
@@ -241,6 +245,7 @@ class Ui {
           : null, onclick: () => this.select(room) },
           h('span', { class: unread ? 'room-name new' : 'room-name' },
             room.label || t('roomDefault')),
+          room.muted ? h('span', { class: 'muted-mark', title: t('mutePref') }, '🔕') : null,
           unread ? h('span', {
             class: 'unread', title: t('unread', { n: unread }),
             'aria-label': t('unread', { n: unread }),
@@ -417,32 +422,29 @@ class Ui {
     this.#offStage.push(room.call.on('change', drawCall));
     const composer = this.composer.mount(room, { keepBottom, drawLog });
 
-    const membersBtn = room.roster
-      ? h('button', { onclick: () => this.roomDialogs.members(room) }) : null;
-    const drawMembersBtn = () => {
-      if (!membersBtn) return;
+    // One button for everything about the room; the owner sees how many are waiting to get in.
+    const gear = h('button', {
+      title: t('roomSettings'), 'aria-label': t('roomSettings'),
+      onclick: () => this.roomSettings.open(room),
+    });
+    const drawGear = () => {
       const open = room.isOwner ? room.joinRequests.length + room.waitingSenders.length : 0;
-      membersBtn.textContent = open ? `${t('members')} (${open})` : t('members');
+      gear.replaceChildren('⚙', ...(open ? [' ', h('em', { class: 'count' }, String(open))]
+        : []));
     };
-    drawMembersBtn();
-    this.#offStage.push(room.on('requests', drawMembersBtn), room.on('roster', drawMembersBtn),
-      room.on('pending', drawMembersBtn));
+    drawGear();
+    this.#offStage.push(room.on('requests', drawGear), room.on('roster', drawGear),
+      room.on('pending', drawGear));
 
     this.stage.replaceChildren(
       h('header', { class: 'stage-head' },
         h('button', { class: 'ghost back', onclick: () => this.select(null) }, t('rooms')),
         h('h2', {}, room.label || t('roomDefault')),
-        h('button', {
-          class: 'ghost', title: t('renameRoom'), 'aria-label': t('renameRoom'),
-          onclick: () => this.roomDialogs.rename(room),
-        }, '✎'),
         this.#iconButton('🔍', t('search'), toggleSearch),
-        this.#iconButton('⤓', t('exportHistory'), () => this.roomDialogs.exportHistory(room)),
         brokers,
         callButtons,
-        membersBtn,
         h('button', { onclick: () => this.roomDialogs.invite(room) }, t('invite')),
-        h('button', { class: 'ghost', onclick: () => this.roomDialogs.leave(room) }, t('leave'))),
+        gear),
       callBanner, searchBar, peers, conn, waiting, appNote, log, composer.quoteBar, composer.chips,
       composer.bar,
     );

@@ -16,7 +16,7 @@ export class DialogKit {
   /** The frame: a title, the content and, at the bottom, a footer. A dialog that makes
    *  changes brings its own (see `footer`); any other ends with a Close. */
   open(title, ...content) {
-    this.dialog.classList.remove('wide');
+    this.dialog.classList.remove('wide', 'paged');
     const parts = content.filter((part) => part != null && part !== false); // never print "null"
     if (!parts.some((part) => String(part.className ?? '').includes('dialog-footer'))) {
       parts.push(this.footer());

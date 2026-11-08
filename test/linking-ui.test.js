@@ -32,7 +32,7 @@ const shown = (p) => dialog(p).querySelectorAll('textarea').filter(readOnly);
 
 async function openDevices(p) {
   find(p.root, 'button', 'Settings')[0].click();
-  button(p, 'Linked devices').click();
+  button(p, 'Devices').click();
   await until(() => dialog(p).textContent.includes('Add a new device to this one')
     || dialog(p).textContent.includes('This is a linked device'));
 }
@@ -109,7 +109,7 @@ async function linkViaUi(main, phone) {
   await until(() => phone.kv.get('delegate'));
 }
 
-test('ui: aliases change with Save, not with Cancel; Settings can be cancelled', async () => {
+test('ui: aliases change with Apply, not with Close; Settings has no Save', async () => {
   const [main, phone] = [await person('Ada'), await person('')];
   location.reload = () => {};
   await linkViaUi(main, phone);
@@ -117,15 +117,15 @@ test('ui: aliases change with Save, not with Cancel; Settings can be cancelled',
     .find((i) => i.value.startsWith('device-'));
   await openDevices(main);
   field().value = 'tablet';
-  button(main, 'Cancel').click();
-  assert.ok(main.model.deviceRows().every((r) => r.alias !== 'tablet'), 'Cancel drops it');
+  button(main, 'Close').click();
+  assert.ok(main.model.deviceRows().every((r) => r.alias !== 'tablet'), 'Close drops it');
   await openDevices(main);
   assert.ok(field(), 'the field shows what is saved');
   field().value = 'tablet';
-  button(main, 'Save').click();
+  button(main, 'Apply').click();
   await until(() => main.model.deviceRows().some((r) => r.alias === 'tablet'));
   await until(() => /saved/i.test(main.root.querySelector('.toast').textContent));
   find(main.root, 'button', 'Settings')[0].click();
-  assert.ok(button(main, 'Cancel'), 'Settings has Save and Cancel');
-  assert.ok(button(main, 'Save'));
+  assert.ok(button(main, 'Close'), 'Settings has a Close');
+  assert.equal(find(dialog(main), 'button', 'Save').length, 0, 'and nothing to save');
 });

@@ -9,6 +9,8 @@
 //   d:<device key>   the device's alias; null once it was unlinked
 //   r:<room id>      { s: room secret, l: label, o: owner id | null }; null once it was left
 //   k:<room id>      { ms, c }: the newest message stamp read on any of our devices
+//   p:<room id>      our own choices for that room: { mute?: true, previews?: 'auto'|'tap'|'off' };
+//                    null once there are none
 //   c:devices        the secret of the channel where our devices meet when they share no room
 import { saveSettings } from '../config.js';
 import { HLC, MAX_FUTURE_MS, compareStamps } from '../util/hlc.js';
@@ -25,12 +27,15 @@ export const SHARED = Object.freeze([
 export const deviceKey = (pub) => `d:${pub}`;
 export const roomKey = (id) => `r:${id}`;
 export const readKey = (id) => `k:${id}`;
+export const prefKey = (id) => `p:${id}`;
 export const CHANNEL = 'c:devices';
 const DEVICE = /^d:[A-Za-z0-9_-]{43}$/;
 const ROOM = /^r:[A-Za-z0-9_-]{16}$/;
 const READ = /^k:[A-Za-z0-9_-]{16}$/;
+const PREF = /^p:[A-Za-z0-9_-]{16}$/;
 const MAX_ITEMS = 1000;
 
+const PREVIEW_MODES = ['auto', 'tap', 'off'];
 const isList = (v, max, ok) => Array.isArray(v) && v.length <= max && v.every(ok);
 const url = (prefix) => (s) => typeof s === 'string' && s.length <= 200 && prefix.test(s);
 const CHECKS = {
@@ -42,7 +47,7 @@ const CHECKS = {
   brokers: (v) => isList(v, 10, url(/^wss:\/\//)),
   brokersEnabled: (v) => typeof v === 'boolean',
   relayFallback: (v) => typeof v === 'boolean',
-  imagePreviews: (v) => ['auto', 'tap', 'off'].includes(v),
+  imagePreviews: (v) => PREVIEW_MODES.includes(v),
 };
 const B64U = /^[A-Za-z0-9_-]+$/;
 const validRoom = (v) => v === null || (!!v && typeof v === 'object'
@@ -50,6 +55,10 @@ const validRoom = (v) => v === null || (!!v && typeof v === 'object'
   && typeof v.s === 'string' && v.s.length === 22 && B64U.test(v.s)
   && typeof v.l === 'string' && v.l.length >= 1 && v.l.length <= 40
   && (v.o === null || (typeof v.o === 'string' && v.o.length === 11 && B64U.test(v.o))));
+const validPref = (v) => v === null || (!!v && typeof v === 'object' && !Array.isArray(v)
+  && Object.keys(v).every((k) => ['mute', 'previews'].includes(k))
+  && (v.mute === undefined || v.mute === true)
+  && (v.previews === undefined || PREVIEW_MODES.includes(v.previews)));
 const validStamp = (v) => !!v && typeof v === 'object' && Object.keys(v).length === 2
   && Number.isSafeInteger(v.ms) && v.ms >= 0 && Number.isSafeInteger(v.c) && v.c >= 0;
 const validValue = (key, v) => {
@@ -57,10 +66,11 @@ const validValue = (key, v) => {
   if (DEVICE.test(key)) return v === null || isAlias(v);
   if (ROOM.test(key)) return validRoom(v);
   if (READ.test(key)) return validStamp(v);
+  if (PREF.test(key)) return validPref(v);
   return !!CHECKS[key]?.(v);
 };
 const known = (key) => SHARED.includes(key) || DEVICE.test(key) || ROOM.test(key)
-  || READ.test(key) || key === CHANNEL;
+  || READ.test(key) || PREF.test(key) || key === CHANNEL;
 const validItem = (key, i) => !!i && typeof i === 'object' && validValue(key, i.v)
   && Number.isSafeInteger(i.ms) && i.ms >= 0 && i.ms <= Date.now() + MAX_FUTURE_MS
   && Number.isSafeInteger(i.c) && i.c >= 0

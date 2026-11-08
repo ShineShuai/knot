@@ -78,7 +78,7 @@ not at all while the owner is away, and never again after a no. On the owner's s
 waiting messages points to the join requests.
 
 The owner can also let in a sender who does not ask (an app from before the request above, or one
-that was declined): Members lists "Wrote, but not on the list", each with the short id the messages
+that was declined): the Members page of the room settings lists "Wrote, but not on the list", each with the short id the messages
 are signed with and how many wait. *Let in* admits that key under the name it signs (after a
 confirmation: anyone with the room's secret can sign any name); *Ignore* drops what waits and holds
 nothing more from them until the page restarts. A device that separates from its main device

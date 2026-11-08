@@ -364,10 +364,12 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
   await b.locator('.quote.gone', { hasText: 'Deleted message' }).waitFor();
 
   // The creator owns the room: the member list says so, and offers owner actions.
+  await a.getByRole('button', { name: 'Room settings' }).click();
   await a.getByRole('button', { name: 'Members' }).click();
   await a.locator('.member .badge', { hasText: 'owner' }).waitFor();
   await a.locator('.member').nth(1).getByRole('button', { name: 'Remove' }).waitFor();
   await a.keyboard.press('Escape');
+  await b.getByRole('button', { name: 'Room settings' }).click();
   await b.getByRole('button', { name: 'Members' }).click();
   assert.equal(await b.getByRole('button', { name: 'Remove' }).count(), 0); // only the owner
   await b.keyboard.press('Escape');
@@ -395,13 +397,22 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
     return el === hit || el.contains(hit);
   });
   // Settings: broker status (probed at startup), diagnostics report, storage line.
-  await a.getByRole('button', { name: 'Settings' }).click();
+  await a.getByRole('button', { name: 'Settings', exact: true }).click();
+  // laid out as a dialog: its buttons can be reached, and both of them close it
+  assert.equal(await reachable('dialog .dialog-footer button'), true);
+  await a.locator('dialog header button').click();
+  assert.equal(await a.locator('dialog[open]').count(), 0, '× closes Settings');
+  await a.getByRole('button', { name: 'Settings', exact: true }).click();
+  await a.locator('dialog .dialog-footer button').click();
+  assert.equal(await a.locator('dialog[open]').count(), 0, 'Close closes Settings');
+  await a.getByRole('button', { name: 'Settings', exact: true }).click();
+  await a.getByRole('button', { name: 'Network', exact: true }).click();
   await a.waitForFunction(() => document.querySelectorAll('.broker-health li').length === 3
     && [...document.querySelectorAll('.broker-health li')]
       .every((li) => !li.textContent.startsWith('…')),
   null, { timeout: 20000 });
+  await a.getByRole('button', { name: 'About', exact: true }).click();
   await a.getByRole('button', { name: 'Diagnostics' }).click();
-  await a.locator('dialog h2', { hasText: 'Diagnostics' }).waitFor();
   const report = await a.locator('dialog textarea').inputValue();
   assert.match(report, /^knot \d/);
   assert.match(report, /WebCrypto Ed25519: yes/);

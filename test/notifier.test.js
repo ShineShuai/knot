@@ -42,6 +42,18 @@ test('a message in a room that is not on screen becomes one notification', async
   assert.deepEqual(state.opened, ['room1']);
 });
 
+test('a muted room makes no notification', async () => {
+  const { state, room, hear } = setup();
+  room.muted = true;
+  hear('Bob', 'psst');
+  await wait(450);
+  assert.equal(state.shown.length, 0);
+  room.muted = false;
+  hear('Bob', 'hello');
+  await wait(450);
+  assert.equal(state.shown.length, 1);
+});
+
 test('messages that arrive together are summed up; files show their name', async () => {
   const { state, hear } = setup();
   hear('Bob', 'one'); hear('Bob', 'two'); hear('Cy', 'three');

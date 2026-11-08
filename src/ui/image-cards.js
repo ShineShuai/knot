@@ -38,7 +38,7 @@ export class ImageCards {
   }
 
   card(room, env) {
-    if (!env.body.img || room.settings.imagePreviews === 'off') return null;
+    if (!env.body.img || room.previewMode === 'off') return null;
     const key = `${room.id}:${env.id}`;
     let card = this.#cards.get(key);
     if (!card) {

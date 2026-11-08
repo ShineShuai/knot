@@ -7,17 +7,59 @@ search, export, language.
 
 ## Dialogs
 
-Each ends with a footer: the action that applies what was changed and Cancel (Settings: Save,
-Linked devices: Save for the device names, New room: Create room, Join: Join, Export: Export), or
-a single Close for a dialog that only shows things (invite, members, diagnostics). The × in the
-corner is a Cancel: whatever was not saved is dropped.
+Each ends with a footer: the action that applies what was changed and Cancel (New room: Create
+room, Join: Join, Export: Export), or a single Close for a dialog that only shows things (invite,
+members) or that applies its changes itself (Settings). The × in the corner is a Cancel: whatever
+was not applied is dropped.
+
+## Settings
+
+One dialog, built by `ui/settings-shell.js`: a list of pages (General, Notifications, Network,
+Devices, Data, About) beside the open page. On a screen narrower than 720px the list and the page
+take turns (a Back button on the page). Only the open page is in the document, but a page keeps
+what was typed while another is visited. A chip on each page says who its settings reach: *All
+your devices* (the keys in `SHARED`, `chat/device-sync.js`: the chip is derived from it) or *This
+device*.
+
+- **Applied at once:** language, name, image previews, notifications (the permission prompt needs
+  that click; if refused the switch goes back off).
+- **Apply and Revert:** network (brokers, relay, STUN, TURN) and device names. A wrong broker or
+  STUN list can cut a person off from every room, so these are checked while typed
+  (`networkProblems` in `config.js`: the message is shown under the field, Apply is off) and saved
+  together. TURN servers are rows (address, user, password); *Reset to defaults* fills the
+  controls and still waits for Apply.
+- **Devices** is the old Linked devices dialog; **About** has the version and the diagnostics
+  report; **Network** has the link to the network test page. `SettingsDialogs.open(page)` and
+  `devices()` open the dialog at a page.
 
 ## Room names
 
 "New room" opens a dialog (name, Create or Cancel): nothing exists until Create is pressed, and a
-double click makes one room. The default name is the first free "Room N". The ✎ button renames a
-room; names are local to each device. The room list is saved one write at a time, so rooms created
-together are all kept.
+double click makes one room. The default name is the first free "Room N". A room is renamed in its
+settings (Overview); names are local to each person (the label travels only between a person's own
+devices). The room list is saved one write at a time, so rooms created together are all kept.
+
+## Room settings
+
+The ⚙ in the room header opens them (a count on it: join requests and unknown senders waiting for
+the owner). They use the same frame as the app's Settings (`ui/settings-shell.js`, opened by
+`ui/room-settings.js`). The header keeps back, title, search, broker state, calls, Invite and ⚙;
+rename, export, the member list and Leave moved in.
+
+- **Overview:** the room's name (applies at once; only you see it), your role (owner, member, or
+  an open room without an owner), the owner and the number of members.
+- **Members** (rooms with an owner): the member list, join requests, senders not on the list, the
+  recovery code, and the join link and pairing code. Members see the list only.
+- **My preferences:** *Mute this room* (no notifications, not counted in the tab title or the app
+  badge; the room list shows 🔕) and *Image previews in this room* (use the app setting, or
+  auto / on tap / off). Export of the history (text or signed JSON) is here too.
+- **Leave room:** asks first, as before.
+
+The choices of *My preferences* are only the person's own: they are kept per room
+(`AppModel.roomPrefs` / `setRoomPrefs`, `Room.prefs`, `room.muted`, `room.previewMode`) and follow
+the person to their other devices (`p:<room id>`, see devices.md); other members never see them.
+
+The dialog of both settings has the class `paged` (not `shell`: that is the page's own layout).
 
 ## Membership notices
 
@@ -45,7 +87,7 @@ shows the address it really goes to. Quotes and notifications show plain text.
 Each device keeps, per room, the stamp of the newest message it has shown (`read:<room>` in
 storage; on first run everything already there counts as read). Messages from others after that
 stamp are "unread": counted in the room list, in the tab title `(3) knot` and on an installed
-app's icon. A room on screen (page visible and focused) is read at once. Settings > "Notify me
+app's icon (a muted room is not counted in the last two, and gives no notification). A room on screen (page visible and focused) is read at once. Settings > "Notify me
 about new messages..." asks the browser for permission (from the click) and then shows one
 notification per room, with several arrivals summed up. Notifications go through the service
 worker when there is one (phones need that; clicking opens the room). There is no push server, so
@@ -55,8 +97,8 @@ they only work while the app is open somewhere.
 
 The search box (🔍) filters the conversation to messages whose current text or file name contains
 every word (case and accents ignored); it covers what this device holds (the log, up to `logCap`).
-Export (⤓) saves that same history as readable text or as the signed envelopes (JSON, verifiable);
-shared files are not included.
+Export (room settings > My preferences) saves that same history as readable text or as the signed
+envelopes (JSON, verifiable); shared files are not included.
 
 ## Connection reveal
 

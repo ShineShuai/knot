@@ -13,7 +13,7 @@ STUN. Channels connect to the fast ones first; a broker whose probe failed is le
 only every minute or so, at once if a real connection works) and probed again every five minutes.
 A broker that connects but refuses a subscription (SUBACK failure or none within 8 s) or does not
 relay is down too, shown as "does not pass messages on"; a connection alone does not clear that,
-only a passing probe does. Settings shows each broker with its time, "not reachable" or "does not
+only a passing probe does. Settings > Network shows each broker with its time, "not reachable" or "does not
 pass messages on", with a *Check brokers* button. The lab runs the same probe.
 
 ## Install icons
@@ -57,7 +57,7 @@ click; Settings says whether it was granted and can ask again. Without it the br
 the identity key and history when space is low (Safari: after about a week without a visit unless
 the app is installed to the Home Screen or Dock). The key cannot be recovered.
 
-Settings > *Your data on this device* explains this and shows the state: *Protected*, *Not
+Settings > Data explains this and shows the state: *Protected*, *Not
 protected* (with hints: install the app, open it regularly, allow a permission prompt, export
 chats, keep recovery codes) or *cannot be asked* (no `navigator.storage.persist`). *Keep my data*
 asks again and answers in the dialog itself: "Asking the browser...", then "Done" or "did not

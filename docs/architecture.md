@@ -21,7 +21,7 @@ How the code is laid out. Behaviour and protocol details are in the topic docume
     src/
       main.js                boot
       app.js                 AppModel: identity, settings, set of rooms
-      config.js              defaults: STUN, brokers, limits (overridable in Settings)
+      config.js              defaults: STUN, brokers, limits (overridable in Settings); checks
       version.js             the version shown in the room list (equal to package.json)
       build.js               which deploy this is: channel (beta/prod) and commit, from the page
       update.js              notices a newer published build (build.json)
@@ -93,9 +93,13 @@ How the code is laid out. Behaviour and protocol details are in the topic docume
         conn.js              text for the hold-V connection reveal
         reveal.js            hold V: how everyone is connected
         dialog-kit.js        the dialog frame and its footer, copy field, QR, code box with scanner
-        room-dialogs.js      new, rename, recovery code, invite, members, export, leave
+        room-dialogs.js      new room, recovery code, invite, member list, export buttons, leave
+        room-settings.js     room settings (the ⚙): overview, members, my preferences, leave
         join-dialogs.js      joining: by link, code, recovery code, or asking the owner
-        settings-dialogs.js  settings, linked devices, diagnostics
+        settings-shell.js    settings frame: list of pages beside the open page; Apply bar, chips
+        settings-dialogs.js  settings pages: general, notifications, data, about
+        settings-network.js  network page: brokers, relay, STUN, TURN, checked while typed
+        settings-devices.js  devices page: link a device, names, unlink
         call-view.js         the call window: tiles, microphone / camera / chat / leave
         scanner.js           camera QR scanning (BarcodeDetector), paste fallback
         notifier.js          browser notifications for rooms that are not on screen

@@ -1,5 +1,6 @@
-// Dialogs about one room or the room list: new, rename, recovery code, invite, members,
-// export and leave. The page (view.js) opens them; they use its public parts (`ui`).
+// Dialogs about one room or the room list: new, recovery code, invite and leave; and the parts
+// of the room settings (room-settings.js): the invite sections, the member list, the export
+// buttons. The page (view.js) opens them; they use its public parts (`ui`).
 import { toB64u } from '../util/bytes.js';
 import { plain } from '../util/text.js';
 import { decodeCode } from '../net/handshake.js';
@@ -27,17 +28,6 @@ export class RoomDialogs {
 
   #freeRoomName() {
     return nextRoomName([...this.ui.model.rooms.values()].map((r) => r.label), t('roomDefault'));
-  }
-
-  rename(room) {
-    this.#nameDialog({
-      title: t('renameRoom'), button: t('save'), value: room.label || this.#freeRoomName(),
-      onSave: async (name) => {
-        await this.ui.model.renameRoom(room.id, name);
-        this.ui.dialog.close();
-        if (room === this.ui.current) this.ui.renderStage();
-      },
-    });
   }
 
   /** A one-field dialog: a name, then the action button. Enter works like the button. */
@@ -91,17 +81,14 @@ export class RoomDialogs {
     if (after) this.ui.dialog.addEventListener('close', after, { once: true });
   }
 
-  exportHistory(room) {
+  /** Buttons that save the history of a room as text or as signed JSON. */
+  exportButtons(room) {
     const save = (extension, content, type) => () => (
       this.#download(room, extension, content(room), type)
     );
-    this.ui.kit.open(t('exportHistory'),
-      h('p', {}, t('exportHelp', { n: room.log.size })),
-      this.ui.kit.footer({
-        save: t('exportText'), onSave: save('txt', exportText, 'text/plain'),
-        extra: [h('button', { onclick: save('json', exportJson, 'application/json') },
-          t('exportJson'))],
-      }));
+    return h('div', { class: 'actions' },
+      h('button', { onclick: save('txt', exportText, 'text/plain') }, t('exportText')),
+      h('button', { onclick: save('json', exportJson, 'application/json') }, t('exportJson')));
   }
 
   #download(room, extension, content, type) {
@@ -114,6 +101,12 @@ export class RoomDialogs {
   }
 
   invite(room) {
+    this.ui.kit.open(t('invite'), ...this.inviteSections(room));
+  }
+
+  /** The join link, and for an owner the pairing by code: a dialog of their own, and part of
+   *  the member page of the room settings. */
+  inviteSections(room) {
     const pair = h('div', { class: 'pair' });
     const make = h('button', {
       onclick: async () => {
@@ -156,16 +149,18 @@ export class RoomDialogs {
       (url) => link.replaceChildren(this.ui.kit.copyField(url)),
     );
     const help = !owned ? 'linkHelp' : room.isOwner ? 'joinLinkHelpOwner' : 'joinLinkHelp';
-    this.ui.kit.open(t('invite'),
+    return [
       h('section', {}, h('h3', {}, t(owned ? 'joinLinkTitle' : 'linkTitle')),
         h('p', {}, t(help)), link),
       !owned || room.isOwner
         ? h('section', {}, h('h3', {}, t('pairTitle')), h('p', {}, t('pairHelp')), pair)
-        : null);
+        : null,
+    ].filter(Boolean);
   }
 
-  /** Members, and for the owner: join requests, removal and handing the room over. */
-  members(room) {
+  /** Members, and for the owner: join requests, removal and handing the room over; kept up to
+   *  date while the dialog is open. `again`: how to come back here after the recovery code. */
+  membersPanel(room, again = null) {
     const body = h('div', { class: 'members' });
     const run = (job) => job.catch((err) => this.ui.notify(err.message));
     const draw = () => {
@@ -209,19 +204,20 @@ export class RoomDialogs {
           h('h3', {}, t('recoveryTitle')),
           h('p', { class: 'file-size' },
             room.roster.recoveryKey ? t('recoverySet') : t('recoveryNotSet')),
-          h('button', { onclick: () => this.ensureRecovery(room, null, true) },
+          h('button', { onclick: () => this.ensureRecovery(room, again, true) },
             t('newRecoveryCode'))] : []));
     };
     draw();
     const offs = ['roster', 'requests', 'peers', 'pending'].map((name) => room.on(name, draw));
     this.ui.dialog.addEventListener('close', () => offs.forEach((off) => off()), { once: true });
-    this.ui.kit.open(t('members'), body);
+    return body;
   }
 
   /** Leave a room (after asking): its images, staged files and stored messages go. */
   leave(room) {
     const warn = [room.isOwner && t('leaveOwner'), this.ui.model.paired && t('leaveOthers')];
     if (!confirm([t('leaveConfirm'), ...warn.filter(Boolean)].join('\n'))) return;
+    this.ui.dialog.close(); // the room settings, if that is where this came from
     this.ui.images.disposeRoom(room.id);
     this.ui.composer.forget(room);
     this.ui.model.removeRoom(room.id).then(() => this.ui.select(null));

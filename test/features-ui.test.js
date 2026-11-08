@@ -226,8 +226,9 @@ test('ui: export saves the history as text or JSON', async () => {
   };
   URL.createObjectURL = (blob) => { saved.push(blob); return 'blob:test'; };
   try {
-    a.root.querySelector('[aria-label="Export history"]').click();
+    a.root.querySelector('[aria-label="Room settings"]').click();
     const dialog = a.root.querySelector('dialog');
+    button(dialog, 'My preferences').click();
     assert.match(dialog.textContent, /Saves the 1 messages/);
     button(dialog, 'Text').click();
     button(dialog, 'JSON').click();
@@ -275,8 +276,10 @@ test('ui: switching notifications on asks the browser; a refusal keeps them off'
   const save = async (expectToast) => {
     button(a.root, 'Settings').click();
     const dialog = a.root.querySelector('dialog');
-    find(dialog, 'label', 'Notify me about new messages')[0].querySelector('input').checked = true;
-    button(dialog, 'Save').click();
+    find(dialog, 'button', 'Notifications')[0].click();
+    const on = find(dialog, 'label', 'Notify me about new messages')[0].querySelector('input');
+    on.checked = true; // applied at once, no Save
+    on.fire('change');
     await until(() => a.root.querySelector('.toast').textContent === expectToast);
   };
   env.grant = false;
@@ -293,7 +296,9 @@ test('ui: switching notifications on asks the browser; a refusal keeps them off'
 test('ui: without browser notifications the setting is not offered', async () => {
   const a = await person('Ada', { notifierEnv: notifierEnv({ supported: false }) });
   button(a.root, 'Settings').click();
-  assert.equal(find(a.root.querySelector('dialog'), 'label', 'Notify me').length, 0);
+  const dialog = a.root.querySelector('dialog');
+  assert.equal(find(dialog, 'button', 'Notifications').length, 0, 'no page for it');
+  assert.equal(find(dialog, 'label', 'Notify me').length, 0);
 });
 
 test('ui: a web link in a message is a link, on both screens; other text is not', async () => {

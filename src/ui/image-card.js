@@ -80,7 +80,7 @@ export class ImageCard extends Emitter {
 
   /** Call whenever the card is put on screen: arranges loading for when it is visible. */
   mount() {
-    const auto = (this.#own || this.#room.settings.imagePreviews === 'auto')
+    const auto = (this.#own || this.#room.previewMode === 'auto')
       && this.#room.fileTransfer !== false; // paused for a call: wait, the log redraws later
     if (this.preview === 'idle' && this.#ref && auto) {
       this.#host.watch(this.el, () => this.load());
@@ -168,7 +168,7 @@ export class ImageCard extends Emitter {
     const text = {
       loading: t('previewLoading'),
       failed: t('previewFailed'),
-      idle: this.#ref && this.#room.settings.imagePreviews === 'tap' && !this.#own
+      idle: this.#ref && this.#room.previewMode === 'tap' && !this.#own
         ? t('loadPreview', { size: fmtSize(this.#ref.size) }) : '',
     };
     this.#note.textContent = text[this.preview] ?? '';

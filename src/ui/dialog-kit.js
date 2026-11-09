@@ -7,16 +7,26 @@ import { canScan, scanQr } from './scanner.js';
 
 export class DialogKit {
   #stopScan = null; // stops the camera when the dialog closes
+  /** Set by a dialog that can hold changes nobody applied yet: asked before the person closes
+   *  it (× , Close or Escape); false keeps it open. Reset by `open`. */
+  guard = null;
 
   constructor(dialog) {
     this.dialog = dialog;
     dialog.onclose = () => this.#stopScan?.();
+    dialog.addEventListener('cancel', (event) => { // Escape
+      if (!this.#mayClose()) event.preventDefault();
+    });
   }
+
+  #mayClose() { return !this.guard || this.guard(); }
+  #close() { if (this.#mayClose()) this.dialog.close(); }
 
   /** The frame: a title, the content and, at the bottom, a footer. A dialog that makes
    *  changes brings its own (see `footer`); any other ends with a Close. */
   open(title, ...content) {
     this.dialog.classList.remove('wide', 'paged');
+    this.guard = null;
     const parts = content.filter((part) => part != null && part !== false); // never print "null"
     if (!parts.some((part) => String(part.className ?? '').includes('dialog-footer'))) {
       parts.push(this.footer());
@@ -28,7 +38,7 @@ export class DialogKit {
         h('h2', {}, title),
         h('button', {
           class: 'ghost', title: t('close'), 'aria-label': t('close'),
-          onclick: () => this.dialog.close(),
+          onclick: () => this.#close(),
         }, '×'), // the same as Cancel: whatever was not saved is dropped
       ),
       ...parts);
@@ -39,7 +49,7 @@ export class DialogKit {
    *  changes, calling `onSave`): that button and Cancel; `extra`: more buttons between them.
    *  Without: a single Close. The button that applies is `row.primary`. */
   footer({ save = null, onSave = null, extra = [], cancel = t('cancel') } = {}) {
-    const close = (label) => h('button', { onclick: () => this.dialog.close() }, label);
+    const close = (label) => h('button', { onclick: () => this.#close() }, label);
     const primary = save ? h('button', { class: 'primary', onclick: onSave }, save) : null;
     const row = h('div', { class: 'actions dialog-footer' },
       ...(save ? [primary, ...extra, close(cancel)] : [...extra, close(t('close'))]));

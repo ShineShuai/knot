@@ -34,6 +34,9 @@ export class Notifier {
 
   get supported() { return this.env.supported(); }
 
+  /** What the browser says: 'default' (not asked yet), 'granted' or 'denied'; null if it cannot. */
+  get permission() { return this.supported ? this.env.permission() : null; }
+
   /** Ask the browser for permission (call from a click). True if notifications can show. */
   async enable() {
     if (!this.supported) return false;

@@ -93,3 +93,16 @@ test('permission is asked for only when undecided', async () => {
   assert.equal(denied.state.asked, 0);
   assert.equal(await setup({ supported: false }).notifier.enable(), false);
 });
+
+test('the permission is what the browser says; null when it cannot show anything', () => {
+  const state = { permission: 'default' };
+  const env = { supported: () => true, permission: () => state.permission };
+  const notifier = new Notifier({ settings: {}, isActive: () => false, open() {}, env });
+  assert.equal(notifier.permission, 'default');
+  state.permission = 'denied';
+  assert.equal(notifier.permission, 'denied');
+  const none = new Notifier({
+    settings: {}, isActive: () => false, open() {}, env: { ...env, supported: () => false },
+  });
+  assert.equal(none.permission, null);
+});

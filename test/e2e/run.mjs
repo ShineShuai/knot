@@ -427,6 +427,14 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
     && [...document.querySelectorAll('.broker-health li')]
       .every((li) => !li.textContent.startsWith('…')),
   null, { timeout: 20000 });
+  // Closing with changes that were not applied asks first; declining keeps the dialog open.
+  await a.getByRole('button', { name: 'Reset to defaults' }).click(); // shows the Apply bar
+  const asked = [];
+  a.once('dialog', (prompt) => { asked.push(prompt.message()); prompt.dismiss(); });
+  await a.locator('dialog .dialog-footer button').click();
+  assert.equal(asked.length, 1, 'asked once');
+  assert.equal(await a.locator('dialog[open]').count(), 1, 'declined: Settings stays open');
+  await a.getByRole('button', { name: 'Revert' }).click(); // nothing left to lose
   await a.getByRole('button', { name: 'About', exact: true }).click();
   await a.getByRole('button', { name: 'Diagnostics' }).click();
   const report = await a.locator('dialog textarea').inputValue();

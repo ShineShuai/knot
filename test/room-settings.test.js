@@ -179,3 +179,21 @@ test('room settings: the Rules page names online members whose app is older', as
   find(dialog, 'button', 'Revert')[0].click(); // the page is drawn again
   assert.match(dialog.textContent, /older app, so they may not follow these rules: Bob, Cy\./);
 });
+
+test('room settings: the count beside Members follows the people waiting', async () => {
+  const { dialog, room } = await inRoom();
+  const members = () => find(dialog, 'button', 'Members')[0];
+  assert.equal(members().textContent, 'Members', 'nobody waits: no count');
+  let waiting = 2;
+  Object.defineProperty(room, 'joinRequests', { get: () => Array(waiting).fill({}) });
+  room.emit('requests');
+  assert.equal(members().textContent, 'Members2');
+  waiting = 0;
+  room.emit('requests');
+  assert.equal(members().textContent, 'Members');
+  assert.equal(members().querySelector('.count').hidden, true);
+  dialog.close();
+  waiting = 3;
+  room.emit('requests'); // closed: nothing follows any more
+  assert.equal(members().textContent, 'Members');
+});

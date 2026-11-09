@@ -18,7 +18,9 @@ export class RoomSettings {
   open(room, page = null) {
     const only = (text) => ({ text, kind: 'me' });
     const shared = { text: t('scopeRoom'), kind: 'room' }; // what everyone in the room is bound by
-    const requests = room.isOwner ? room.joinRequests.length + room.waitingSenders.length : 0;
+    const requests = () => (
+      room.isOwner ? room.joinRequests.length + room.waitingSenders.length : 0
+    );
     this.shell = new SettingsShell(this.ui.kit);
     this.shell.open(t('roomSettingsTitle', { name: room.label || t('roomDefault') }), [
       { id: 'overview', label: t('roomOverview'), scope: only(t('scopeNameYou')),
@@ -31,6 +33,11 @@ export class RoomSettings {
         render: () => this.#prefs(room) },
       { id: 'leave', label: t('leave'), danger: true, render: () => this.#leave(room) },
     ].filter(Boolean), page);
+    // the count beside Members follows the people waiting to get in
+    const offs = ['requests', 'roster', 'pending'].map(
+      (event) => room.on(event, () => this.shell.updateBadges()),
+    );
+    this.ui.dialog.addEventListener('close', () => offs.forEach((off) => off()), { once: true });
   }
 
   async #save(room, patch) {

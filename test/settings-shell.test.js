@@ -170,3 +170,92 @@ test('ui: the link for the network test is on the Network page, not beside Close
   page('Network');
   assert.equal(find(dialog, 'a', 'Run network test')[0].href, 'lab/lab.html');
 });
+
+/** Change the network page without applying it: its Apply bar shows. */
+function edit(dialog, page) {
+  page('Network');
+  find(dialog, 'button', 'Reset to defaults')[0].click();
+}
+
+/** A confirm() that answers `state.answer` and keeps the questions asked. */
+function asking(answer) {
+  const ask = globalThis.confirm;
+  const state = { answer, asked: [], restore: () => { globalThis.confirm = ask; } };
+  globalThis.confirm = (text) => { state.asked.push(text); return state.answer; };
+  return state;
+}
+
+const reopen = (root) => find(root, 'button', 'Settings')[0].click();
+const settle = () => new Promise((r) => setTimeout(r, 15));
+
+test('ui: closing asks only if something was not applied; ×, Close, Escape alike', async () => {
+  const { root, dialog, page } = await person();
+  const q = asking(false);
+  try {
+    find(dialog, 'button', 'Close')[0].click();
+    assert.equal(dialog.open, false, 'nothing to lose: it closes');
+    assert.equal(q.asked.length, 0, 'and nothing was asked');
+
+    reopen(root);
+    edit(dialog, page);
+    find(dialog, 'button', 'Close')[0].click();
+    assert.equal(dialog.open, true, 'declined: it stays open');
+    assert.deepEqual(q.asked, ['Changes that were not applied will be lost. Continue?']);
+    dialog.querySelector('header').querySelector('button').click(); // ×
+    assert.equal(dialog.open, true);
+    let kept = false;
+    dialog.fire('cancel', { preventDefault() { kept = true; } }); // Escape
+    assert.equal(kept, true, 'Escape is held back too');
+    assert.equal(q.asked.length, 3);
+
+    q.answer = true;
+    find(dialog, 'button', 'Close')[0].click();
+    assert.equal(dialog.open, false, 'confirmed: it closes, the edit is dropped');
+    assert.equal(q.asked.length, 4);
+  } finally { q.restore(); }
+});
+
+test('ui: applying or reverting leaves nothing to lose; other dialogs are not asked', async () => {
+  const { root, dialog, page, model } = await person();
+  const q = asking(false);
+  try {
+    edit(dialog, page);
+    find(dialog, 'button', 'Apply')[0].click();
+    await settle();
+    assert.deepEqual(model.settings.stunServers, DEFAULTS.stunServers, 'applied');
+    reopen(root);
+    edit(dialog, page);
+    find(dialog, 'button', 'Revert')[0].click(); // drawn again from what is saved
+    let kept = false;
+    dialog.fire('cancel', { preventDefault() { kept = true; } });
+    assert.equal(kept, false, 'Escape is not held back');
+    find(dialog, 'button', 'Close')[0].click();
+    assert.equal(dialog.open, false);
+    assert.equal(q.asked.length, 0);
+
+    find(root, 'button', 'New room')[0].click(); // a dialog that never asks
+    find(dialog, 'button', 'Cancel')[0].click();
+    assert.equal(dialog.open, false);
+    assert.equal(q.asked.length, 0);
+  } finally { q.restore(); }
+});
+
+test('ui: a new language redraws the dialog: it asks before dropping unapplied edits', async () => {
+  const { dialog, page, model } = await person();
+  const q = asking(false);
+  try {
+    edit(dialog, page);
+    page('General');
+    const language = dialog.querySelectorAll('select')[0];
+    language.value = 'de';
+    language.fire('change');
+    assert.equal(language.value, 'auto', 'declined: the choice is taken back');
+    assert.equal(model.settings.language, 'auto');
+    assert.equal(q.asked.length, 1);
+    q.answer = true;
+    language.value = 'de';
+    language.fire('change');
+    await settle();
+    assert.equal(model.settings.language, 'de');
+  } finally { q.restore(); }
+});

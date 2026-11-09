@@ -63,6 +63,11 @@ export class SettingsDialogs {
       ([value, label]) => h('option', { value, selected: value === s.language }, label),
     ));
     language.addEventListener('change', async () => {
+      // the dialog is drawn again in the new language: edits not applied yet would be lost
+      if (this.shell.pending && !confirm(t('discardChanges'))) {
+        language.value = s.language;
+        return;
+      }
       try { await this.ui.model.updateSettings({ language: language.value }); } catch (err) {
         this.ui.notify(t('badSettings', { why: err.message }));
         return;
@@ -82,19 +87,27 @@ export class SettingsDialogs {
   }
 
   #notifications() {
+    const { notifier } = this.ui;
     const on = h('input', {
       type: 'checkbox', role: 'switch', checked: this.ui.model.settings.notifications,
     });
+    // what the browser says; the setting can only work while it allows them
+    const state = h('p', { role: 'status' });
+    const showState = () => {
+      state.textContent = t('notifyState', { state: t(`notifyPerm_${notifier.permission}`) });
+    };
     on.addEventListener('change', async () => {
       // asking for permission needs this click; if it is refused, the setting stays off
-      const allowed = !on.checked || await this.ui.notifier.enable();
+      const allowed = !on.checked || await notifier.enable();
       on.checked = on.checked && allowed;
+      showState();
       try {
         await this.ui.model.updateSettings({ notifications: on.checked });
         this.ui.notify(t(allowed ? 'saved' : 'notifyBlocked'));
       } catch (err) { this.ui.notify(t('badSettings', { why: err.message })); }
     });
-    return switchRow(t('notifications'), on);
+    showState();
+    return h('div', {}, switchRow(t('notifications'), on), state);
   }
 
   /** Ask the browser to keep our data. The answer is shown on the page itself (a refusal is

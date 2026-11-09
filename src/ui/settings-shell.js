@@ -44,15 +44,26 @@ export function applyBar(onApply, onRevert, label = t('apply')) {
 
 export class SettingsShell {
   current = null; // the id of the page on show
+  cache = new Map(); // id -> the page, drawn once and kept
+  updateBadges = () => {};
 
   constructor(kit) { this.kit = kit; }
 
+  /** Does a page hold changes that were not applied (its Apply bar is showing)? */
+  get pending() {
+    return [...this.cache.values()].some(
+      (node) => [...node.querySelectorAll('.apply')].some((bar) => !bar.hidden),
+    );
+  }
+
   /** `pages`: [{ id, label, scope?: { text, kind }, badge?, danger?, render({ refresh }) ->
-   *  node }] (`badge`: a count beside the label). `start`: the
+   *  node }] (`badge`: a count beside the label, or a function that gives it: see
+   *  `updateBadges`). `start`: the
    *  page to open at; without it a wide screen shows the first page and a narrow one the list. */
   open(title, pages, start = null) {
-    const cache = new Map();
+    const { cache } = this;
     const buttons = new Map();
+    const marks = new Map(); // id -> the count beside its label
     const root = h('div', { class: 'sshell' });
     const body = h('div', { class: 'spage' });
     const draw = (id) => {
@@ -72,16 +83,27 @@ export class SettingsShell {
       this.current = id;
     };
     const nav = h('nav', { class: 'snav', 'aria-label': title }, ...pages.map((page) => {
+      const count = () => (typeof page.badge === 'function' ? page.badge() : page.badge) || 0;
+      const mark = page.badge === undefined ? null
+        : h('em', { class: 'count', hidden: !count() }, count() ? String(count()) : '');
+      if (mark) marks.set(page.id, [mark, count]);
       const button = h('button', { class: page.danger ? 'dn' : '', onclick: () => draw(page.id) },
-        page.label, page.badge ? h('em', { class: 'count' }, String(page.badge)) : null);
+        page.label, mark);
       buttons.set(page.id, button);
       return button;
     }));
+    this.updateBadges = () => {
+      for (const [mark, count] of marks.values()) {
+        mark.textContent = count() ? String(count()) : '';
+        mark.hidden = !count();
+      }
+    };
     root.append(nav, body);
     const first = pages.some((p) => p.id === start) ? start : pages[0].id;
     draw(first);
     root.dataset.view = start ? 'page' : 'list';
     this.kit.open(title, root);
     this.kit.dialog.classList.add('paged');
+    this.kit.guard = () => !this.pending || confirm(t('discardChanges'));
   }
 }

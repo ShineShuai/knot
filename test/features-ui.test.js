@@ -279,16 +279,21 @@ test('ui: switching notifications on asks the browser; a refusal keeps them off'
     find(dialog, 'button', 'Notifications')[0].click();
     const on = find(dialog, 'label', 'Notify me about new messages')[0].querySelector('input');
     on.checked = true; // applied at once, no Save
+    const before = dialog.textContent;
     on.fire('change');
     await until(() => a.root.querySelector('.toast').textContent === expectToast);
+    return { before, after: dialog.textContent };
   };
   env.grant = false;
-  await save('Notifications are blocked in the browser settings');
+  const first = await save('Notifications are blocked in the browser settings');
+  assert.match(first.before, /Browser permission: not asked yet/);
+  assert.match(first.after, /Browser permission: blocked; allow notifications for this site/);
   assert.equal(a.model.settings.notifications, false);
   assert.equal(env.asked, 1);
   env.state = 'default';
   env.grant = true;
-  await save(dictionaries.en.saved);
+  const second = await save(dictionaries.en.saved);
+  assert.match(second.after, /Browser permission: allowed\./);
   assert.equal(a.model.settings.notifications, true);
   assert.equal(env.asked, 2);
 });

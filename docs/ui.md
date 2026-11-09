@@ -28,6 +28,11 @@ device*.
   (`networkProblems` in `config.js`: the message is shown under the field, Apply is off) and saved
   together. TURN servers are rows (address, user, password); *Reset to defaults* fills the
   controls and still waits for Apply.
+- **Closing with changes that were not applied** (an Apply bar showing on any page) asks first,
+  for ×, Close and Escape alike; so does choosing a new language, which draws the dialog again.
+  The same frame serves the room settings. (Chrome lets a second Escape through without asking.)
+- **Notifications** shows what the browser says (not asked yet, allowed, blocked) and, when
+  blocked, where to change it.
 - **Devices** is the old Linked devices dialog; **About** has the version and the diagnostics
   report; **Network** has the link to the network test page. `SettingsDialogs.open(page)` and
   `devices()` open the dialog at a page.
@@ -42,9 +47,10 @@ devices). The room list is saved one write at a time, so rooms created together 
 ## Room settings
 
 The ⚙ in the room header opens them (a count on it: join requests and unknown senders waiting for
-the owner). They use the same frame as the app's Settings (`ui/settings-shell.js`, opened by
-`ui/room-settings.js`). The header keeps back, title, search, broker state, calls, Invite and ⚙;
-rename, export, the member list and Leave moved in.
+the owner; the count beside *Members* in the dialog follows them while it is open). They use the
+same frame as the app's Settings (`ui/settings-shell.js`, opened by `ui/room-settings.js`). The
+header keeps back, title, search, broker state, calls, Invite and ⚙; rename, export, the member
+list and Leave moved in.
 
 - **Overview:** the room's name (applies at once; only you see it), your role (owner, member, or
   an open room without an owner), the owner and the number of members.

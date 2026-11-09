@@ -52,13 +52,16 @@ same frame as the app's Settings (`ui/settings-shell.js`, opened by `ui/room-set
 header keeps back, title, search, broker state, calls, Invite and ⚙; rename, export, the member
 list and Leave moved in.
 
-- **Overview:** the room's name (applies at once; only you see it), your role (owner, member, or
-  an open room without an owner), the owner and the number of members.
+- **Overview:** *Your name for this room* (applies at once; only you see it; empty takes it back,
+  and the room is then shown under the owner's name for everyone, if there is one, else the name it
+  was first given), your role (owner, member, or an open room without an owner), the owner and the
+  number of members.
 - **Members** (rooms with an owner): the member list, join requests, senders not on the list, the
   recovery code, and the join link and pairing code. Members see the list only.
 - **Rules** (rooms with an owner): what the owner decided for everyone: *Joining* (owner approves,
   or closed), *Who can write* (everyone, or owner only), *Sharing files*, *Calls*. The owner edits
-  them and publishes them together (*Publish rules*) and is told which members online run an app
+  them and publishes them together (*Publish rules*; besides the four above: *Name for everyone*,
+  *Largest file*, *Owner can delete others' messages*) and is told which members online run an app
   too old to know them; members see them, read-only, with the name of the owner. The message box
   shows *Only the owner can write here* when writing is closed to you, the attach button and the
   call buttons are not offered when files or calls are off, and the conversation notes "Ada

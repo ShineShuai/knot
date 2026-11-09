@@ -18,7 +18,7 @@ function setup({ permission = 'granted', enabled = true, active = false, support
   };
   const settings = { notifications: enabled };
   const room = Object.assign(new Emitter(), {
-    id: 'room1', label: 'Club', log: { textOf: (e) => e.body },
+    id: 'room1', label: 'Club', title: 'Club', log: { textOf: (e) => e.body },
   });
   const notifier = new Notifier({
     settings, env, isActive: () => state.active, open: (id) => state.opened.push(id),

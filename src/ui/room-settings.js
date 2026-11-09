@@ -22,7 +22,7 @@ export class RoomSettings {
       room.isOwner ? room.joinRequests.length + room.waitingSenders.length : 0
     );
     this.shell = new SettingsShell(this.ui.kit);
-    this.shell.open(t('roomSettingsTitle', { name: room.label || t('roomDefault') }), [
+    this.shell.open(t('roomSettingsTitle', { name: room.title || t('roomDefault') }), [
       { id: 'overview', label: t('roomOverview'), scope: only(t('scopeNameYou')),
         render: () => this.#overview(room) },
       room.roster ? { id: 'members', label: t('members'), badge: requests,
@@ -49,12 +49,14 @@ export class RoomSettings {
 
   #overview(room) {
     const { ui } = this;
-    const name = h('input', { type: 'text', maxLength: 40, value: room.label });
+    // Our own name for the room; without one, the owner's (if any), else the first.
+    const name = h('input', {
+      type: 'text', maxLength: 40, value: room.prefs.name ?? '',
+      placeholder: room.policy.rules.name || room.label,
+    });
     name.addEventListener('change', async () => {
-      if (!name.value.trim()) { name.value = room.label; return; } // a room needs a name
       try {
-        await ui.model.renameRoom(room.id, name.value);
-        if (room === ui.current) ui.renderStage();
+        await ui.model.setRoomPrefs(room.id, { name: plain(name.value).slice(0, 40) || null });
         ui.notify(t('saved'));
       } catch (err) { ui.notify(t('badSettings', { why: err.message })); }
     });
@@ -68,7 +70,7 @@ export class RoomSettings {
         [t('members'), String(members.length)],
       ] : []),
     ];
-    return h('div', {}, field(t('roomName'), name), h('p', {}, t('roomNameHint')),
+    return h('div', {}, field(t('roomNameMine'), name), h('p', {}, t('roomNameHint')),
       h('dl', { class: 'kv' }, ...rows.flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)])));
   }
 
@@ -108,9 +110,16 @@ export class RoomSettings {
     const box = (checked) => h('input', {
       type: 'checkbox', role: 'switch', checked, disabled: !mine,
     });
-    const [files, calls] = [box(rules.files), box(rules.calls)];
+    const [files, calls, ownerDelete] = [rules.files, rules.calls, rules.ownerDelete].map(box);
+    const name = h('input', { type: 'text', maxLength: 32, value: rules.name, disabled: !mine });
+    const sizes = [...new Set([0, 1, 5, 25, 100, rules.maxFileMb])].sort((a, b) => a - b);
+    const size = h('select', { disabled: !mine }, ...sizes.map((mb) => h('option', {
+      value: String(mb), selected: mb === rules.maxFileMb,
+    }, t(mb ? 'ruleFileMaxN' : 'ruleFileMaxNone', { n: mb }))));
     const read = () => ({
       join: join.value(), post: post.value(), files: files.checked, calls: calls.checked,
+      name: plain(name.value).slice(0, 32), ownerDelete: ownerDelete.checked,
+      maxFileMb: Number(size.value),
     });
     const bar = applyBar(async () => {
       try {
@@ -119,13 +128,17 @@ export class RoomSettings {
         bar.hide();
       } catch (err) { ui.notify(t('badSettings', { why: err.message })); }
     }, refresh, t('rulesPublish'));
-    for (const el of [...join.inputs, ...post.inputs, files, calls]) {
+    for (const el of [...join.inputs, ...post.inputs, files, calls, ownerDelete, size]) {
       el.addEventListener('change', bar.show);
     }
+    name.addEventListener('input', bar.show);
     ui.dialog.addEventListener('close', room.on('policy', refresh), { once: true });
     return h('div', {},
       mine ? null : h('p', {}, t('rulesBy', { name: plain(room.ownerName) })),
-      join.node, post.node, switchRow(t('ruleFiles'), files), switchRow(t('ruleCalls'), calls),
+      field(t('ruleName'), name), h('p', {}, t('ruleNameHint')),
+      join.node, post.node, switchRow(t('ruleFiles'), files), field(t('ruleFileMax'), size),
+      switchRow(t('ruleCalls'), calls),
+      switchRow(t('ruleOwnerDelete'), ownerDelete, t('ruleOwnerDeleteHint')),
       h('p', {}, t('rulesNote')),
       older.length ? h('p', { class: 'warn' }, t('rulesOlder', { names: older.join(', ') })) : null,
       mine ? h('div', {}, bar.node,

@@ -65,19 +65,22 @@ test('room settings: a room without an owner says so and has no member page', as
     ['Open room, no owner']);
 });
 
-test('room settings: the name applies at once, also on screen; empty is refused', async () => {
-  const { dialog, room, root } = await inRoom();
+test('room settings: our own name applies at once and on screen; empty takes it back', async () => {
+  const { dialog, room, root, model } = await inRoom();
   const name = dialog.querySelector('input');
+  assert.equal(name.placeholder, 'Club', 'the name we would see without our own');
   name.value = 'Book club';
   name.fire('change');
-  await until(() => room.label === 'Book club');
+  await until(() => room.title === 'Book club');
   const title = () => root.querySelector('.stage-head').querySelector('h2').textContent;
   await until(() => /Book club/.test(title()));
+  assert.equal(room.label, 'Club', 'the first name stays');
+  assert.deepEqual(model.roomPrefs(room.id), { name: 'Book club' });
   name.value = '   ';
   name.fire('change');
-  await pause();
-  assert.equal(room.label, 'Book club');
-  assert.equal(name.value, 'Book club', 'the field shows the name again');
+  await until(() => room.title === 'Club');
+  await until(() => /Club/.test(title()));
+  assert.deepEqual(model.roomPrefs(room.id), {}, 'nothing left to keep');
 });
 
 test('room settings: mute is kept, marked in the list, and survives a reload', async () => {
@@ -196,4 +199,39 @@ test('room settings: the count beside Members follows the people waiting', async
   waiting = 3;
   room.emit('requests'); // closed: nothing follows any more
   assert.equal(members().textContent, 'Members');
+});
+
+test('room choices: our own name for a room is bounded, and empty is not a name', async () => {
+  const id = 'A'.repeat(16);
+  const sync = new DeviceSync({ kv: new MemoryKV(), settings: { ...DEFAULTS }, deviceId: 'd1' });
+  await sync.load();
+  await sync.set({ [prefKey(id)]: { name: 'Book club', mute: true } });
+  assert.deepEqual(sync.value(prefKey(id)), { name: 'Book club', mute: true });
+  for (const bad of [{ name: '' }, { name: 'x'.repeat(41) }, { name: 7 }]) {
+    await assert.rejects(sync.set({ [prefKey(id)]: bad }), /invalid/, JSON.stringify(bad));
+  }
+});
+
+test('room settings: the owner sets a name, the largest file and the delete rule', async () => {
+  const { dialog, page, room, root } = await inRoom();
+  page('Rules');
+  const fields = () => dialog.querySelectorAll('input').filter((i) => i.type === 'text');
+  const size = dialog.querySelector('select');
+  assert.deepEqual(size.querySelectorAll('option').map((o) => o.textContent),
+    ['No limit of the room', '1 MB', '5 MB', '25 MB', '100 MB']);
+  assert.equal(dialog.querySelector('.apply').hidden, true);
+  fields()[0].value = 'Team Alpha';
+  fields()[0].fire('input');
+  size.value = '5';
+  size.fire('change');
+  const del = find(dialog, 'label', 'Owner can delete others')[0].querySelector('input');
+  del.checked = false;
+  del.fire('change');
+  assert.equal(dialog.querySelector('.apply').hidden, false);
+  find(dialog, 'button', 'Publish rules')[0].click();
+  await until(() => room.rules.name === 'Team Alpha' && room.rules.maxFileMb === 5);
+  assert.equal(room.rules.ownerDelete, false);
+  const title = () => root.querySelector('.stage-head').querySelector('h2').textContent;
+  await until(() => /Team Alpha/.test(title()));
+  assert.equal(room.label, 'Club');
 });

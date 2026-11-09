@@ -5,13 +5,17 @@
 // the chain. A rule is enforced by every honest member on what comes in (and by the sender's
 // own app on what goes out); a modified app can ignore it, as it can ignore any other check.
 import { compareStamps } from '../util/hlc.js';
+import { plain } from '../util/text.js';
 
 export const POLICY = 'policy';
 
-/** The rules of a room that never had any: everyone may do everything; the owner lets people in. */
+/** The rules of a room that never had any: everyone may do everything; the owner lets people in
+ *  and may delete any message. `name`: a name for everyone ('' = none); `maxFileMb`: the largest
+ *  file the room takes (0 = no limit of the room's). */
 export const DEFAULT_RULES = Object.freeze({
-  join: 'approve', post: 'all', files: true, calls: true,
+  join: 'approve', post: 'all', files: true, calls: true, name: '', ownerDelete: true, maxFileMb: 0,
 });
+const MB = 1024 * 1024;
 
 const isBool = (v) => typeof v === 'boolean';
 const CHECKS = {
@@ -19,6 +23,9 @@ const CHECKS = {
   post: (v) => ['all', 'owner'].includes(v), // owner: only the owner writes (an announcement room)
   files: isBool,
   calls: isBool,
+  name: (v) => typeof v === 'string' && v.length <= 32 && v === plain(v), // 32: older versions
+  ownerDelete: isBool, //                                                     bound unknown ones
+  maxFileMb: (v) => Number.isInteger(v) && v >= 0 && v <= 100000,
 };
 const POSTS = ['text', 'reply', 'file']; // what `post: 'owner'` keeps from everyone else
 
@@ -68,18 +75,24 @@ export class Policy {
     this.env = env;
   }
 
-  /** Why would a message of this `kind` from `author` be refused now? 'files', 'post' or null. */
-  denies(kind, author, owner) {
-    if (kind === 'file' && !this.rules.files) return 'files';
-    if (POSTS.includes(kind) && this.rules.post === 'owner' && author !== owner) return 'post';
+  /** Why would a message of this `kind` from `author` be refused now? 'files', 'size', 'post',
+   *  'delete' or null. `size`: of a file; `target`: the author of the message a `del` removes. */
+  denies(kind, author, owner, { size = 0, target = null } = {}) {
+    const { files, post, maxFileMb, ownerDelete } = this.rules;
+    if (kind === 'file' && !files) return 'files';
+    if (kind === 'file' && maxFileMb && size > maxFileMb * MB) return 'size';
+    if (POSTS.includes(kind) && post === 'owner' && author !== owner) return 'post';
+    if (kind === 'del' && !ownerDelete && author === owner && target && target !== author) {
+      return 'delete'; // the owner deleting what another wrote
+    }
     return null;
   }
 
   /** May this envelope in? Only what was written after the rules were set is judged: before,
    *  we cannot know what they were, and history must not lose messages when the rules change. */
-  permits(env, author, owner) {
+  permits(env, author, owner, target = null) {
     const stamp = (e) => ({ ms: e.ms, c: e.c });
     if (!this.env || compareStamps(stamp(env), stamp(this.env)) <= 0) return true;
-    return this.denies(env.kind, author, owner) === null;
+    return this.denies(env.kind, author, owner, { size: env.body?.size, target }) === null;
   }
 }

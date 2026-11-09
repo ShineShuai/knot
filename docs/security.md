@@ -30,7 +30,9 @@ to anyone with the link.
 
 **Room rules.** The owner can also set rules for the whole room: who may join (`approve` or
 `closed`: the owner stops answering join requests), who may write (`all` or `owner`, an
-announcement room), whether files may be shared and whether calls are allowed. They are one signed
+announcement room), whether files may be shared (and the largest file, `maxFileMb`) and whether
+calls are allowed, whether the owner may delete what others wrote (`ownerDelete`), and a name for
+everyone (`name`, at most 32 characters, no control or direction marks). They are one signed
 `policy` envelope `{ rev, rules }` of the owner, held like the membership chain (never trimmed, only
 the newest kept, sent to everyone with the history) but **not part of the chain**: a version that
 does not know the kind drops the envelope and goes on following the chain, so it keeps working,
@@ -41,8 +43,11 @@ version adds are kept in the envelope and ignored. A rule is enforced by every h
 what comes in, judged only for what was written after the rules were set (so history never loses
 messages when they change), and by the sender's own app before it signs. It is a rule of the
 room, not a lock: a modified app can ignore it, or back-date a message to before the rules. The
-rules came with protocol level 3 (`PROTOCOL`, see messages.md): members online on an older level
-are named on the Rules page and in the room's "older app" note.
+rules came with protocol level 3 (`PROTOCOL`, see messages.md), the last three with level 4:
+members online on an older level are named on the Rules page and in the room's "older app" note.
+A version that knows only some rules keeps those and ignores the rest (so a name is capped at 32
+characters: that is the size such a version accepts for a rule it does not know). The room's name
+is the person's own, else the owner's, else the one the room was first given.
 
 **Key rotation.** Removing a member also moves the room to new broker keys (topic, presence,
 signalling, relay and join links all derive from the room secret mixed with a fresh per-removal

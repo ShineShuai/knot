@@ -19,7 +19,7 @@ const indent = (text) => text.replace(/\n/g, '\n    ');
 export function exportText(room, now = Date.now()) {
   const { reactions } = room.log.overlay();
   const lines = [
-    room.label || t('roomDefault'),
+    room.title || t('roomDefault'),
     t('exportedOn', { date: stamp(now), name: room.nameOf(room.identity.id) }),
     '',
   ];

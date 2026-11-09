@@ -389,6 +389,19 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
   await setWriters('Everyone');
   await b.getByPlaceholder('Write a message').waitFor();
   assert.equal(await b.locator('.composer textarea').isDisabled(), false);
+  // A name for everyone shows on Bob's page (he chose none of his own), and goes away again.
+  const setName = async (name) => {
+    await a.getByRole('button', { name: 'Room settings' }).click();
+    await a.getByRole('button', { name: 'Rules', exact: true }).click();
+    await a.locator('dialog input[type=text]').first().fill(name);
+    await a.getByRole('button', { name: 'Publish rules' }).click();
+    await a.locator('dialog .apply').waitFor({ state: 'hidden' });
+    await a.keyboard.press('Escape');
+  };
+  await setName('Team Alpha');
+  await b.locator('.stage-head h2', { hasText: 'Team Alpha' }).waitFor();
+  await setName('');
+  await b.locator('.stage-head h2', { hasText: /^(?!Team Alpha)/ }).waitFor();
   // Links and more reactions in the real page.
   await b.getByPlaceholder('Write a message').fill('docs https://example.com/a?b=1, thanks');
   await b.keyboard.press('Enter');

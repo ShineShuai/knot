@@ -93,7 +93,7 @@ export class RoomDialogs {
 
   #download(room, extension, content, type) {
     const day = new Date().toISOString().slice(0, 10);
-    const name = safeFileName(`knot-${room.label || t('roomDefault')}-${day}.${extension}`);
+    const name = safeFileName(`knot-${room.title || t('roomDefault')}-${day}.${extension}`);
     const url = URL.createObjectURL(new Blob([content], { type: `${type};charset=utf-8` }));
     h('a', { href: url, download: name }).click();
     const timer = setTimeout(() => URL.revokeObjectURL(url), 10_000);

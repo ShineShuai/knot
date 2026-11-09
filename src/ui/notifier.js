@@ -65,7 +65,7 @@ export class Notifier {
     const last = envs.at(-1);
     const body = envs.length > 1 ? t('notifyMany', { n: envs.length }) : this.#preview(room, last);
     this.env.show(
-      room.label || t('roomDefault'),
+      room.title || t('roomDefault'),
       { body, tag: room.id, data: { room: room.id } },
       () => this.open(room.id),
     ).catch(() => {}); // a notification that cannot be shown is not worth an error

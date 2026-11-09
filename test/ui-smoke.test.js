@@ -229,10 +229,12 @@ test('ui: rooms are named, renamed, and never share a default name', async () =>
   a.ui.select(two);
   gear(a.root).click(); // the Overview page: the name applies at once
   const dialog = a.root.querySelector('dialog');
-  assert.equal(dialog.querySelector('input').value, 'Room 2');
+  assert.equal(dialog.querySelector('input').value, '', 'no name of our own yet');
+  assert.equal(dialog.querySelector('input').placeholder, 'Room 2', 'the first name shows');
   dialog.querySelector('input').value = 'Book club';
   dialog.querySelector('input').fire('change');
-  await until(() => two.label === 'Book club', 3000);
+  await until(() => two.title === 'Book club', 3000);
+  assert.equal(two.label, 'Room 2', 'the first name is not touched');
   const title = () => a.root.querySelector('.stage-head')?.querySelector('h2')?.textContent ?? '';
   await until(() => /Book club/.test(title()), 3000);
   assert.match(a.root.textContent, /Book club/); // also in the room list

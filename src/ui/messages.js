@@ -49,7 +49,7 @@ export class Messages {
         }),
         own && env.kind !== 'file'
           ? button(t('edit'), () => this.ui.composer.startEdit(room, env)) : null,
-        own || room.isOwner ? button(t('deleteMsg'), () => this.#confirmDelete(room, env)) : null,
+        room.mayDelete(env) ? button(t('deleteMsg'), () => this.#confirmDelete(room, env)) : null,
       ]));
     return h('li', { class: `msg ${own ? 'own' : 'other'}`, 'data-id': env.id },
       h('div', { class: 'meta' },

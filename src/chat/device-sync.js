@@ -9,8 +9,8 @@
 //   d:<device key>   the device's alias; null once it was unlinked
 //   r:<room id>      { s: room secret, l: label, o: owner id | null }; null once it was left
 //   k:<room id>      { ms, c }: the newest message stamp read on any of our devices
-//   p:<room id>      our own choices for that room: { mute?: true, previews?: 'auto'|'tap'|'off' };
-//                    null once there are none
+//   p:<room id>      our own choices for that room: { mute?: true, previews?: 'auto'|'tap'|'off',
+//                    name?: our own name for it }; null once there are none
 //   c:devices        the secret of the channel where our devices meet when they share no room
 import { saveSettings } from '../config.js';
 import { HLC, MAX_FUTURE_MS, compareStamps } from '../util/hlc.js';
@@ -56,8 +56,10 @@ const validRoom = (v) => v === null || (!!v && typeof v === 'object'
   && typeof v.l === 'string' && v.l.length >= 1 && v.l.length <= 40
   && (v.o === null || (typeof v.o === 'string' && v.o.length === 11 && B64U.test(v.o))));
 const validPref = (v) => v === null || (!!v && typeof v === 'object' && !Array.isArray(v)
-  && Object.keys(v).every((k) => ['mute', 'previews'].includes(k))
+  && Object.keys(v).every((k) => ['mute', 'previews', 'name'].includes(k))
   && (v.mute === undefined || v.mute === true)
+  && (v.name === undefined || (typeof v.name === 'string' && v.name.length > 0
+    && v.name.length <= 40))
   && (v.previews === undefined || PREVIEW_MODES.includes(v.previews)));
 const validStamp = (v) => !!v && typeof v === 'object' && Object.keys(v).length === 2
   && Number.isSafeInteger(v.ms) && v.ms >= 0 && Number.isSafeInteger(v.c) && v.c >= 0;

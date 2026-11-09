@@ -97,7 +97,8 @@ would not understand, and before the next one that changes the wire format.
 ## Room rules
 
 `policy` {rev, rules}, signed by the room owner: who may join, who may write, whether files and
-calls are allowed (the room settings' Rules page; see security.md). Only the newest is kept (the
+calls are allowed, the largest file, whether the owner may delete others' messages, a name for
+everyone (the room settings' Rules page; see security.md). Only the newest is kept (the
 highest `rev`), it is never trimmed from the log, it syncs like a message, and the conversation shows
 it as a quiet line ("Ada changed the room rules"). It is judged on receipt like everything else: the
 author must be the current owner, and the rules apply to what was written after them. A message a

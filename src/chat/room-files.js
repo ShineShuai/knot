@@ -13,7 +13,7 @@ export class RoomFiles {
   }
 
   async share(file) {
-    if (file.size > this.room.settings.maxFileBytes) throw new Error('File too large');
+    if (file.size > this.room.fileLimit) throw new Error('File too large');
     const body = await this.room.files.share(file);
     const ref = previewRef(body); // keep our own preview: it must outlive a reload
     const own = ref && this.room.files.local(ref.id);

@@ -31,6 +31,7 @@ export const mountUi = (root, model, opts) => new Ui(root, model, opts).start();
 class Ui {
   #current = null;      // active Room
   #offStage = [];       // unsubscribers for the active room
+  #titleEl = null;      // the name above the conversation, kept up to date
   #watched = new Set(); // rooms whose 'peers' events refresh the rail
   #updateReady = false; // a newer version of the app has been published
   #ownerEvents = new WeakSet(); // rooms whose owner events we already listen to
@@ -92,7 +93,10 @@ class Ui {
       this.notify(t('unlinkedNotice'));
       setTimeout(() => globalThis.location?.reload?.(), 2500);
     });
-    this.model.on('prefs', () => this.#refreshUnread()); // a room was muted or unmuted
+    this.model.on('prefs', (room) => { // a room was muted, or named, on one of our devices
+      this.#refreshUnread();
+      this.#retitle(room);
+    });
     this.model.on('settings', (keys) => { // another device of ours changed them
       if (!keys.includes('language')) return;
       setLanguage(this.model.settings.language);
@@ -185,7 +189,7 @@ class Ui {
         if (room.isOwner && !room.identity.cert) this.roomDialogs.ensureRecovery(room);
       });
       room.call.on('change', () => this.callPanel.sync(room));
-      room.call.on('alone', () => this.notify(t('callAlone', { room: room.label })));
+      room.call.on('alone', () => this.notify(t('callAlone', { room: room.title })));
       room.on('unread', () => this.#refreshUnread());
       room.on('unlinked', () => this.#onUnlinked());
       this.notifier.watch(room);
@@ -244,7 +248,7 @@ class Ui {
         h('button', { class: 'room-item', 'aria-current': room === this.#current ? 'true'
           : null, onclick: () => this.select(room) },
           h('span', { class: unread ? 'room-name new' : 'room-name' },
-            room.label || t('roomDefault')),
+            room.title || t('roomDefault')),
           room.muted ? h('span', { class: 'muted-mark', title: t('mutePref') }, '🔕') : null,
           unread ? h('span', {
             class: 'unread', title: t('unread', { n: unread }),
@@ -422,6 +426,8 @@ class Ui {
     this.#offStage.push(room.call.on('change', drawCall));
     const composer = this.composer.mount(room, { keepBottom, drawLog });
 
+    const title = h('h2', {}, room.title || t('roomDefault'));
+    this.#titleEl = title;
     // One button for everything about the room; the owner sees how many are waiting to get in.
     const gear = h('button', {
       title: t('roomSettings'), 'aria-label': t('roomSettings'),
@@ -439,7 +445,7 @@ class Ui {
     this.stage.replaceChildren(
       h('header', { class: 'stage-head' },
         h('button', { class: 'ghost back', onclick: () => this.select(null) }, t('rooms')),
-        h('h2', {}, room.label || t('roomDefault')),
+        title,
         this.#iconButton('🔍', t('search'), toggleSearch),
         brokers,
         callButtons,
@@ -465,7 +471,12 @@ class Ui {
       room.on('peers', drawWaiting), // the owner may have come or gone
       room.on('delivery', redraw),
       room.on('files', () => drawLog()), // image previews start or wait with the transfers
-      room.on('policy', () => { composer.drawRules(); drawCall(); }), // the owner changed the rules
+      room.on('policy', () => { // the owner changed the rules
+        composer.drawRules();
+        drawCall();
+        this.#retitle(room);
+        this.#refreshUnread();
+      }),
       room.on('brokers', () => { drawBrokers(); drawPeers(); }),
       holdToReveal(room, peers, conn));
     drawPeers(); drawBrokers(); drawLog(true); drawCall(); drawWaiting(); drawAppNote();
@@ -483,6 +494,13 @@ class Ui {
           .flatMap((state) => item(stateName(state), stateHelp(state))),
         ...item(t('deviceThis'), t('helpThisDevice')),
         ...item('@', t('helpAt'))));
+  }
+
+  /** Show a room's current name (the person's own, the owner's, or the first) where it is shown. */
+  #retitle(room) {
+    if (room === this.#current && this.#titleEl) {
+      this.#titleEl.textContent = room.title || t('roomDefault');
+    }
   }
 
   #iconButton(glyph, label, onclick) {

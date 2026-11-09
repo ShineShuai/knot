@@ -607,8 +607,23 @@ export class Room extends Emitter {
 
   // ---- the room's rules (see policy.js) ----------------------------------------------------
 
-  /** The rules in force: { join, post, files, calls }. */
+  /** The rules in force (see DEFAULT_RULES). */
   get rules() { return this.policy.rules; }
+
+  /** The name to show: the person's own, else the one the owner gave everyone, else the first. */
+  get title() { return this.prefs.name || this.policy.rules.name || this.label; }
+
+  /** The largest file this room takes: the person's own limit, or the room's if that is lower. */
+  get fileLimit() {
+    const { maxFileMb } = this.policy.rules;
+    const limit = this.settings.maxFileBytes;
+    return maxFileMb ? Math.min(limit, maxFileMb * 1024 * 1024) : limit;
+  }
+
+  /** May this person delete `env`? Its author may; the owner too, unless the room says not. */
+  mayDelete(env) {
+    return this.isMine(authorIdOf(env)) || (this.isOwner && this.policy.rules.ownerDelete);
+  }
 
   /** Owner only: change the rules (those not given stay as they are). Returns the envelope, or
    *  null if nothing changes. */
@@ -622,11 +637,17 @@ export class Room extends Emitter {
 
   /** Refuse what the rules forbid before it is signed, with the reason (the screen already shows
    *  it, by not offering the action). Open rooms have no rules. */
-  #checkRules(kind) {
+  #checkRules(kind, body) {
     if (!this.roster) return;
-    const why = this.policy.denies(kind, this.identity.member, this.roster.owner);
+    const target = kind === 'del' ? authorOfId(body.id) : null;
+    const why = this.policy.denies(kind, this.identity.member, this.roster.owner,
+      { size: body?.size, target });
     if (why === 'files') throw new Error('Sharing files is turned off in this room');
+    if (why === 'size') {
+      throw new Error(`Files in this room are limited to ${this.rules.maxFileMb} MB`);
+    }
     if (why === 'post') throw new Error('Only the room owner can write here');
+    if (why === 'delete') throw new Error('The owner cannot delete what others wrote in this room');
   }
 
   /** The rules changed (here or by the owner): lobby and calls follow, and the screen. */
@@ -652,7 +673,7 @@ export class Room extends Emitter {
 
   async #publish(kind, body, signer = this.identity) {
     if (this.removed) throw new Error('You were removed from this room');
-    this.#checkRules(kind);
+    this.#checkRules(kind, body);
     if (this.#isUnlinked(signer.cert, signer.member)) throw new Error('This device was unlinked');
     const env = await createEnvelope(signer, this.hlc, this.id, kind, body, this.#name);
     const kept = await this.#accept(env, null);
@@ -1001,7 +1022,8 @@ export class Room extends Emitter {
     if (!this.roster) return !ADMIN_KINDS.includes(env.kind) && env.kind !== POLICY; // no owner
     if (ADMIN_KINDS.includes(env.kind)) return true;
     if (env.kind === POLICY) return author === owner; // only the owner sets the rules
-    return this.#knows(author) && this.policy.permits(env, author, owner);
+    const target = env.kind === 'del' ? authorOfId(env.body.id) : null;
+    return this.#knows(author) && this.policy.permits(env, author, owner, target);
   }
 
   /** Is `id` a member as far as we know, or one of our own devices (the main identity this

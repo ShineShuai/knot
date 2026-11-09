@@ -112,10 +112,11 @@ the secret is that room's. A room this identity owns is never dropped from anoth
 owner role cannot be recovered); leaving it elsewhere only affects that device.
 
 Room choices: `p:<room id>` holds the person's own choices for a room, `{ mute?: true, previews?:
-'auto' | 'tap' | 'off' }`, or null when there are none (it is cleared when the room is left). Only
-those keys and values are accepted. It is a separate item, not a key of `r:<room id>`: an older
-version rejects a room item with unknown keys as a whole, and ignores an unknown `p:` item. Like
-rooms and marks, the choices are not carried in the link code; they follow when the devices meet.
+'auto' | 'tap' | 'off', name?: our own name for it (1 to 40 characters) }`, or null when there are
+none (it is cleared when the room is left). Only those keys and values are accepted. It is a
+separate item, not a key of `r:<room id>`: an older version rejects a room item with unknown keys
+as a whole, and ignores an unknown `p:` item (one with a key it does not know too). Like rooms and
+marks, the choices are not carried in the link code; they follow when the devices meet.
 
 Read marks: `k:<room id>` holds the newest message stamp read on any device and only moves
 forward, so a room read on one device is not unread on the others. Rooms and marks are recorded

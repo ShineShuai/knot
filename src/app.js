@@ -605,7 +605,7 @@ export class AppModel extends Emitter {
     return room;
   }
 
-  /** Our own choices for a room: { mute?: true, previews?: 'auto' | 'tap' | 'off' }. */
+  /** Our own choices for a room: { mute?, previews?: 'auto' | 'tap' | 'off', name? }. */
   roomPrefs(id) { return { ...this.sync.value(prefKey(id)) }; }
 
   /** Change them (`patch`: a key to its new value; false or null takes a choice back). They
@@ -615,7 +615,7 @@ export class AppModel extends Emitter {
     if (!room) return;
     const next = { ...this.roomPrefs(id), ...patch };
     for (const [key, value] of Object.entries(next)) {
-      if (value == null || value === false) delete next[key];
+      if (value == null || value === false || value === '') delete next[key];
     }
     const value = Object.keys(next).length ? next : null;
     this.#broadcastSync(await this.sync.set({ [prefKey(id)]: value }));

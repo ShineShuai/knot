@@ -2,7 +2,9 @@
 // by every member, enforced on what comes in and refused before it goes out.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { authorIdOf, createEnvelope, fileBody, verifyEnvelope } from '../src/chat/envelope.js';
+import {
+  authorIdOf, createEnvelope, delBody, fileBody, verifyEnvelope,
+} from '../src/chat/envelope.js';
 import { JoinRequest } from '../src/chat/join.js';
 import {
   DEFAULT_RULES, POLICY, Policy, policyBody, rulesOf, validPolicyBody,
@@ -47,7 +49,8 @@ test('rules: a missing or odd value is the default; unknown ones are left out', 
   assert.deepEqual(rulesOf({ post: 'owner', files: 'no', slow: 5 }),
     { ...DEFAULT_RULES, post: 'owner' });
   assert.deepEqual(Object.keys(policyBody(2, { calls: false })), ['rev', 'rules']);
-  assert.deepEqual(Object.keys(policyBody(2, {}).rules), ['join', 'post', 'files', 'calls']);
+  assert.deepEqual(Object.keys(policyBody(2, {}).rules),
+    ['join', 'post', 'files', 'calls', 'name', 'ownerDelete', 'maxFileMb']);
 });
 
 test('rules: what a policy body may hold', () => {
@@ -103,7 +106,7 @@ test('rules: the owner sets them, members see them, the notice says who', async 
   const env = await a.setRules({ post: 'owner', calls: false });
   assert.equal(env.body.rev, 1);
   await until(() => b.rules.post === 'owner');
-  assert.deepEqual(b.rules, { join: 'approve', post: 'owner', files: true, calls: false });
+  assert.deepEqual(b.rules, { ...DEFAULT_RULES, post: 'owner', calls: false });
   assert.equal(b.policy.rev, 1);
   assert.equal(b.log.timeline().some((e) => e.kind === POLICY), true, 'shown in the conversation');
   await assert.rejects(b.setRules({ post: 'all' }), /Only the room owner/);
@@ -267,4 +270,95 @@ test('rules: closed to new members: the owner stops answering, and starts again'
   const again = await ask('Again');
   await until(() => a.joinRequests.some((q) => q.name === 'Again'), 5000);
   [first, late, again].forEach((r) => r.stop());
+});
+
+test('rules: name, delete and file size are checked like the others', () => {
+  const ok = (rules) => validPolicyBody({ rev: 1, rules });
+  assert.equal(ok({ name: 'Team Alpha', ownerDelete: false, maxFileMb: 5 }), true);
+  assert.equal(ok({ name: '' }), true, 'no name for everyone');
+  for (const bad of [{ name: 'x'.repeat(33) }, { name: 'a\u202eb' }, { name: 7 },
+    { ownerDelete: 'no' }, { maxFileMb: -1 }, { maxFileMb: 1.5 }, { maxFileMb: '5' },
+    { maxFileMb: 1e6 }]) {
+    assert.equal(ok(bad), false, JSON.stringify(bad));
+  }
+  const policy = new Policy();
+  policy.set({ id: 'a', ms: 1000, c: 0, kind: POLICY, body: policyBody(1, {
+    maxFileMb: 1, ownerDelete: false,
+  }) });
+  const MB = 1024 * 1024;
+  assert.equal(policy.denies('file', 'bob', 'ada', { size: 2 * MB }), 'size');
+  assert.equal(policy.denies('file', 'bob', 'ada', { size: MB }), null, 'up to the limit');
+  assert.equal(policy.denies('del', 'ada', 'ada', { target: 'bob' }), 'delete');
+  assert.equal(policy.denies('del', 'ada', 'ada', { target: 'ada' }), null, 'her own');
+  assert.equal(policy.denies('del', 'bob', 'ada', { target: 'bob' }), null, 'the author');
+  assert.equal(new Policy().denies('del', 'ada', 'ada', { target: 'bob' }), null, 'by default');
+});
+
+test('rules: the owner may not delete what others wrote, when the room says so', async () => {
+  const a = await ownedRoom();
+  const b = await joinByCode(a, 'Bob');
+  const theirs = await b.sendText('bob says');
+  await until(() => texts(a).includes('bob says'));
+  const mine = await a.sendText('ada says');
+  await until(() => texts(b).includes('ada says'));
+  assert.equal(a.mayDelete(theirs), true, 'by default the owner may');
+  await a.setRules({ ownerDelete: false });
+  await until(() => b.rules.ownerDelete === false);
+  assert.equal(a.mayDelete(theirs), false);
+  assert.equal(a.mayDelete(mine), true);
+  assert.equal(b.mayDelete(theirs), true, 'the author always may');
+  await assert.rejects(a.deleteMessage(theirs.id), /cannot delete what others wrote/);
+  await wait(5);
+  const forced = await craft(a.identity, b, 'del', delBody(theirs.id));
+  assert.equal(await b.receiveAdmin(forced), false, 'refused on receipt too');
+  assert.ok(await a.deleteMessage(mine.id), 'her own is hers to delete');
+  assert.ok(await b.deleteMessage(theirs.id), 'and his is his');
+  await a.setRules({ ownerDelete: true });
+  const again = await b.sendText('one more');
+  await until(() => texts(a).includes('one more'));
+  assert.ok(await a.deleteMessage(again.id), 'allowed again');
+});
+
+test('rules: the largest file: the room limit is lower than ours, never higher', async () => {
+  const a = await ownedRoom();
+  const b = await joinByCode(a, 'Bob');
+  const MB = 1024 * 1024;
+  assert.equal(a.fileLimit, a.settings.maxFileBytes);
+  await a.setRules({ maxFileMb: 1 });
+  await until(() => b.rules.maxFileMb === 1);
+  assert.equal(b.fileLimit, MB);
+  await assert.rejects(b.shareFile(new File([new Uint8Array(2 * MB)], 'big.bin')), /too large/);
+  await wait(5);
+  const meta = (size) => fileBody({
+    id: 'AAAAAAAAAAA', name: 'x.bin', size, mime: 'application/octet-stream',
+    sha256: 'A'.repeat(43),
+  });
+  const big = await craft(b.identity, a, 'file', meta(2 * MB));
+  assert.equal(await a.receiveAdmin(big), false, 'a bigger one is refused on receipt');
+  assert.equal(a.dropped['against the room rules'].n, 1);
+  const small = await craft(b.identity, a, 'file', meta(MB / 2));
+  assert.equal(await a.receiveAdmin(small), true);
+  await a.setRules({ maxFileMb: 0 });
+  await until(() => b.fileLimit === b.settings.maxFileBytes);
+  b.settings.maxFileBytes = MB; // a person's own limit is never raised by the room
+  await a.setRules({ maxFileMb: 50 });
+  await until(() => b.rules.maxFileMb === 50);
+  assert.equal(b.fileLimit, MB);
+});
+
+test('rules: a name for everyone, unless we chose our own', async () => {
+  const a = await ownedRoom({ label: 'First' });
+  const b = await joinByCode(a, 'Bob');
+  assert.equal(b.title, b.label, 'no rule, no own name: the first name');
+  await a.setRules({ name: 'Team Alpha' });
+  await until(() => b.title === 'Team Alpha');
+  assert.equal(a.title, 'Team Alpha');
+  b.prefs = { name: 'My team' };
+  assert.equal(b.title, 'My team', 'ours wins');
+  b.prefs = {};
+  assert.equal(b.title, 'Team Alpha');
+  await a.setRules({ name: '' });
+  await until(() => b.title === b.label);
+  await assert.rejects(a.setRules({ name: 'x'.repeat(33) }), /not valid/);
+  await assert.rejects(a.setRules({ name: 'a\u202eb' }), /not valid/);
 });

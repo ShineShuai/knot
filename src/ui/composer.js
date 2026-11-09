@@ -210,11 +210,11 @@ export class Composer {
     if (!room.fileTransfer) return this.ui.notify(t('filesOff')); // paused for a call
     if (folders) this.ui.notify(t('noFolders'));
     const { list, tooBig, tooMany } = stageFiles(
-      this.#staged.get(room.id) ?? [], files, { maxBytes: room.settings.maxFileBytes },
+      this.#staged.get(room.id) ?? [], files, { maxBytes: room.fileLimit },
     );
     if (tooBig.length) {
       const [file] = tooBig;
-      const max = fmtSize(room.settings.maxFileBytes);
+      const max = fmtSize(room.fileLimit);
       this.ui.notify(t('fileTooBig', { name: file.name, max }));
     } else if (tooMany) this.ui.notify(t('tooManyFiles', { n: MAX_AT_ONCE }));
     this.#staged.set(room.id, list);

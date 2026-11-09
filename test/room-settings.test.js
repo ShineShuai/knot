@@ -235,3 +235,57 @@ test('room settings: the owner sets a name, the largest file and the delete rule
   await until(() => /Team Alpha/.test(title()));
   assert.equal(room.label, 'Club');
 });
+
+test('room settings: only an open room offers a move to an owned room', async () => {
+  const open = await inRoom({ owned: false });
+  assert.equal(find(open.dialog, 'button', 'Move to an owned room').length, 1);
+  assert.match(open.dialog.textContent, /Nobody owns this room/);
+  const owned = await inRoom();
+  assert.equal(find(owned.dialog, 'button', 'Move to an owned room').length, 0);
+});
+
+/** Run `job` with confirm() answering `answer`; returns the questions asked. */
+async function confirming(answer, job) {
+  const ask = globalThis.confirm;
+  const asked = [];
+  globalThis.confirm = (text) => { asked.push(text); return answer; };
+  try { await job(); } finally { globalThis.confirm = ask; }
+  return asked;
+}
+
+test('room settings: declining the move creates nothing and says nothing', async () => {
+  const { dialog, model, room } = await inRoom({ owned: false });
+  const asked = await confirming(false, async () => {
+    find(dialog, 'button', 'Move to an owned room')[0].click();
+    await pause();
+  });
+  assert.equal(asked.length, 1);
+  assert.match(asked[0], /Nobody is moved: members join the new room themselves/);
+  assert.equal(model.rooms.size, 1);
+  assert.equal(room.log.list().length, 0);
+  assert.equal(dialog.open, true, 'the settings stay open');
+});
+
+test('room settings: the move starts an owned room and posts its link in the old one', async () => {
+  const { dialog, model, room: old, ui, root } = await inRoom({ owned: false });
+  await confirming(true, async () => {
+    find(dialog, 'button', 'Move to an owned room')[0].click();
+    await until(() => find(dialog, 'button', 'I saved it').length > 0); // its recovery code
+  });
+  assert.equal(model.rooms.size, 2);
+  const fresh = [...model.rooms.values()].find((r) => r !== old);
+  assert.equal(fresh.label, 'Old (owned)');
+  assert.equal(fresh.isOwner, true);
+  assert.equal(ui.current, fresh, 'the new room is on screen');
+  assert.equal(old.log.list().length, 0, 'nothing is posted before the code is saved');
+  find(dialog, 'button', 'I saved it')[0].click();
+  await until(() => old.log.list().length === 1);
+  const [post] = old.log.list();
+  assert.equal(post.kind, 'text');
+  assert.match(post.body, /^I started an owned room, “Old \(owned\)”\. I am its owner/);
+  const link = post.body.match(/#j=([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/);
+  assert.ok(link, 'the join link ends the message');
+  assert.equal(link[2], model.identity.member, 'it leads to the owner of the new room');
+  assert.equal(old.roster, null, 'the old room is as it was');
+  await until(() => /posted in “Old”/.test(root.querySelector('.toast')?.textContent ?? ''));
+});

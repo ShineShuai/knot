@@ -71,7 +71,9 @@ export class RoomSettings {
       ] : []),
     ];
     return h('div', {}, field(t('roomNameMine'), name), h('p', {}, t('roomNameHint')),
-      h('dl', { class: 'kv' }, ...rows.flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)])));
+      h('dl', { class: 'kv' }, ...rows.flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)])),
+      room.roster ? null : h('section', {}, h('h3', {}, t('moveTitle')), h('p', {}, t('moveHelp')),
+        h('button', { onclick: () => ui.roomDialogs.moveToOwned(room) }, t('moveButton'))));
   }
 
   #members(room) {

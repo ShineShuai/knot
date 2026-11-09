@@ -4,7 +4,7 @@
 // The engine suite is the checks of a single page; the full suite adds two pages, and calls with
 // a fake camera and microphone, which only Chromium offers (see browsers.mjs).
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { startServer } from '../../tools/serve.mjs';
 import {
   browserName, contextOptions, isExpectedNoise, launchOptions, suiteName,
@@ -227,6 +227,24 @@ await single('UI: create room, send message, persists after reload', async () =>
   assert.deepEqual(page.errors, []);
   await page.context().close();
 }, { live: true });
+
+// An open room (an old #r= link) can start an owned one; the new room's join link is posted in it.
+await single('UI: an open room starts an owned room and posts its join link', async () => {
+  const page = await newPage();
+  await page.goto(`${base}/index.html#r=${randomBytes(16).toString('base64url')}`);
+  await page.getByRole('button', { name: 'Room settings' }).click();
+  assert.equal(await page.getByRole('button', { name: 'Rules', exact: true }).count(), 0);
+  page.once('dialog', (prompt) => prompt.accept());
+  await page.getByRole('button', { name: 'Move to an owned room' }).click();
+  await page.getByRole('button', { name: 'I saved it' }).click(); // its recovery code comes first
+  await page.locator('.stage-head h2', { hasText: '(owned)' }).waitFor();
+  await page.locator('.room-item').first().click(); // back in the open room
+  const post = page.locator('.msg.own .text');
+  await post.waitFor();
+  assert.match(await post.innerText(), /owned room.*#j=[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{11}$/s);
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
+});
 
 // ---- 3. UI manual pairing between two browsers
 // ------------------------------------------------------

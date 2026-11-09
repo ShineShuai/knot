@@ -55,7 +55,12 @@ list and Leave moved in.
 - **Overview:** *Your name for this room* (applies at once; only you see it; empty takes it back,
   and the room is then shown under the owner's name for everyone, if there is one, else the name it
   was first given), your role (owner, member, or an open room without an owner), the owner and the
-  number of members.
+  number of members. An open room also offers *Move to an owned room…*: after a question that
+  spells out the consequences it starts a new room that the person owns (named "<name> (owned)"),
+  shows its recovery code, and then posts its join link as a message in the open room. It is never
+  automatic and moves nobody: members join the new room themselves (the owner approves each), the
+  old room and its history stay as they are (history cannot move: messages are bound to their
+  room), and the person who moves is the only one who becomes owner.
 - **Members** (rooms with an owner): the member list, join requests, senders not on the list, the
   recovery code, and the join link and pairing code. Members see the list only.
 - **Rules** (rooms with an owner): what the owner decided for everyone: *Joining* (owner approves,

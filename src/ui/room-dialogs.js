@@ -142,12 +142,7 @@ export class RoomDialogs {
     pair.append(make);
     const link = h('div');
     const owned = !!room.roster;
-    (owned ? room.joinLinkParts().then(
-      ({ lobbySecret, ownerId }) => `${location.origin}${location.pathname}#j=${
-        toB64u(lobbySecret)}.${ownerId}`,
-    ) : Promise.resolve(roomLink(room))).then(
-      (url) => link.replaceChildren(this.ui.kit.copyField(url)),
-    );
+    this.joinLink(room).then((url) => link.replaceChildren(this.ui.kit.copyField(url)));
     const help = !owned ? 'linkHelp' : room.isOwner ? 'joinLinkHelpOwner' : 'joinLinkHelp';
     return [
       h('section', {}, h('h3', {}, t(owned ? 'joinLinkTitle' : 'linkTitle')),
@@ -156,6 +151,37 @@ export class RoomDialogs {
         ? h('section', {}, h('h3', {}, t('pairTitle')), h('p', {}, t('pairHelp')), pair)
         : null,
     ].filter(Boolean);
+  }
+
+  /** The link that brings someone into `room`: an owned room's goes to its owner's lobby (who
+   *  decides), an open room's is the room itself. */
+  joinLink(room) {
+    if (!room.roster) return Promise.resolve(roomLink(room));
+    return room.joinLinkParts().then(({ lobbySecret, ownerId }) => (
+      `${location.origin}${location.pathname}#j=${toB64u(lobbySecret)}.${ownerId}`
+    ));
+  }
+
+  /** An open room has no owner. Start an owned room with a similar name, show its recovery code,
+   *  then post its join link in the old room. Nobody is moved and nothing is copied: everyone
+   *  decides for themselves whether to join, and the old room stays as it is. */
+  async moveToOwned(old) {
+    if (!confirm(t('moveConfirm'))) return;
+    this.ui.dialog.close(); // the room settings
+    let room;
+    try {
+      room = await this.ui.model.createRoom(t('moveNewName', { name: old.title }).slice(0, 40));
+    } catch (err) { this.ui.notify(err.message); return; }
+    this.ui.select(room);
+    await this.ensureRecovery(room, () => this.#announceMove(old, room));
+  }
+
+  async #announceMove(old, room) {
+    try {
+      const url = await this.joinLink(room);
+      await old.sendText(`${t('moveNotice', { name: room.title })} ${url}`);
+      this.ui.notify(t('moveDone', { name: old.title }));
+    } catch (err) { this.ui.notify(err.message); }
   }
 
   /** Members, and for the owner: join requests, removal and handing the room over; kept up to

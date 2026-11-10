@@ -193,9 +193,12 @@ export class RoomDialogs {
       const states = { p2p: 'direct', relay: 'relay', seen: 'seen', connecting: 'connecting' };
       const rows = room.membersView().map((m) => h('li', { class: 'member' },
         h('span', { class: 'member-name' }, plain(m.name),
-          m.owner ? h('span', { class: 'badge' }, t('ownerBadge')) : null),
+          m.owner ? h('span', { class: 'badge' }, t('ownerBadge')) : null,
+          m.mod ? h('span', { class: 'badge' }, t('modBadge')) : null),
         h('span', { class: 'file-size' }, m.self ? t('you') : t(states[m.state] ?? 'offlineState')),
         room.isOwner && !m.self ? h('span', { class: 'imgact' },
+          h('button', { onclick: () => this.#toggleModerator(room, m, run) },
+            t(m.mod ? 'removeModerator' : 'makeModerator')),
           h('button', {
             onclick: () => confirm(t('removeConfirm', { name: m.name }))
               && run(room.removeMember(m.id)),
@@ -224,10 +227,11 @@ export class RoomDialogs {
           h('button', { onclick: () => room.dismissSender(s.id) }, t('dismiss')))));
       body.replaceChildren(
         h('ul', { class: 'members-list' }, ...rows),
-        ...(room.isOwner ? [h('h3', {}, t('requests')),
+        ...(room.isStaff ? [h('h3', {}, t('requests')),
+          ...(room.isMod ? [h('p', { class: 'file-size' }, t('modHint'))] : []),
           ...(asks.length ? asks : [h('p', { class: 'file-size' }, t('noRequests'))]),
-          ...(senders.length ? [h('h3', {}, t('wroteNotOnList')), ...senders] : []),
-          h('h3', {}, t('recoveryTitle')),
+          ...(senders.length ? [h('h3', {}, t('wroteNotOnList')), ...senders] : [])] : []),
+        ...(room.isOwner ? [h('h3', {}, t('recoveryTitle')),
           h('p', { class: 'file-size' },
             room.roster.recoveryKey ? t('recoverySet') : t('recoveryNotSet')),
           h('button', { onclick: () => this.ensureRecovery(room, again, true) },
@@ -237,6 +241,20 @@ export class RoomDialogs {
     const offs = ['roster', 'requests', 'peers', 'pending'].map((name) => room.on(name, draw));
     this.ui.dialog.addEventListener('close', () => offs.forEach((off) => off()), { once: true });
     return body;
+  }
+
+  /** The owner makes a member a moderator, or takes the role back, after saying what it means:
+   *  moderators can let people in and delete what others wrote, nothing more, and an app older
+   *  than the moderators stops following the member list at the first admission they make. */
+  #toggleModerator(room, member, run) {
+    if (member.mod) {
+      if (confirm(t('unmodConfirm', { name: member.name }))) run(room.removeModerator(member.id));
+      return;
+    }
+    const older = room.appGaps.older.map(plain);
+    const text = [t('modConfirm', { name: member.name }),
+      older.length && t('modOlder', { names: older.join(', ') })].filter(Boolean).join('\n');
+    if (confirm(text)) run(room.makeModerator(member.id));
   }
 
   /** Leave a room (after asking): its images, staged files and stored messages go. */

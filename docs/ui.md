@@ -61,8 +61,14 @@ list and Leave moved in.
   automatic and moves nobody: members join the new room themselves (the owner approves each), the
   old room and its history stay as they are (history cannot move: messages are bound to their
   room), and the person who moves is the only one who becomes owner.
-- **Members** (rooms with an owner): the member list, join requests, senders not on the list, the
-  recovery code, and the join link and pairing code. Members see the list only.
+- **Members** (rooms with an owner): the member list (badges: owner, moderator), join requests,
+  senders not on the list, the recovery code, and the join link and pairing code. Members see the
+  list only. The owner can *Make moderator* / *Remove moderator* on a member's row, after being
+  told what the role allows and which members online run an app too old to follow moderators.
+  Moderators see the join requests and the senders not on the list (they can let them in or
+  clear them: a moderator's refusal is not sent to the requester), and may delete what others
+  wrote; they have no removals, recovery code, rules or hand-over. The ⚙ count and the
+  "waiting to be let in" line are theirs too.
 - **Rules** (rooms with an owner): what the owner decided for everyone: *Joining* (owner approves,
   or closed), *Who can write* (everyone, or owner only), *Sharing files*, *Calls*. The owner edits
   them and publishes them together (*Publish rules*; besides the four above: *Name for everyone*,

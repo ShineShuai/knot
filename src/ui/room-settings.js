@@ -19,7 +19,7 @@ export class RoomSettings {
     const only = (text) => ({ text, kind: 'me' });
     const shared = { text: t('scopeRoom'), kind: 'room' }; // what everyone in the room is bound by
     const requests = () => (
-      room.isOwner ? room.joinRequests.length + room.waitingSenders.length : 0
+      room.isStaff ? room.joinRequests.length + room.waitingSenders.length : 0
     );
     this.shell = new SettingsShell(this.ui.kit);
     this.shell.open(t('roomSettingsTitle', { name: room.title || t('roomDefault') }), [
@@ -62,7 +62,8 @@ export class RoomSettings {
     });
     const members = room.membersView();
     const owner = members.find((m) => m.owner);
-    const role = !room.roster ? 'roleOpen' : room.isOwner ? 'roleOwner' : 'roleMember';
+    const role = !room.roster ? 'roleOpen' : room.isOwner ? 'roleOwner'
+      : room.isMod ? 'roleMod' : 'roleMember';
     const rows = [
       [t('roleLabel'), t(role)],
       ...(room.roster ? [

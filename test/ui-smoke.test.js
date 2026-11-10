@@ -143,6 +143,36 @@ test('ui: join request, greeting, owner approval, then both are in the room', as
   assert.equal(radio(gm, 'post', 'owner').checked, true);
   assert.equal(radio(gm, 'post', 'owner').disabled, true, 'members only read them');
   assert.equal(find(gm, 'button', 'Publish rules').length, 0);
+
+  // A moderator: the owner makes Bob one; Bob gets the join desk, but no removals.
+  let question = '';
+  const ask = globalThis.confirm;
+  globalThis.confirm = (text) => { question = text; return true; };
+  try {
+    gear(owner.root).click();
+    button(odialog, 'Members').click();
+    assert.equal(find(odialog, 'button', 'Remove moderator').length, 0);
+    button(odialog, 'Make moderator').click();
+    await until(() => joined.isMod, 3000);
+  } finally { globalThis.confirm = ask; }
+  assert.match(question, /let people in while you are away/);
+  await until(() => find(odialog, 'button', 'Remove moderator').length === 1, 3000);
+  assert.match(odialog.textContent, /moderator/, 'a badge on his row');
+  await until(() => /Bob is now a moderator/.test(guest.root.textContent), 3000);
+  gear(guest.root).click();
+  button(gm, 'Members').click();
+  assert.match(gm.textContent, /You are a moderator: you can let people in/);
+  assert.match(gm.textContent, /No open requests/, 'the join desk');
+  assert.equal(find(gm, 'button', 'Remove').length, 0, 'but no removals, no recovery code');
+  assert.equal(find(gm, 'button', 'Make moderator').length, 0);
+  assert.equal(find(gm, 'button', 'New recovery code').length, 0);
+  button(gm, 'Overview').click();
+  assert.match(gm.textContent, /Moderator \(you\)/);
+  globalThis.confirm = () => true;
+  try {
+    button(odialog, 'Remove moderator').click();
+    await until(() => !joined.isMod, 3000);
+  } finally { globalThis.confirm = ask; }
 });
 
 test('ui: a new room first shows the recovery code, then the invite', async () => {

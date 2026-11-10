@@ -324,8 +324,8 @@ class Ui {
       waiting.hidden = !n;
       waiting.textContent = n ? [
         t('waitingMembers', { n }),
-        room.isOwner && t('waitingAsOwner'),
-        room.roster && !room.isOwner && !room.ownerOnline
+        room.isStaff && t('waitingAsOwner'),
+        room.roster && !room.isStaff && !room.ownerOnline
           && t('waitingOwner', { owner: plain(room.ownerName) }),
       ].filter(Boolean).join(' ') : '';
     };
@@ -434,7 +434,7 @@ class Ui {
       onclick: () => this.roomSettings.open(room),
     });
     const drawGear = () => {
-      const open = room.isOwner ? room.joinRequests.length + room.waitingSenders.length : 0;
+      const open = room.isStaff ? room.joinRequests.length + room.waitingSenders.length : 0;
       gear.replaceChildren('⚙', ...(open ? [' ', h('em', { class: 'count' }, String(open))]
         : []));
     };

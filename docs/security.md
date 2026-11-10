@@ -49,6 +49,28 @@ A version that knows only some rules keeps those and ignores the rest (so a name
 characters: that is the size such a version accepts for a rule it does not know). The room's name
 is the person's own, else the owner's, else the one the room was first given.
 
+**Moderators.** The owner can make members moderators, so that someone can let people in while
+the owner is away and delete what others wrote. A moderator can only: let someone in (a plain
+`admit`, never of someone who was removed, and never with a role), answer join requests (in the
+owner's lobby: the requests are addressed to the owner's id, so the owner's and the moderators'
+apps all see them), and delete other people's messages (what the room rule "owner may delete"
+allows the owner). They cannot remove anyone, rotate the room's keys, hand the room over, make
+moderators, change the rules or use the recovery code: a removal moves the room to new keys, and
+two people doing that at once would split the room, so it stays with the owner.
+The role is set by the owner's `admit` of a member with `role: 'mod'` (or `'member'` to take it
+back; a removal or a transfer ends it too). An app without roles reads that as the member being
+let in once more, so making a moderator changes nothing for it; a moderator's own `admit` is a
+link it refuses (the author is not the owner), and since the next link is built on it, such an app
+stops following the member list from then on (protocol level 5: it is named in the room's "older
+app" note). Two links made at once on the same `prev` used to be a fork that split the peers; now
+the owner's link wins, and between two moderators' `admit`s the smaller id; the loser is taken
+back (its author lets that person in again on top of the winner). Only a moderator's `admit` is
+ever taken back: an owner's link, and any removal, is final. A joiner believes a moderator's
+grant if the member list inside it (checked from the room's creator) makes the signer a
+moderator under the owner the link names, and the admission it carries is the signer's, for the
+joiner. A moderator's refusal of a request is not sent (nothing could show it is genuine): the
+request is only cleared for them, and the requester keeps waiting for the owner.
+
 **Key rotation.** Removing a member also moves the room to new broker keys (topic, presence,
 signalling, relay and join links all derive from the room secret mixed with a fresh per-removal
 secret). The owner commits to that secret's hash in the removal envelope and hands the secret to

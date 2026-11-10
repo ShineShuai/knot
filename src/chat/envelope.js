@@ -69,7 +69,11 @@ export const ADMIN_KINDS = Object.freeze(
 );
 /** What the conversation shows as a quiet line: membership changes and new room rules. */
 export const NOTICE_KINDS = Object.freeze([...ADMIN_KINDS, POLICY]);
-export const admitBody = ({ id, name }, prev) => ({ id, name, prev });
+/** `role` ('mod' | 'member'): the owner's admit of a member also sets their role (see roster.js);
+ *  an app that does not know roles reads it as the member being let in once more. */
+export const admitBody = ({ id, name, role }, prev) => (
+  role ? { id, name, role, prev } : { id, name, prev }
+);
 /** `epoch` { n, commit }: the channel keys rotate; `commit` is the hash of the new secret. */
 export const revokeBody = ({ id, epoch }, prev) => (
   epoch ? { id, epoch: { n: epoch.n, commit: epoch.commit }, prev } : { id, prev }
@@ -188,7 +192,10 @@ function wellFormed(e, roomId, { maxText, maxFileBytes, now }) {
     const epoch = (x) => !!x && Number.isSafeInteger(x.n) && x.n >= 1 && x.n <= 1e6
       && isB64u(x.commit, 43);
     if (!prev) return false;
-    if (e.kind === 'admit') return peer(b.id) && typeof b.name === 'string' && b.name.length <= 32;
+    if (e.kind === 'admit') {
+      return peer(b.id) && typeof b.name === 'string' && b.name.length <= 32
+        && (b.role === undefined || ['mod', 'member'].includes(b.role));
+    }
     if (e.kind === 'revoke') return peer(b.id) && (b.epoch === undefined || epoch(b.epoch));
     if (e.kind === 'recovery') return isB64u(b.key, 43);
     if (e.kind === 'recover') return peer(b.to) && epoch(b.epoch);

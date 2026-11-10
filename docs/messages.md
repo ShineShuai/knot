@@ -94,6 +94,12 @@ online whose level is lower or higher than ours (`Room.appGaps`) in a note ("Ada
 yours"), and Diagnostics lists the apps seen. Raise `PROTOCOL` with every change an older app
 would not understand, and before the next one that changes the wire format.
 
+## Moderators
+
+An `admit` of a member by the owner may carry `role`: `'mod'` makes the member a moderator,
+`'member'` ends it (see security.md). A moderator may sign a plain `admit` (no `role`). Older
+apps read the owner's role `admit` as the member being let in again.
+
 ## Room rules
 
 `policy` {rev, rules}, signed by the room owner: who may join, who may write, whether files and

@@ -76,23 +76,24 @@ export class Policy {
   }
 
   /** Why would a message of this `kind` from `author` be refused now? 'files', 'size', 'post',
-   *  'delete' or null. `size`: of a file; `target`: the author of the message a `del` removes. */
-  denies(kind, author, owner, { size = 0, target = null } = {}) {
+   *  'delete' or null. `size`: of a file; `target`: the author of the message a `del` removes;
+   *  `staff`: the author is the owner or a moderator. */
+  denies(kind, author, owner, { size = 0, target = null, staff = author === owner } = {}) {
     const { files, post, maxFileMb, ownerDelete } = this.rules;
     if (kind === 'file' && !files) return 'files';
     if (kind === 'file' && maxFileMb && size > maxFileMb * MB) return 'size';
     if (POSTS.includes(kind) && post === 'owner' && author !== owner) return 'post';
-    if (kind === 'del' && !ownerDelete && author === owner && target && target !== author) {
-      return 'delete'; // the owner deleting what another wrote
+    if (kind === 'del' && !ownerDelete && staff && target && target !== author) {
+      return 'delete'; // the owner, or a moderator, deleting what another wrote
     }
     return null;
   }
 
   /** May this envelope in? Only what was written after the rules were set is judged: before,
    *  we cannot know what they were, and history must not lose messages when the rules change. */
-  permits(env, author, owner, target = null) {
+  permits(env, author, owner, { target = null, staff = author === owner } = {}) {
     const stamp = (e) => ({ ms: e.ms, c: e.c });
     if (!this.env || compareStamps(stamp(env), stamp(this.env)) <= 0) return true;
-    return this.denies(env.kind, author, owner, { size: env.body?.size, target }) === null;
+    return this.denies(env.kind, author, owner, { size: env.body?.size, target, staff }) === null;
   }
 }

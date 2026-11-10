@@ -9,5 +9,7 @@ export const VERSION = '0.4.0';
  *    2  the owner's answer to a join request carries the member list
  *    3  the owner's room rules: a `policy` envelope (an older app drops it, ignores the rules)
  *    4  more rules: a name for everyone, the owner may delete, the largest file (a level 3 app
- *       keeps the rules it knows and ignores these) */
-export const PROTOCOL = 4;
+ *       keeps the rules it knows and ignores these)
+ *    5  moderators: an `admit` with a `role`, and admits signed by a moderator (an older app
+ *       stops following the member list at the first such admit) */
+export const PROTOCOL = 5;

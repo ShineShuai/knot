@@ -7,11 +7,15 @@
 //
 //   joiner -> owner   { t:'join', pub, name, greeting, box, ts, sig }
 //   owner  -> joiner  { t:'grant', to, pub, box, sig }  |  { t:'deny', to, pub, sig }
+// A moderator may answer with a grant too (never a refusal): the joiner believes it if the member
+// list inside shows that moderator under the owner the link names (see `vouched`).
 import { concat, fromB64u, fromUtf8, toB64u, utf8 } from '../util/bytes.js';
 import { peerIdOf, verifySignature } from '../crypto/identity.js';
 import { verifyCert } from '../crypto/delegation.js';
 import { deriveRoomKeys } from '../crypto/room-keys.js';
 import { openBox, sealBox } from '../crypto/box.js';
+import { authorIdOf, verifyEnvelope } from './envelope.js';
+import { Roster } from './roster.js';
 
 export const MAX_GREETING = 200;
 const MAX_AGE_MS = 10 * 60 * 1000;
@@ -103,7 +107,22 @@ export async function makeDeny(identity, { lobbyId, to }) {
   ));
 }
 
-/** The owner's answer to us, or null if it is not one (wrong lobby, owner, receiver or key).
+/** A grant from someone who is not the owner: does the member list it carries, rooted in the
+ *  room's creator, make `signer` a moderator under `ownerId`, and is the admission it carries
+ *  theirs, for us? (The list may be cut short, and nothing proves the moderator was not removed
+ *  since: a joiner who is wrongly let in is simply ignored by the members.) */
+async function vouched({ secret, founder, chain, admit }, { signer, ownerId, selfId }) {
+  if (!Array.isArray(chain) || !admit) return false;
+  const roomId = (await deriveRoomKeys(secret)).id;
+  for (const env of chain) if (!(await verifyEnvelope(env, roomId))) return false;
+  const roster = new Roster(founder);
+  roster.load(chain);
+  return roster.owner === ownerId && roster.isMod(signer) && admit.kind === 'admit'
+    && admit.body.id === selfId && authorIdOf(admit) === signer && verifyEnvelope(admit, roomId);
+}
+
+/** The owner's (or a moderator's) answer to us, or null if it is not one (wrong lobby, receiver
+ *  or key, or not from someone who may answer).
  *  -> { t:'grant', secret, label, admit, chain, founder, epoch } | { t:'deny' } */
 export async function readDecision(bytes, { lobbyId, ownerId, selfId, boxKey }) {
   try {
@@ -112,9 +131,11 @@ export async function readDecision(bytes, { lobbyId, ownerId, selfId, boxKey }) 
     const pub = fromB64u(m.pub);
     // The owner's own key, or a device of the owner (its certificate names exactly this key).
     const speaksFor = m.cert ? await verifyCert(m.cert) : await peerIdOf(pub);
-    if (speaksFor !== ownerId || (m.cert && m.cert.d !== m.pub)) return null;
+    if (!speaksFor || (m.cert && m.cert.d !== m.pub)) return null;
+    const byOwner = speaksFor === ownerId;
     const sig = fromB64u(m.sig);
     if (m.t === 'deny') {
+      if (!byOwner) return null; // nothing shows that a moderator may refuse
       return (await verifySignature(pub, sig, text('knot/deny-sig', lobbyId, selfId)))
         ? { t: 'deny' } : null;
     }
@@ -128,6 +149,9 @@ export async function readDecision(bytes, { lobbyId, ownerId, selfId, boxKey }) 
     const { secret, label, admit, chain, founder, epoch } = JSON.parse(fromUtf8(plain));
     const room = fromB64u(secret);
     if (room.length !== 16 || typeof founder !== 'string') return null;
+    if (!byOwner && !(await vouched(
+      { secret: room, founder, chain, admit }, { signer: speaksFor, ownerId, selfId },
+    ))) return null;
     return {
       t: 'grant', secret: room, label: String(label), admit, founder, epoch: epoch ?? null,
       chain: Array.isArray(chain) ? chain : [], // an older owner sends none

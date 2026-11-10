@@ -420,6 +420,16 @@ await check('UI: pair two browsers with codes, chat both ways, share a file', as
   await b.locator('.stage-head h2', { hasText: 'Team Alpha' }).waitFor();
   await setName('');
   await b.locator('.stage-head h2', { hasText: /^(?!Team Alpha)/ }).waitFor();
+  // The owner makes Bob a moderator: his page says so.
+  await a.getByRole('button', { name: 'Room settings' }).click();
+  await a.getByRole('button', { name: 'Members', exact: true }).click();
+  a.once('dialog', (prompt) => prompt.accept());
+  await a.getByRole('button', { name: 'Make moderator' }).click();
+  await a.getByRole('button', { name: 'Remove moderator' }).waitFor();
+  await a.keyboard.press('Escape');
+  await b.getByRole('button', { name: 'Room settings' }).click();
+  await b.locator('dialog dd', { hasText: 'Moderator (you)' }).waitFor();
+  await b.keyboard.press('Escape');
   // Links and more reactions in the real page.
   await b.getByPlaceholder('Write a message').fill('docs https://example.com/a?b=1, thanks');
   await b.keyboard.press('Enter');

@@ -1,6 +1,7 @@
 // What the room owner does: answer join requests (listening in the lobby, a broker channel only
 // the owner reads), remove members, hand the room over, and the recovery code that takes a
-// room back after the owner's identity is lost. A room without an owner never uses this.
+// room back after the owner's identity is lost. Moderators (see roster.js) answer join requests
+// too; the rest is the owner's alone. A room without an owner never uses this.
 import { identityFromSeed } from '../crypto/identity.js';
 import { RoomChannel } from '../net/room-channel.js';
 import { randomBytes, sha256, toB64u } from '../util/bytes.js';
@@ -13,7 +14,7 @@ const GRANT_CHAIN_BYTES = 30_000; // the member list a joiner is given (a frame 
 
 export class OwnerDesk {
   #joinRequests = new Map(); // joiner id -> request waiting for the owner's decision
-  #lobby = null; #lobbyId = null;
+  #lobby = null; #lobbyId = null; #lobbyOwner = null; // the lobby we hold, and whose it is
   #recoverWith = null; #recovering = false; // a recovery code in use on this device
 
   /** `hooks`: publish(kind, body, signer), epoch() -> { n, secret }, applyEpoch(n, secret),
@@ -25,15 +26,19 @@ export class OwnerDesk {
 
   #requireOwner() { if (!this.room.isOwner) throw new Error('Only the room owner can do this'); }
 
+  #requireStaff() {
+    if (!this.room.isStaff) throw new Error('Only the room owner or a moderator can do this');
+  }
+
   get requests() {
     return [...this.#joinRequests.values()].map(({ id, name, greeting, ts }) => (
       { id, name, greeting, ts }
     ));
   }
 
-  /** Owner only: let a requester in. They get the room secret, sealed to them alone. */
+  /** Owner or moderator: let a requester in. They get the room secret, sealed to them alone. */
   async approveJoin(id) {
-    this.#requireOwner();
+    this.#requireStaff();
     const req = this.#joinRequests.get(id);
     if (!req) throw new Error('This request is no longer open');
     await this.admit(req.id, req.name);
@@ -42,12 +47,15 @@ export class OwnerDesk {
     this.room.emit('requests');
   }
 
+  /** Drop a request. The owner's refusal is sent to the requester; a moderator's is not (it
+   *  cannot be told from a forgery, so the requester would not believe it): they keep waiting. */
   async declineJoin(id) {
-    this.#requireOwner();
+    this.#requireStaff();
     const req = this.#joinRequests.get(id);
     if (!req) return;
     this.#joinRequests.delete(id);
     this.room.emit('requests');
+    if (!this.room.isOwner) return;
     await this.#lobby?.sendSignal(
       req.device, await makeDeny(this.room.identity, { lobbyId: this.#lobbyId, to: req.device }),
     );
@@ -122,6 +130,16 @@ export class OwnerDesk {
     return this.hooks.publish('transfer', transferBody({ to: id }, this.room.roster.head));
   }
 
+  /** Owner only: make a member a moderator (`role` 'mod') or an ordinary member again. */
+  async setRole(id, role) {
+    this.#requireOwner();
+    const { roster } = this.room;
+    if (!roster.members.has(id)) throw new Error('Pick a current member');
+    if (roster.isMod(id) === (role === 'mod')) return null; // already so
+    const { name } = roster.members.get(id);
+    return this.hooks.publish('admit', admitBody({ id, name, role }, roster.head));
+  }
+
   admit(id, name) {
     if (this.room.roster.isMember(id)) return null;
     return this.hooks.publish('admit', admitBody({ id, name }, this.room.roster.head));
@@ -143,10 +161,11 @@ export class OwnerDesk {
     ));
   }
 
-  /** The owner listens in the lobby; nobody else does. Follows ownership changes. */
+  /** The owner and the moderators listen in the owner's lobby (a moderator as the owner: the
+   *  requests are addressed to the owner's id). Follows changes of owner and of role. */
   async sync() {
     const { settings } = this.room;
-    const want = this.room.isOwner && !this.room.removed && settings.brokersEnabled
+    const want = this.room.isStaff && !this.room.removed && settings.brokersEnabled
       && settings.brokers.length > 0 && this.room.rules.join === 'approve';
     if (!want) {
       this.#lobby?.stop();
@@ -154,13 +173,15 @@ export class OwnerDesk {
       this.#joinRequests.clear();
       return;
     }
-    if (this.#lobby) return;
-    const { identity } = this.room;
-    // keyed by the identity, not the device: all our devices answer in the same lobby
-    const keys = await lobbyKeys(await lobbySecretOf(this.hooks.chanSecret()), identity.member);
+    const ownerId = this.room.roster.owner;
+    if (this.#lobby && this.#lobbyOwner === ownerId) return;
+    this.#lobby?.stop(); // the owner changed: it is another lobby
+    // keyed by the owner's identity, not a device: all their devices (and the moderators) answer
+    const keys = await lobbyKeys(await lobbySecretOf(this.hooks.chanSecret()), ownerId);
     this.#lobbyId = keys.id;
+    this.#lobbyOwner = ownerId;
     this.#lobby = new RoomChannel({
-      roomId: keys.id, aes: keys.aes, selfId: identity.member, WS: this.room.WS,
+      roomId: keys.id, aes: keys.aes, selfId: ownerId, WS: this.room.WS,
       brokers: settings.brokers, topicPrefix: settings.topicPrefix, health: this.room.health,
     });
     this.#lobby.on('signal', (bytes) => this.#onJoinRequest(bytes));
@@ -169,7 +190,7 @@ export class OwnerDesk {
 
   async #onJoinRequest(bytes) {
     const req = await readRequest(bytes, this.#lobbyId);
-    if (!req || !this.room.isOwner || req.id === this.room.identity.member) return;
+    if (!req || !this.room.isStaff || req.id === this.room.identity.member) return;
     if (this.room.roster.revoked.has(req.id)) return;
     if (req.cert && this.room.isWithdrawn(req.cert, req.id)) return; // an unlinked device
     if (this.room.roster.isMember(req.id)) { // knocked twice

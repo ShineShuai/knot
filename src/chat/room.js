@@ -192,7 +192,7 @@ export class Room extends Emitter {
       const who = p.member ?? seen?.member ?? p.id;
       return {
         id: p.id, name: p.name, via: p.via, sas: p.sas, member: who, owner: owner(who),
-        synced: p.synced,
+        mod: !!this.roster?.isMod(who), synced: p.synced,
         mine: who === this.identity.member,
         device: this.deviceOf(who, p.alias ?? seen?.alias ?? p.device ?? seen?.device),
         state: p.state === 'p2p' || !viaRelay(p.id) ? p.state : 'relay',
@@ -203,6 +203,7 @@ export class Room extends Emitter {
       if (!this.peers.has(id) && this.#isFresh(m)) rows.push({
         id, name: m.name, state: viaRelay(id) ? 'relay' : 'seen', via: 'broker', sas: null,
         member: m.member ?? id, owner: owner(m.member ?? id),
+        mod: !!this.roster?.isMod(m.member ?? id),
         mine: (m.member ?? id) === this.identity.member,
         device: this.deviceOf(m.member ?? id, m.alias ?? m.device),
       });
@@ -255,7 +256,7 @@ export class Room extends Emitter {
     const direct = [...this.peers.values()].some((p) => p.state === 'p2p');
     return {
       id: this.identity.id, name: this.#name, member: this.identity.member, mine: true,
-      self: true, sas: null, via: 'self', owner: this.isOwner,
+      self: true, sas: null, via: 'self', owner: this.isOwner, mod: this.isMod,
       state: direct ? 'p2p' : connected > 0 ? 'relay' : 'offline',
       device: this.deviceOf(this.identity.member, this.identity.alias ?? this.identity.cert?.n),
     };
@@ -302,6 +303,12 @@ export class Room extends Emitter {
   get channelId() { return this.#chan.id; }
 
   get isOwner() { return !!this.roster && this.roster.owner === this.identity.member; }
+
+  /** A moderator: the owner trusts them to let people in and to delete what others wrote. */
+  get isMod() { return !!this.roster && this.roster.isMod(this.identity.member); }
+
+  /** The owner or a moderator. */
+  get isStaff() { return this.isOwner || this.isMod; }
 
   /** The owner's name, as we know it (null in a room without an owner). */
   get ownerName() { return this.roster ? this.#nameOf(this.roster.owner) : null; }
@@ -368,6 +375,9 @@ export class Room extends Emitter {
   get joinRequests() { return this.#desk.requests; }
   approveJoin(id) { return this.#desk.approveJoin(id); }
   declineJoin(id) { return this.#desk.declineJoin(id); }
+  /** Owner only: make a member a moderator, or an ordinary member again. */
+  makeModerator(id) { return this.#desk.setRole(id, 'mod'); }
+  removeModerator(id) { return this.#desk.setRole(id, 'member'); }
   removeMember(id) { return this.#desk.removeMember(id); }
   newRecoveryCode() { return this.#desk.newRecoveryCode(); }
   beginRecovery(seed) { return this.#desk.beginRecovery(seed); }
@@ -577,7 +587,7 @@ export class Room extends Emitter {
    *  and so may the room owner. */
   async deleteMessage(id) {
     if (this.log.isGone(id) || this.log.get(id)?.kind === 'del') return null;
-    if (!this.isMine(authorOfId(id)) && !this.isOwner) {
+    if (!this.isMine(authorOfId(id)) && !this.isStaff) {
       throw new Error('You can only delete your own messages');
     }
     return this.#publish('del', delBody(id));
@@ -622,7 +632,7 @@ export class Room extends Emitter {
 
   /** May this person delete `env`? Its author may; the owner too, unless the room says not. */
   mayDelete(env) {
-    return this.isMine(authorIdOf(env)) || (this.isOwner && this.policy.rules.ownerDelete);
+    return this.isMine(authorIdOf(env)) || (this.isStaff && this.policy.rules.ownerDelete);
   }
 
   /** Owner only: change the rules (those not given stay as they are). Returns the envelope, or
@@ -641,7 +651,7 @@ export class Room extends Emitter {
     if (!this.roster) return;
     const target = kind === 'del' ? authorOfId(body.id) : null;
     const why = this.policy.denies(kind, this.identity.member, this.roster.owner,
-      { size: body?.size, target });
+      { size: body?.size, target, staff: this.isStaff });
     if (why === 'files') throw new Error('Sharing files is turned off in this room');
     if (why === 'size') {
       throw new Error(`Files in this room are limited to ${this.rules.maxFileMb} MB`);
@@ -882,9 +892,9 @@ export class Room extends Emitter {
     return [...by.values()];
   }
 
-  /** Owner: let in someone who wrote to the room but is not on the list. */
+  /** Owner or moderator: let in someone who wrote to the room but is not on the list. */
   async admitSender(id) {
-    if (!this.isOwner) throw new Error('Only the room owner can let someone in');
+    if (!this.isStaff) throw new Error('Only the room owner or a moderator can let someone in');
     const sender = this.waitingSenders.find((s) => s.id === id);
     if (!sender) throw new Error('No messages from them are waiting');
     await this.#desk.admit(id, sender.name || id.slice(0, 6));
@@ -1017,13 +1027,14 @@ export class Room extends Emitter {
   #permits(env) {
     const author = authorIdOf(env);
     const owner = this.roster?.owner;
-    if (env.kind === 'del' && authorOfId(env.body.id) !== author && author !== owner) return false;
+    const staff = !!this.roster?.isStaff(author);
+    if (env.kind === 'del' && authorOfId(env.body.id) !== author && !staff) return false;
     if (env.kind === 'edit' && authorOfId(env.body.id) !== author) return false; // own only
     if (!this.roster) return !ADMIN_KINDS.includes(env.kind) && env.kind !== POLICY; // no owner
     if (ADMIN_KINDS.includes(env.kind)) return true;
     if (env.kind === POLICY) return author === owner; // only the owner sets the rules
     const target = env.kind === 'del' ? authorOfId(env.body.id) : null;
-    return this.#knows(author) && this.policy.permits(env, author, owner, target);
+    return this.#knows(author) && this.policy.permits(env, author, owner, { target, staff });
   }
 
   /** Is `id` a member as far as we know, or one of our own devices (the main identity this
@@ -1034,6 +1045,7 @@ export class Room extends Emitter {
 
   async #accept(env, source, gossip = true) {
     const batch = this.roster && ADMIN_KINDS.includes(env.kind) ? this.roster.apply(env) : [env];
+    for (const gone of this.roster?.retracted ?? []) await this.#takeBack(gone);
     let kept = false;
     for (const e of batch) {
       const done = await this.#keep(e, source, gossip);
@@ -1111,10 +1123,24 @@ export class Room extends Emitter {
     return true;
   }
 
+  /** A moderator's admit lost a fork against another link made at the same time (see roster.js):
+   *  forget it, and if it was ours, let that person in again on top of the winner. */
+  async #takeBack(env) {
+    this.log.drop([env]);
+    await this.#store.remove([env]).catch(() => {});
+    this.#emitPeers();
+    this.emit('roster');
+    const { id, name } = env.body;
+    if (this.isMine(authorIdOf(env)) && !this.roster.isMember(id) && !this.roster.revoked.has(id)) {
+      this.#after(0, () => this.#desk.admit(id, name).catch(() => {}));
+    }
+  }
+
   /** A membership change took effect. */
   async #onAdmin(env) {
     const { kind, body } = env;
     if (kind === 'admit') this.#desk.dropRequest(body.id); // answered, maybe on another device
+    if (kind === 'admit' && body.role && this.isMine(body.id)) await this.#desk.sync(); // our role
     if (kind === 'revoke') {
       if (this.isMine(body.id)) return this.#beRemoved();
       this.members.delete(body.id);
@@ -1439,8 +1465,8 @@ export class Room extends Emitter {
     if (!this.roster) return [];
     const live = new Map(this.peerList.map((p) => [p.member, p.state]));
     return [this.roster.owner, ...this.roster.members.keys()].map((id) => ({
-      id, name: this.#nameOf(id), owner: id === this.roster.owner, self: this.isMine(id),
-      state: this.isMine(id) ? 'self' : live.get(id) ?? 'offline',
+      id, name: this.#nameOf(id), owner: id === this.roster.owner, mod: this.roster.isMod(id),
+      self: this.isMine(id), state: this.isMine(id) ? 'self' : live.get(id) ?? 'offline',
     }));
   }
 

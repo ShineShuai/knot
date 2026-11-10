@@ -31,6 +31,13 @@ device*.
 - **Closing with changes that were not applied** (an Apply bar showing on any page) asks first,
   for ×, Close and Escape alike; so does choosing a new language, which draws the dialog again.
   The same frame serves the room settings. (Chrome lets a second Escape through without asking.)
+- **Keyboard and screen reader:** every dialog is named by its title (`aria-labelledby`), and the
+  focus starts on the current page in the list, not on ×. Beside the list, choosing a page leaves
+  the focus where it is; on a narrow screen (list and page take turns) it moves to the page's
+  heading, and Back returns it to the list entry it came from. When Apply hides, or a page is
+  drawn again (Revert), the focus stays in the page instead of falling to the document. Closing
+  returns it to the button that opened the dialog (the browser does that). Choices of a few
+  values (joining, who can write) are radio groups with a name.
 - **Notifications** shows what the browser says (not asked yet, allowed, blocked) and, when
   blocked, where to change it.
 - **Devices** is the old Linked devices dialog; **About** has the version and the diagnostics

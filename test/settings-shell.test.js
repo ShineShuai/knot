@@ -2,7 +2,7 @@
 // refused, and the validation of the network lists.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { installFakeDom, find } from './fake-dom.js';
+import { FakeElement, installFakeDom, find } from './fake-dom.js';
 import { AppModel } from '../src/app.js';
 import { DEFAULTS, networkDefaults, networkProblems } from '../src/config.js';
 import { MemoryKV } from '../src/store/kv.js';
@@ -258,4 +258,54 @@ test('ui: a new language redraws the dialog: it asks before dropping unapplied e
     await settle();
     assert.equal(model.settings.language, 'de');
   } finally { q.restore(); }
+});
+
+const focusedText = () => FakeElement.focused?.textContent;
+
+test('ui: the dialog is named by its title, and a screen reader starts at the pages', async () => {
+  const { dialog } = await person();
+  const title = dialog.querySelector('h2');
+  assert.equal(dialog.getAttribute('aria-labelledby'), title.id);
+  assert.equal(title.textContent, 'Settings');
+  assert.equal(focusedText(), 'General', 'the first page, not the ×');
+  assert.equal(dialog.querySelector('nav').getAttribute('aria-label'), 'Settings');
+  const page = dialog.querySelector('.spage');
+  assert.equal(page.getAttribute('aria-labelledby'), 'spage-title');
+  assert.equal(page.querySelector('h3').id, 'spage-title');
+});
+
+test('ui: with the list beside the page, choosing a page does not move the focus', async () => {
+  const { dialog, page } = await person();
+  FakeElement.focused = find(dialog, 'button', 'General')[0];
+  page('Network');
+  assert.equal(focusedText(), 'General', 'the focus is not taken to the page');
+  assert.equal(find(dialog, 'button', 'Network')[0].getAttribute('aria-current'), 'true');
+  assert.equal(find(dialog, 'button', 'General')[0].getAttribute('aria-current'), 'false');
+});
+
+test('ui: on a narrow screen the focus follows: page heading, and back to the list', async () => {
+  const { dialog, page } = await person();
+  const real = globalThis.getComputedStyle;
+  globalThis.getComputedStyle = () => ({ display: 'none' }); // the list is not on screen
+  try {
+    page('Network');
+    assert.equal(FakeElement.focused.tagName?.toLowerCase(), 'h3');
+    assert.equal(focusedText(), 'Network', 'the heading of the page');
+    const back = dialog.querySelector('.sback');
+    assert.equal(back.getAttribute('aria-label'), 'Back to Settings');
+    back.click();
+    assert.equal(FakeElement.focused.textContent, 'Network', 'the list item we came from');
+    assert.equal(FakeElement.focused.tagName?.toLowerCase(), 'button');
+  } finally { globalThis.getComputedStyle = real; }
+});
+
+test('ui: a page drawn again keeps the focus in the page only if it was there', async () => {
+  const { dialog, page } = await person();
+  page('Network');
+  const revert = find(dialog, 'button', 'Revert')[0];
+  const inPage = (el) => !!el?.parentNode;
+  FakeElement.focused = find(dialog, 'button', 'General')[0];
+  revert.click();
+  assert.equal(focusedText(), 'General', 'not moved when it was elsewhere');
+  assert.ok(inPage(dialog.querySelector('h3')));
 });

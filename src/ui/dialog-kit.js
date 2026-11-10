@@ -35,13 +35,14 @@ export class DialogKit {
       h(
         'header',
         {},
-        h('h2', {}, title),
+        h('h2', { id: 'dialog-title' }, title),
         h('button', {
           class: 'ghost', title: t('close'), 'aria-label': t('close'),
           onclick: () => this.#close(),
         }, '×'), // the same as Cancel: whatever was not saved is dropped
       ),
       ...parts);
+    this.dialog.setAttribute('aria-labelledby', 'dialog-title'); // read out when it opens
     if (!this.dialog.open) this.dialog.showModal();
   }
 

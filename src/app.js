@@ -627,7 +627,10 @@ export class AppModel extends Emitter {
     this.emit('prefs', room);
   }
 
-  /** The name is only ours (each member names rooms on their own device). */
+  /** Change the first name of a room (the label: what it is called until a person or the owner
+   *  gives it another). The screens no longer do this: a person's own name for a room is a
+   *  choice (`setRoomPrefs`, `name`). It stays for the label that arrives from the person's
+   *  other devices, which may run an older version, and as the one way to test that. */
   async renameRoom(id, label) {
     const room = this.rooms.get(id);
     const next = String(label ?? '').trim().slice(0, 40);

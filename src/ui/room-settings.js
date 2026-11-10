@@ -102,7 +102,7 @@ export class RoomSettings {
       return {
         inputs,
         node: h('div', { class: 'field' }, h('span', {}, label),
-          h('div', { class: 'seg', role: 'radiogroup' }, ...labels)),
+          h('div', { class: 'seg', role: 'radiogroup', 'aria-label': label }, ...labels)),
         value: () => inputs.find((i) => i.checked)?.value ?? value,
       };
     };

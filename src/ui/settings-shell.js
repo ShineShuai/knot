@@ -37,7 +37,12 @@ export function applyBar(onApply, onRevert, label = t('apply')) {
     node,
     apply,
     show,
-    hide: () => { node.hidden = true; },
+    hide: () => {
+      const here = node.contains?.(globalThis.document?.activeElement);
+      node.hidden = true;
+      // a hidden button must not take the focus with it: back to the top of the page
+      if (here) node.closest?.('.spage')?.querySelector('h3')?.focus?.();
+    },
     watch: (el) => { for (const type of ['input', 'change']) el.addEventListener(type, show); },
   };
 }
@@ -65,30 +70,41 @@ export class SettingsShell {
     const buttons = new Map();
     const marks = new Map(); // id -> the count beside its label
     const root = h('div', { class: 'sshell' });
-    const body = h('div', { class: 'spage' });
-    const draw = (id) => {
+    const body = h('div', { class: 'spage', role: 'region', 'aria-labelledby': 'spage-title' });
+    let heading = null;
+    // On a narrow screen the list and the page take turns; then the list is not on screen.
+    const listHidden = () => globalThis.getComputedStyle?.(nav).display === 'none';
+    /** `how`: 'pick' (the person chose a page: on a narrow screen the focus moves to it),
+     *  'again' (drawn anew, e.g. after Revert: keep the focus in the page if it was there). */
+    const draw = (id, how = null) => {
       const page = pages.find((p) => p.id === id);
+      const focused = body.contains?.(globalThis.document?.activeElement);
       if (!cache.has(id)) {
-        cache.set(id, page.render({ refresh: () => { cache.delete(id); draw(id); } }));
+        cache.set(id, page.render({ refresh: () => { cache.delete(id); draw(id, 'again'); } }));
       }
+      heading = h('h3', { id: 'spage-title', tabIndex: -1 }, page.label);
       body.replaceChildren(
-        h('button', { class: 'ghost sback', onclick: () => { root.dataset.view = 'list'; } },
-          `‹ ${title}`),
-        h('div', { class: 'ph' }, h('h3', {}, page.label),
+        h('button', {
+          class: 'ghost sback', 'aria-label': t('backTo', { title }),
+          onclick: () => { root.dataset.view = 'list'; buttons.get(this.current)?.focus(); },
+        }, `‹ ${title}`),
+        h('div', { class: 'ph' }, heading,
           page.scope ? chip(page.scope.text, page.scope.kind) : null),
         cache.get(id),
       );
       for (const [key, button] of buttons) button.setAttribute('aria-current', key === id);
       root.dataset.view = 'page';
       this.current = id;
+      if ((how === 'pick' && listHidden()) || (how === 'again' && focused)) heading.focus();
     };
     const nav = h('nav', { class: 'snav', 'aria-label': title }, ...pages.map((page) => {
       const count = () => (typeof page.badge === 'function' ? page.badge() : page.badge) || 0;
       const mark = page.badge === undefined ? null
         : h('em', { class: 'count', hidden: !count() }, count() ? String(count()) : '');
       if (mark) marks.set(page.id, [mark, count]);
-      const button = h('button', { class: page.danger ? 'dn' : '', onclick: () => draw(page.id) },
-        page.label, mark);
+      const button = h('button', {
+        class: page.danger ? 'dn' : '', onclick: () => draw(page.id, 'pick'),
+      }, page.label, mark);
       buttons.set(page.id, button);
       return button;
     }));
@@ -105,5 +121,8 @@ export class SettingsShell {
     this.kit.open(title, root);
     this.kit.dialog.classList.add('paged');
     this.kit.guard = () => !this.pending || confirm(t('discardChanges'));
+    // the screen reader starts at the pages (or at the page, where the list is not shown)
+    if (root.dataset.view === 'page' && listHidden()) heading.focus();
+    else buttons.get(this.current)?.focus();
   }
 }

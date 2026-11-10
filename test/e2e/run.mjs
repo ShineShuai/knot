@@ -246,6 +246,30 @@ await single('UI: an open room starts an owned room and posts its join link', as
   await page.context().close();
 });
 
+// On a phone the list of pages and the page take turns: the focus goes where the person is.
+await single('UI: Settings on a phone: the focus follows the page list', async () => {
+  const page = await newPage();
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.goto(`${base}/index.html`);
+  const focus = () => page.evaluate(
+    () => `${document.activeElement?.tagName}:${document.activeElement?.textContent?.trim()}`,
+  );
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  assert.equal(await focus(), 'BUTTON:General', 'the first page, not the ×');
+  await page.locator('.snav button', { hasText: 'Network' }).click();
+  assert.equal(await focus(), 'H3:Network', 'the heading of the page');
+  await page.getByRole('button', { name: 'Reset to defaults' }).click();
+  await page.getByRole('button', { name: 'Apply' }).click();
+  await page.locator('dialog .apply').waitFor({ state: 'hidden' });
+  assert.equal(await focus(), 'H3:Network', 'a hidden Apply does not take the focus away');
+  await page.locator('.sback').click();
+  assert.equal(await focus(), 'BUTTON:Network', 'back at the page we came from');
+  await page.keyboard.press('Escape');
+  assert.equal(await focus(), 'BUTTON:Settings', 'back at the button that opened it');
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
+});
+
 // ---- 3. UI manual pairing between two browsers
 // ------------------------------------------------------
 await check('UI: pair two browsers with codes, chat both ways, share a file', async () => {

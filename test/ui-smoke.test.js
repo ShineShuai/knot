@@ -124,6 +124,8 @@ test('ui: join request, greeting, owner approval, then both are in the room', as
   const radio = (dialog, name, value) => dialog.querySelectorAll('input').find(
     (i) => i.type === 'radio' && i.name.startsWith(name) && i.value === value,
   );
+  const groups = odialog.querySelectorAll('.seg').map((g) => g.getAttribute('aria-label'));
+  assert.deepEqual(groups, ['Joining', 'Who can write'], 'each group has a name');
   assert.equal(radio(odialog, 'post', 'all').checked, true);
   assert.equal(odialog.querySelector('.apply').hidden, true, 'nothing to publish yet');
   radio(odialog, 'post', 'all').checked = false; // (a browser does this for one group)

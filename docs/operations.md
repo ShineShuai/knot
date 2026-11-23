@@ -73,6 +73,19 @@ The deploy stamps the commit into `index.html` (`<meta name="build">`) and write
 static page cannot update itself. Without the stamp (local development, tests) nothing happens,
 not even a request.
 
+## Backups
+
+Settings > Data > Backup saves an encrypted file (`knot-backup-<date>.knotbk`): the settings, the
+room list with the keys that open the rooms (key epochs, owners, read marks) and the signed
+messages. Left out: the identity key (the browser does not give it out), links to other devices,
+shared files and previews. The file is AES-GCM under a key from the passphrase (PBKDF2-SHA-256,
+600 000 rounds, the header authenticated); a lost passphrase cannot be recovered. Restoring adds
+what is missing and never overwrites: new rooms, messages not held yet (each is signature-checked
+like one from a peer), a key epoch only forward; settings are taken over if this version knows
+them and the network lists would pass the Settings page. After a restore on a new browser the
+person is a new device: the room owner (or a recovery code, or a linked device) lets them in.
+The empty room list offers "Restore a backup".
+
 ## Diagnostics
 
 Settings > Diagnostics makes a text report for when something works in one browser and not in

@@ -6,6 +6,7 @@ import { IdbKV } from './store/kv.js';
 import { rankStun } from './net/ice-probe.js';
 import { BrokerHealth } from './net/broker-health.js';
 import { holdInstance } from './store/instance-lock.js';
+import { FolderBackup } from './store/folder.js';
 import { keepStorage } from './store/persist.js';
 import { noteLoss } from './store/trace.js';
 import { watchErrors } from './ui/diagnostics.js';
@@ -37,6 +38,9 @@ async function boot() {
   stage('identity');
   const identity = await applyDelegation(await loadIdentity(kv), kv);
 
+  const folder = new FolderBackup({ kv }); // a folder picked on an earlier visit, if any
+  await folder.load().catch(() => {});
+  kv.onWrite = (key) => folder.markDirty(key);
   const brokerHealth = new BrokerHealth();
   let rankedStun = null; // filled in the background; new links then use the fastest servers
   const model = new AppModel(
@@ -51,7 +55,11 @@ async function boot() {
   const updates = new UpdateWatcher({
     running: document.querySelector('meta[name="build"]')?.content,
   });
-  const ui = mountUi(root, model, { updates });
+  const ui = mountUi(root, model, { updates, folder });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') folder.flush();
+  });
+  window.addEventListener('pagehide', () => folder.flush());
   window.knotBooted?.();
   kv.onClosed = () => noteLoss(kv).catch(() => {}); // wiped under us? say so in diagnostics
   updates.start();

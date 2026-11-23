@@ -86,6 +86,18 @@ them and the network lists would pass the Settings page. After a restore on a ne
 person is a new device: the room owner (or a recovery code, or a linked device) lets them in.
 The empty room list offers "Restore a backup".
 
+**Folder (Chrome and Edge on a computer).** The same file can be kept up to date in a folder the
+person picks (`showDirectoryPicker`; Firefox and Safari have no folder picker, and OPFS is no
+substitute: it lives in the storage the browser wipes). The passphrase is asked once; what the
+browser keeps is the key made from it, in the store, unreadable by the page. A change is written
+about 30 s later, once for a burst, and at once when the page is hidden. The write goes through a
+writable stream, so a failed one leaves the old file whole; an empty browser never replaces a
+backup; a folder that already holds one asks: restore it, or replace it (the old file is kept as
+`knot-backup.prev.knotbk`). After a restart the browser wants a click again: a bar at the top
+says so (Allow); a failing folder shows there too. A wipe of the site's data loses the folder
+handle but not the files: the person picks the folder again and restores from it. Pick a folder
+of its own: Chrome refuses Desktop, Documents and Downloads themselves.
+
 ## Diagnostics
 
 Settings > Diagnostics makes a text report for when something works in one browser and not in

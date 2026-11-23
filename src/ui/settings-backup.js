@@ -1,9 +1,11 @@
-// Settings > Data > Backup: save an encrypted backup file, restore one. Everything happens on
-// the page itself (a dialog cannot open another one); the file never leaves the device.
+// Settings > Data > Backup: save an encrypted backup file, keep one up to date in a folder
+// (Chrome, Edge), restore one. Everything happens on the page itself (a dialog cannot open
+// another one); the files never leave the device.
 import {
   BackupError, FILE_EXT, ITERATIONS, MIN_PASSPHRASE, backupSecret, collect, countOf, open, restore,
   seal,
 } from '../store/backup.js';
+import { canPickFolder, keepPrevious, pickFolder, readBackup } from '../store/folder.js';
 import { h } from './dom.js';
 import { t } from './i18n.js';
 import { field } from './settings-shell.js';
@@ -24,16 +26,24 @@ const password = (cls) => h('input', {
 });
 
 export class BackupSection {
+  #pending = null; // a folder that already holds a backup: { handle, old, pass }
+
   constructor(ui) {
     this.ui = ui;
     this.say = h('p', { class: 'backup-result', role: 'status' });
+    this.pass = password('backup-pass');
+    this.again = password('backup-pass2');
   }
 
   get kv() { return this.ui.model.kv; }
 
+  get #iterations() { return this.ui.opts.backupIterations ?? ITERATIONS; }
+
   render() {
     return h('section', { class: 'backup-box' }, h('h4', {}, t('backupTitle')),
-      h('p', {}, t('backupWhy')), this.#saveForm(), this.#restoreForm(), this.say);
+      h('p', {}, t('backupWhy')), field(t('backupPass'), this.pass),
+      field(t('backupPassAgain'), this.again), this.#saveButton(), this.#folderBox(),
+      this.#restoreForm(), this.say);
   }
 
   /** Run `job` with `button` off and a note on the page; a failure is explained, not thrown. */
@@ -41,31 +51,112 @@ export class BackupSection {
     button.disabled = true;
     this.say.textContent = t('backupWorking');
     try { await job(); } catch (err) {
-      this.say.textContent = t(`backupErr_${err instanceof BackupError ? err.code : 'damaged'}`);
+      this.say.textContent = err instanceof BackupError ? t(`backupErr_${err.code}`)
+        : err?.name === 'SecurityError' ? t('folderBlocked')
+          : t('backupFailed', { why: err?.name ?? 'error' });
     } finally { button.disabled = false; }
   }
 
-  #saveForm() {
-    const [pass, again] = [password('backup-pass'), password('backup-pass2')];
+  /** The passphrase typed above if it will do; otherwise says why not. */
+  #passphrase() {
+    if (this.pass.value.length < MIN_PASSPHRASE) {
+      this.say.textContent = t('backupShort', { n: MIN_PASSPHRASE });
+      return null;
+    }
+    if (this.pass.value !== this.again.value) {
+      this.say.textContent = t('backupMismatch');
+      return null;
+    }
+    return this.pass.value;
+  }
+
+  #saveButton() {
     const button = h('button', { class: 'primary', onclick: () => this.#busy(button, async () => {
-      if (pass.value.length < MIN_PASSPHRASE) {
-        this.say.textContent = t('backupShort', { n: MIN_PASSPHRASE });
-        return;
-      }
-      if (pass.value !== again.value) { this.say.textContent = t('backupMismatch'); return; }
+      const pass = this.#passphrase();
+      if (!pass) return;
       const snapshot = await collect(this.kv);
       const counts = countOf(snapshot);
       if (!counts.rooms) { this.say.textContent = t('backupEmpty'); return; }
-      const iterations = this.ui.opts.backupIterations ?? ITERATIONS;
-      const bytes = await seal(snapshot, await backupSecret(pass.value, { iterations }));
+      const secret = await backupSecret(pass, { iterations: this.#iterations });
       const name = `knot-backup-${dayOf(snapshot.at)}${FILE_EXT}`;
-      (this.ui.opts.saveFile ?? saveFile)(name, bytes);
+      (this.ui.opts.saveFile ?? saveFile)(name, await seal(snapshot, secret));
       this.say.textContent = t('backupSaved', { name, ...counts });
-      pass.value = again.value = '';
+      this.pass.value = this.again.value = '';
     }) }, t('backupSave'));
-    return h('div', { class: 'backup-save' }, field(t('backupPass'), pass),
-      field(t('backupPassAgain'), again), button);
+    return button;
   }
+
+  // ---- a folder that is kept up to date (Chrome, Edge) ---------------------------------------
+
+  #folderBox() {
+    const box = h('div', { class: 'backup-folder' });
+    const draw = () => box.replaceChildren(...this.#folderRows(draw));
+    draw();
+    return box;
+  }
+
+  #folderRows(draw) {
+    const { folder } = this.ui.opts;
+    const env = this.ui.opts.folderEnv ?? globalThis;
+    if (!folder) return [];
+    if (!canPickFolder(env)) return [h('p', { class: 'muted' }, t('folderUnsupported'))];
+    const button = (label, job, cls = '') => {
+      const b = h('button', { class: cls, onclick: () => this.#busy(b, async () => {
+        await job();
+        draw();
+      }) }, label);
+      return b;
+    };
+    if (this.#pending) {
+      const { handle, old, pass } = this.#pending;
+      const leave = () => { this.#pending = null; };
+      return [h('p', {}, t('folderExists')), h('div', { class: 'row-buttons' },
+        button(t('folderRestoreIt'), async () => {
+          const done = await restore(this.kv, await open(old, pass));
+          leave();
+          await this.#start(handle, pass);
+          this.say.textContent = t('backupRestored', done);
+          (this.ui.opts.reload ?? (() => globalThis.location.reload()))();
+        }, 'primary'),
+        button(t('folderReplaceIt'), async () => {
+          await keepPrevious(handle, old);
+          leave();
+          await this.#start(handle, pass);
+        }),
+        button(t('cancel'), async () => { leave(); this.say.textContent = ''; }))];
+    }
+    if (!folder.active) {
+      return [h('p', {}, t('folderWhy')), button(t('folderChoose'), async () => {
+        const pass = this.#passphrase();
+        if (!pass) return;
+        const handle = await (this.ui.opts.pickFolder ?? pickFolder)(env);
+        if (!handle) { this.say.textContent = ''; return; } // the picker was closed
+        const old = await readBackup(handle);
+        if (old) this.#pending = { handle, old, pass };
+        else await this.#start(handle, pass);
+      })];
+    }
+    const [name, paused] = [folder.name, folder.state === 'needs_permission'];
+    const status = folder.state === 'error' ? t('folderError', { name, why: folder.error })
+      : paused ? t('folderPaused', { name }) : t('folderOn', {
+        name, time: folder.savedAt ? new Date(folder.savedAt).toLocaleString() : t('folderNever'),
+      });
+    return [h('p', { class: 'backup-folder-state' }, status), h('div', { class: 'row-buttons' },
+      paused ? button(t('folderAllow'), () => folder.allow(), 'primary') : null,
+      button(t('folderStop'), async () => {
+        await folder.disable();
+        this.say.textContent = t('folderStopped');
+      }))];
+  }
+
+  async #start(handle, pass) {
+    const { folder } = this.ui.opts;
+    await folder.enable(handle, await backupSecret(pass, { iterations: this.#iterations }));
+    this.say.textContent = folder.state === 'ok' ? t('folderStarted', { name: folder.name })
+      : t('folderFailed', { why: folder.error });
+  }
+
+  // ---- restore ---------------------------------------------------------------------------------
 
   #restoreForm() {
     const file = h('input', { type: 'file', class: 'backup-file', accept: FILE_EXT });

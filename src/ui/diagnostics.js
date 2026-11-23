@@ -4,6 +4,7 @@
 import { PROTOCOL, VERSION } from '../version.js';
 import { buildInfo, versionDetail } from '../build.js';
 import { storageState } from '../store/persist.js';
+import { traceLines } from '../store/trace.js';
 
 const MAX_ENTRIES = 30;
 const entries = [];
@@ -151,8 +152,9 @@ export function appLines(room) {
 export async function diagnosticsReport(model, env = globalThis) {
   const build = buildInfo(env.document ?? null);
   const lines = [`knot ${versionDetail(VERSION, build)}`,
-    env.navigator?.userAgent ?? 'unknown browser', '',
-    ...(await featureLines(env, model.kv)), ''];
+    env.navigator?.userAgent ?? 'unknown browser',
+    `address: ${env.location ? env.location.origin + env.location.pathname : 'unknown'}`, '',
+    ...(await featureLines(env, model.kv)), ...(await traceLines(model.kv)), ''];
   for (const room of model.rooms.values()) {
     const peers = room.peerList.map(
       (p) => [p.state + (p.via ? `/${p.via}` : ''), p.limited && `rate-limited x${p.limited}`]

@@ -14,6 +14,8 @@ export class MemoryKV {
 
 export class IdbKV {
   #db;
+  /** Called when the browser closed our connection (main.js sets it once the app runs). */
+  onClosed = null;
   /** `openTimeoutMs`: some browsers never answer `indexedDB.open` (after a restart of an
    *  installed app, with another connection stuck): fail with a reason instead of waiting. */
   constructor(name = 'knot', { openTimeoutMs = 20_000 } = {}) {
@@ -38,7 +40,11 @@ export class IdbKV {
         if (late) { db.close?.(); return; }
         // WebKit closes idle connections behind our back, and another tab may want to upgrade:
         // forget this one, the next call opens a new one.
-        db.onclose = db.onversionchange = () => { this.#db = undefined; db.close?.(); };
+        db.onclose = db.onversionchange = () => {
+          this.#db = undefined;
+          db.close?.();
+          this.onClosed?.();
+        };
         resolve(db);
       };
       req.onerror = () => { clearTimeout(timer); this.#db = undefined; reject(req.error); };

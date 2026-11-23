@@ -5,6 +5,7 @@
 import { concat, fromB64u, randomBytes, toB64u, sha256 } from '../util/bytes.js';
 import { hasNative, nacl, yieldToUi } from './curves.js';
 import { openSeed, sealSeed } from './soft-key.js';
+import { noteBorn } from '../store/trace.js';
 
 const ALG = 'Ed25519';
 
@@ -36,6 +37,7 @@ export async function loadIdentity(kv) {
   if (stored?.seed) await kv.put('identity', stored = await sealSeed(stored.seed)); // LEGACY-CURVES
   if (stored?.wrap) return loadSealed(kv, stored);
   if (!stored) {
+    await noteBorn(kv).catch(() => {}); // for the diagnostics report
     if (!(await hasNative(ALG))) { // LEGACY-CURVES
       const seed = randomBytes(32);
       await kv.put('identity', await sealSeed(seed));

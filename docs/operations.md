@@ -78,7 +78,12 @@ not even a request.
 Settings > Diagnostics makes a text report for when something works in one browser and not in
 another: the browser, what it supports (WebRTC, Ed25519 and X25519, image encoding, IndexedDB
 buffers...), every room's links (direct, relayed), the brokers and the last errors the page hit.
-It holds no messages or keys. A JPEG thumbnail (the only format Safari encodes) may be up to 9 KB;
+It holds no messages or keys. It also gives the address of the page (a copy under another host
+or path has its own, empty storage), when the identity was made (`identity created`: a young
+date next to old complaints means the data was wiped, or this is another browser profile), and
+`data wiped under a running page`: the browser closed the database under an open tab and the
+identity was gone afterwards. Both notes live in the database itself, so they cannot say when
+the user was last active before a wipe. A JPEG thumbnail (the only format Safari encodes) may be up to 9 KB;
 a failing OffscreenCanvas falls back to a page canvas.
 
 ## China

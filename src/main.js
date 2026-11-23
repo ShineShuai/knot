@@ -7,6 +7,7 @@ import { rankStun } from './net/ice-probe.js';
 import { BrokerHealth } from './net/broker-health.js';
 import { holdInstance } from './store/instance-lock.js';
 import { keepStorage } from './store/persist.js';
+import { noteLoss } from './store/trace.js';
 import { watchErrors } from './ui/diagnostics.js';
 import { AppModel } from './app.js';
 import { UpdateWatcher } from './update.js';
@@ -52,6 +53,7 @@ async function boot() {
   });
   const ui = mountUi(root, model, { updates });
   window.knotBooted?.();
+  kv.onClosed = () => noteLoss(kv).catch(() => {}); // wiped under us? say so in diagnostics
   updates.start();
   watchWake(() => model.wake());
 

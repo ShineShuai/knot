@@ -13,6 +13,7 @@ import { setLanguage, t } from './i18n.js';
 import { VERSION } from '../version.js';
 import { buildInfo, versionLabel } from '../build.js';
 import { dragHasFiles } from './attach.js';
+import { BackupBar } from './backup-bar.js';
 import { CallPanel } from './call-view.js';
 import { Composer } from './composer.js';
 import { DialogKit } from './dialog-kit.js';
@@ -72,8 +73,10 @@ class Ui {
     });
     this.updateBar = h('div', { class: 'update-bar', role: 'status', hidden: true });
     this.folderBar = h('div', { class: 'update-bar', role: 'status', hidden: true });
+    this.backupBar = new BackupBar(this);
     this.root.replaceChildren(
-      this.updateBar, this.folderBar, this.shell, this.callPanel.element, this.toast, this.dialog,
+      this.updateBar, this.folderBar, this.backupBar.node, this.shell, this.callPanel.element,
+      this.toast, this.dialog,
     );
     this.opts.updates?.on('update', () => { this.#updateReady = true; this.#drawUpdateBar(); });
     this.opts.folder?.on('state', () => this.#drawFolderBar());
@@ -117,6 +120,7 @@ class Ui {
     this.renderStage();
     this.#drawUpdateBar();
     this.#drawFolderBar();
+    this.backupBar.start();
     return this;
   }
 

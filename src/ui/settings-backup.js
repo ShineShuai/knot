@@ -6,6 +6,7 @@ import {
   seal,
 } from '../store/backup.js';
 import { canPickFolder, keepPrevious, pickFolder, readBackup } from '../store/folder.js';
+import { REMIND_CHOICES, lastBackup, noteBackup } from '../store/reminder.js';
 import { h } from './dom.js';
 import { t } from './i18n.js';
 import { field } from './settings-shell.js';
@@ -27,6 +28,7 @@ const password = (cls) => h('input', {
 
 export class BackupSection {
   #pending = null; // a folder that already holds a backup: { handle, old, pass }
+  #showLast = null; // draws when a backup file was last saved
 
   constructor(ui) {
     this.ui = ui;
@@ -39,11 +41,13 @@ export class BackupSection {
 
   get #iterations() { return this.ui.opts.backupIterations ?? ITERATIONS; }
 
+  #now() { return this.ui.opts.now?.() ?? Date.now(); }
+
   render() {
     return h('section', { class: 'backup-box' }, h('h4', {}, t('backupTitle')),
       h('p', {}, t('backupWhy')), field(t('backupPass'), this.pass),
       field(t('backupPassAgain'), this.again), this.#saveButton(), this.#folderBox(),
-      this.#restoreForm(), this.say);
+      this.#restoreForm(), this.say, this.#reminder());
   }
 
   /** Run `job` with `button` off and a note on the page; a failure is explained, not thrown. */
@@ -82,6 +86,9 @@ export class BackupSection {
       (this.ui.opts.saveFile ?? saveFile)(name, await seal(snapshot, secret));
       this.say.textContent = t('backupSaved', { name, ...counts });
       this.pass.value = this.again.value = '';
+      await noteBackup(this.kv, this.#now());
+      this.#showLast?.();
+      this.ui.backupBar?.check();
     }) }, t('backupSave'));
     return button;
   }
@@ -154,6 +161,32 @@ export class BackupSection {
     await folder.enable(handle, await backupSecret(pass, { iterations: this.#iterations }));
     this.say.textContent = folder.state === 'ok' ? t('folderStarted', { name: folder.name })
       : t('folderFailed', { why: folder.error });
+  }
+
+  // ---- when to ask again ---------------------------------------------------------------------
+
+  /** When a backup file was last saved here, and how often the page may ask for another. */
+  #reminder() {
+    const last = h('p', { class: 'backup-last' });
+    this.#showLast = async () => {
+      const at = await lastBackup(this.kv).catch(() => 0);
+      last.textContent = at ? t('backupLastAt', { time: new Date(at).toLocaleString() })
+        : t('backupLastNever');
+    };
+    this.#showLast();
+    const current = this.ui.model.settings.backupReminderDays;
+    const choices = [...REMIND_CHOICES, 0];
+    const select = h('select', {}, ...choices.map((days) => h('option', {
+      value: String(days), selected: days === current,
+    }, days ? t('backupEvery', { n: days }) : t('backupNever'))));
+    select.addEventListener('change', async () => {
+      try {
+        await this.ui.model.updateSettings({ backupReminderDays: Number(select.value) });
+        this.ui.notify(t('saved'));
+        this.ui.backupBar?.check();
+      } catch (err) { this.ui.notify(t('badSettings', { why: err.message })); }
+    });
+    return h('div', { class: 'backup-remind' }, last, field(t('backupRemind'), select));
   }
 
   // ---- restore ---------------------------------------------------------------------------------

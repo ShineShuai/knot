@@ -98,6 +98,14 @@ says so (Allow); a failing folder shows there too. A wipe of the site's data los
 handle but not the files: the person picks the folder again and restores from it. Pick a folder
 of its own: Chrome refuses Desktop, Documents and Downloads themselves.
 
+**Reminders.** A browser without a running folder backup cannot save by itself, so a bar at the
+top asks for a backup file: after `backupReminderDays` (7, 14 or 30; default 14; 0 is never; a
+setting of this device, not shared) days without one, and only if some room has messages.
+Counting starts the first time there is something to lose, so an update does not ask at once.
+"Later" waits 3 days; saving a file clears it. The note (`backup`: last file, start of counting,
+"later") is in the store but not in a backup. The bar is checked at start, when the page comes
+back to the screen and every 6 hours.
+
 ## Diagnostics
 
 Settings > Diagnostics makes a text report for when something works in one browser and not in

@@ -1,9 +1,11 @@
 // Tiny async key-value stores with one API: IndexedDB for the browser, a Map for tests.
 export class MemoryKV {
   #map = new Map();
+  /** Called with the key after a put or delete (see IdbKV.onWrite). */
+  onWrite = null;
   async get(key) { return this.#map.get(key); }
-  async put(key, value) { this.#map.set(key, value); }
-  async delete(key) { this.#map.delete(key); }
+  async put(key, value) { this.#map.set(key, value); this.onWrite?.(key); }
+  async delete(key) { this.#map.delete(key); this.onWrite?.(key); }
   /** All [key, value] pairs whose key starts with `prefix`, sorted by key. */
   async list(prefix = '') {
     return [...this.#map].filter(([k]) => k.startsWith(prefix)).sort(
@@ -16,6 +18,9 @@ export class IdbKV {
   #db;
   /** Called when the browser closed our connection (main.js sets it once the app runs). */
   onClosed = null;
+  /** Called with the key after a put or delete went through: the folder backup learns from it
+   *  that something changed. A failing watcher never fails the write. */
+  onWrite = null;
   /** `openTimeoutMs`: some browsers never answer `indexedDB.open` (after a restart of an
    *  installed app, with another connection stuck): fail with a reason instead of waiting. */
   constructor(name = 'knot', { openTimeoutMs = 20_000 } = {}) {
@@ -72,9 +77,21 @@ export class IdbKV {
     }));
   }
 
+  #wrote(key) {
+    try { this.onWrite?.(key); } catch { /* see onWrite */ }
+  }
+
   get(key) { return this.#run('readonly', (s) => s.get(key)); }
-  put(key, value) { return this.#run('readwrite', (s) => s.put(value, key)); }
-  delete(key) { return this.#run('readwrite', (s) => s.delete(key)); }
+  async put(key, value) {
+    const result = await this.#run('readwrite', (s) => s.put(value, key));
+    this.#wrote(key);
+    return result;
+  }
+  async delete(key) {
+    const result = await this.#run('readwrite', (s) => s.delete(key));
+    this.#wrote(key);
+    return result;
+  }
 
   list(prefix = '') {
     return this.#withDb((db) => new Promise((resolve, reject) => {

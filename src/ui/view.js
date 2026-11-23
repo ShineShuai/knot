@@ -13,6 +13,7 @@ import { setLanguage, t } from './i18n.js';
 import { VERSION } from '../version.js';
 import { buildInfo, versionLabel } from '../build.js';
 import { dragHasFiles } from './attach.js';
+import { BackupBar } from './backup-bar.js';
 import { CallPanel } from './call-view.js';
 import { Composer } from './composer.js';
 import { DialogKit } from './dialog-kit.js';
@@ -71,10 +72,14 @@ class Ui {
       speaking: this.opts.speaking,
     });
     this.updateBar = h('div', { class: 'update-bar', role: 'status', hidden: true });
+    this.folderBar = h('div', { class: 'update-bar', role: 'status', hidden: true });
+    this.backupBar = new BackupBar(this);
     this.root.replaceChildren(
-      this.updateBar, this.shell, this.callPanel.element, this.toast, this.dialog,
+      this.updateBar, this.folderBar, this.backupBar.node, this.shell, this.callPanel.element,
+      this.toast, this.dialog,
     );
     this.opts.updates?.on('update', () => { this.#updateReady = true; this.#drawUpdateBar(); });
+    this.opts.folder?.on('state', () => this.#drawFolderBar());
     globalThis.navigator?.serviceWorker?.addEventListener?.( // a clicked notification
       'message', (e) => e.data?.knot === 'open-room' && this.#openRoom(e.data.room),
     );
@@ -114,6 +119,8 @@ class Ui {
     this.#renderRail();
     this.renderStage();
     this.#drawUpdateBar();
+    this.#drawFolderBar();
+    this.backupBar.start();
     return this;
   }
 
@@ -163,6 +170,21 @@ class Ui {
         onclick: () => { this.updateBar.hidden = true; },
       }, '×'),
     );
+  }
+
+  /** The folder backup needs a click to go on (the browser asks again after a restart), or
+   *  failed: said at the top, with the button that fixes it, not only inside Settings. */
+  #drawFolderBar() {
+    const { folder } = this.opts;
+    const asking = folder?.state === 'needs_permission';
+    this.folderBar.hidden = !(asking || folder?.state === 'error');
+    if (this.folderBar.hidden) return;
+    const text = asking ? t('folderPausedBar', { name: folder.name })
+      : t('folderFailedBar', { why: folder.error });
+    this.folderBar.replaceChildren(h('span', {}, text), h('button', {
+      class: 'primary',
+      onclick: asking ? () => folder.allow() : () => this.settingsDialogs.open('data'),
+    }, t(asking ? 'folderAllow' : 'settings')));
   }
 
   #reload() {
@@ -296,7 +318,10 @@ class Ui {
       this.stage.replaceChildren(
         h('div', { class: 'empty' }, h('h2', {}, t('noRoomTitle')), h('p', {}, t('noRoomHelp')),
           this.model.isLinked ? null : h('p', {}, t('noRoomLink'), ' ',
-            h('button', { onclick: () => this.settingsDialogs.devices() }, t('linkThis')))),
+            h('button', { onclick: () => this.settingsDialogs.devices() }, t('linkThis'))),
+          h('p', {}, t('noRoomRestore'), ' ',
+            h('button', { onclick: () => this.settingsDialogs.open('data') },
+              t('restoreFromBackup')))),
       );
       return;
     }

@@ -9,6 +9,7 @@ import { h } from './dom.js';
 import { diagnosticsReport } from './diagnostics.js';
 import { LANGUAGES, setLanguage, t } from './i18n.js';
 import { DevicesPage } from './settings-devices.js';
+import { BackupSection } from './settings-backup.js';
 import { NetworkPage } from './settings-network.js';
 import { SettingsShell, field, switchRow } from './settings-shell.js';
 
@@ -133,8 +134,8 @@ export class SettingsDialogs {
       keep.hidden = help.hidden = !atRisk;
     };
     showStorage();
-    return h('div', { class: 'storage-box' }, h('p', {}, t('storageWhy')), kept, help, keep,
-      result);
+    return h('div', {}, h('div', { class: 'storage-box' }, h('p', {}, t('storageWhy')), kept, help,
+      keep, result), new BackupSection(this.ui).render());
   }
 
   /** The version, and what this browser supports and how the links look: to paste when

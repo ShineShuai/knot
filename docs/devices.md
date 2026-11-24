@@ -123,6 +123,38 @@ forward, so a room read on one device is not unread on the others. Rooms and mar
 only while there are other devices (linking records the ones that exist), and a leave is announced
 before the links close.
 
+## Identity recovery
+
+The main key lives only on the main device and cannot be read out of it. If that device loses its
+data (the browser wiped it, the disk died), the identity would be gone and only the linked devices,
+whose certificates stay valid, would still speak for it; none of them can link a new device.
+A recovery code closes that gap without exporting the main key.
+
+- **Making it (main device, Settings > Devices > Identity recovery).** The device makes a recovery
+  key from a random seed and signs a *recovery certificate* for it (`knot/recovery`: "this key
+  may certify devices for me"). The code holds the seed, that certificate and the secret of the
+  devices' channel (below), encrypted with a passphrase (AES-GCM under PBKDF2, 600 000 rounds, the
+  header authenticated), as `knot-ik1-...`. The device keeps only public facts about it (`recovery`:
+  the recovery public key, when, whether the channel is in it); the code is shown once.
+- **Using it (any device without rooms of its own, Settings > Devices > Restore your identity,
+  or the button on the empty room list).** Code and passphrase give the recovery key back. It
+  signs a device certificate for the device's own key, and the recovery certificate travels along
+  (`up`), so anyone checks *main key -> recovery key -> device*: one hop, two signatures, and
+  `r` of the certificate stays the main key's, so the member id is the old one. From then on the
+  device is a linked device (owner rights included) and, with the channel secret from the code,
+  meets the person's other devices at once: rooms, settings and aliases follow over the usual
+  device sync, recent history through the usual history sync (at most the newest 500 messages per
+  room and peer). Older history comes from a backup file.
+- **One code at a time.** Making a new one withdraws the old key; "Cancel the recovery code" does
+  the same. Withdrawing a recovery key (an `unlink` of its key, like a device's) makes every room
+  refuse each certificate whose chain contains it, so devices created with it stop working
+  too, and so does anybody who stole the code. It can be done from any device.
+- **Not possible without the main device:** making a code (the recovery certificate needs the main
+  key). After a restore there is no main device, so the code that was used stays the one
+  recovery path.
+- **Old versions** reject chained certificates, so they drop what a restored device writes until
+  their page has updated.
+
 ## Our devices' channel
 
 Devices that share no room (a new device, a main device without rooms) still find each other:

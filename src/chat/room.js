@@ -950,7 +950,11 @@ export class Room extends Emitter {
 
   // ---- linked devices ---------------------------------------------------------------------
 
-  #isUnlinked(cert, memberId) { return !!cert && this.#unlinked.has(`${memberId}|${cert.d}`); }
+  /** A withdrawn device key, or a withdrawn recovery key that certified this device. */
+  #isUnlinked(cert, memberId) {
+    return !!cert && (this.#unlinked.has(`${memberId}|${cert.d}`)
+      || (!!cert.up && this.#unlinked.has(`${memberId}|${cert.up.q}`)));
+  }
 
   /** Was this device certificate withdrawn (by an `unlink`) in this room? */
   isWithdrawn(cert, memberId) { return this.#isUnlinked(cert, memberId); }
@@ -980,8 +984,13 @@ export class Room extends Emitter {
     this.#unlinked.add(`${this.identity.member}|${devicePub}`);
     for (const entry of this.peers.values()) {
       const ours = (entry.member ?? entry.id) === this.identity.member;
-      if (ours && entry.pub && toB64u(entry.pub) === devicePub) entry.link.close();
+      if (ours && this.#isKey(entry, devicePub)) entry.link.close();
     }
+  }
+
+  /** Is `key` the device key of this link, or the recovery key that certified it? */
+  #isKey(entry, key) {
+    return !!entry.pub && (toB64u(entry.pub) === key || entry.cert?.up?.q === key);
   }
 
   /** A certificate was withdrawn: close that device's links; if it was ours, say so. */
@@ -990,7 +999,7 @@ export class Room extends Emitter {
     this.#noteUnlink(env);
     for (const entry of this.peers.values()) {
       const theirs = (entry.member ?? entry.id) === authorIdOf(env);
-      if (!theirs || !entry.pub || toB64u(entry.pub) !== env.body.d) continue;
+      if (!theirs || !this.#isKey(entry, env.body.d)) continue;
       const timer = setTimeout(() => entry.link.close(), 300); // the news travels on first
       timer.unref?.();
     }
@@ -1008,6 +1017,7 @@ export class Room extends Emitter {
     }
     entry.member = member;
     entry.device = cert.n;
+    entry.cert = cert;
     this.#multi.add(member);
     // Approved by our pairing code under its device key, but it writes as `member`: admit that.
     if (entry.invited && this.isOwner && member !== entry.id && !this.roster.isMember(member)) {

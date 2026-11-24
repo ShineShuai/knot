@@ -11,6 +11,12 @@ Each device has an Ed25519 key; peer id = first 8 bytes of SHA-256(public key). 
 signed, so the identity vouches for the DTLS fingerprint. Chat messages are signed and carry their
 author; any peer or relay path can deliver them and anyone can verify them.
 
+**Recovery code.** Whoever has the code *and* the passphrase can act as the person: link any
+number of devices, write and administer as them. Both are kept offline and apart; the code alone is
+useless. A stolen linked device cannot make a recovery key (only the main key can sign the
+recovery certificate), so linked devices stay as powerful as before. A leaked code is withdrawn
+from any device. See devices.md, "Identity recovery".
+
 ## Owner and membership
 
 A room made now has an owner (its creator) who admits everyone. Members are a chain of

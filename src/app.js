@@ -6,6 +6,9 @@ import { Emitter } from './util/emitter.js';
 import { fromB64u, toB64u } from './util/bytes.js';
 import { saveSettings } from './config.js';
 import { newBoxKey } from './crypto/box.js';
+import {
+  RecoveryError, certifyDevice, makeRecoveryCode, readRecoveryCode,
+} from './crypto/identity-recovery.js';
 import { makeLinkGrant, makeLinkRequest, readLinkGrant, readLinkRequest } from './chat/devices.js';
 import {
   CHANNEL, DeviceSync, SHARED, deviceKey, prefKey, readKey, roomKey, suggestAlias, uniqueAlias,
@@ -390,6 +393,55 @@ export class AppModel extends Emitter {
     for (const room of this.rooms.values()) await room.unlinkDevice(devicePub).catch(() => {});
     await this.#forgetDevice(devicePub);
     await this.#syncChannel();
+  }
+
+  // ---- identity recovery (see crypto/identity-recovery.js) ---------------------------------
+
+  /** The recovery code that is active, if any: { q: recovery key, ms: made, channel: carries the
+   *  devices' channel }. Public facts only; the code itself is never kept. */
+  async recoveryInfo() { return (await this.kv.get('recovery')) ?? null; }
+
+  /** Main device: make a recovery code (resolves to its text). Only one is active: a new one
+   *  withdraws the key of the old one. */
+  async makeRecoveryCode(passphrase, { iterations } = {}) {
+    if (this.isLinked) throw new Error('Only the main device can make a recovery code');
+    const previous = await this.recoveryInfo();
+    const channel = this.#deviceSecret || null;
+    const made = await makeRecoveryCode(this.identity, passphrase, { channel, iterations });
+    if (previous) await this.#withdrawKey(previous.q);
+    await this.kv.put('recovery', { q: made.q, ms: made.ms, channel: !!channel });
+    return made.code;
+  }
+
+  /** Withdraw the recovery key: devices it certified stop working, nobody can use the code. */
+  async cancelRecovery() {
+    const info = await this.recoveryInfo();
+    if (!info) return;
+    await this.#withdrawKey(info.q);
+    await this.kv.delete('recovery');
+  }
+
+  /** Like an unlink, for a key that is no device of ours: refused everywhere from now on. */
+  async #withdrawKey(q) {
+    if (this.#paired) this.#broadcastSync(await this.sync.set({ [deviceKey(q)]: null }));
+    this.#deviceRoom?.dropDevice(q);
+    for (const room of this.rooms.values()) await room.unlinkDevice(q).catch(() => {});
+  }
+
+  /** New or wiped device: take an identity back with its recovery code. This device's own key
+   *  gets a certificate from the recovery key and from then on speaks for that identity, like
+   *  a linked device; the other devices send it the rooms. Reload the app after it. */
+  async restoreIdentity(code, passphrase) {
+    if (this.isLinked) throw new Error('This device is already linked');
+    const owns = [...this.rooms.values()].some((room) => room.isOwner);
+    if (owns || (await this.linkedDevices()).length) throw new RecoveryError('owns_rooms');
+    const found = await readRecoveryCode(code, passphrase);
+    const alias = suggestAlias() || 'device';
+    const cert = await certifyDevice(found, this.identity.pub, alias);
+    const sync = { [deviceKey(cert.d)]: { v: alias, ms: Date.now(), c: 0, by: 'recovery' } };
+    if (found.channel) sync[CHANNEL] = { v: found.channel, ms: 1, c: 0, by: 'recovery' };
+    await this.#applyGrant({ cert, name: '', rooms: [], sync });
+    return { member: found.member };
   }
 
   /** New device: make a code for the main device. `read(text)` then reads the code it answers

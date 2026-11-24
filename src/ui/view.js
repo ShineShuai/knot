@@ -319,6 +319,8 @@ class Ui {
         h('div', { class: 'empty' }, h('h2', {}, t('noRoomTitle')), h('p', {}, t('noRoomHelp')),
           this.model.isLinked ? null : h('p', {}, t('noRoomLink'), ' ',
             h('button', { onclick: () => this.settingsDialogs.devices() }, t('linkThis'))),
+          h('p', {}, t('noRoomIdentity'), ' ',
+            h('button', { onclick: () => this.settingsDialogs.devices() }, t('restoreIdentity'))),
           h('p', {}, t('noRoomRestore'), ' ',
             h('button', { onclick: () => this.settingsDialogs.open('data') },
               t('restoreFromBackup')))),

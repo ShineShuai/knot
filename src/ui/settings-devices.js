@@ -4,6 +4,7 @@ import { suggestAlias } from '../chat/device-sync.js';
 import { ALIAS_MAX } from '../chat/envelope.js';
 import { h } from './dom.js';
 import { t } from './i18n.js';
+import { RecoverySection } from './settings-recovery.js';
 import { applyBar } from './settings-shell.js';
 
 export class DevicesPage {
@@ -25,13 +26,16 @@ export class DevicesPage {
     return model.isLinked
       ? h('div', {}, h('p', {}, t('linkIntro')),
         h('p', {}, t('linkedTo', { id: model.identity.member.slice(0, 4) })),
-        holder, bar.node, this.#separate())
+        holder, bar.node, this.#separate(), h('p', { class: 'muted' }, t('recoveryLinkedNote')))
       : h('div', {}, h('p', {}, t('linkIntro')),
         h('section', {}, h('h3', {}, t('devicesYours')), holder, bar.node),
         h('section', {}, h('h3', {}, t('linkNew')), h('p', {}, t('linkNewHelp')),
           this.#linkNewDevice(draw)),
         h('section', {}, h('h3', {}, t('linkThis')), h('p', {}, t('linkThisHelp')),
-          this.#linkThisDevice()));
+          this.#linkThisDevice()),
+        h('section', {}, h('h3', {}, t('idRecoveryTitle')), new RecoverySection(this.ui).make()),
+        h('section', {}, h('h3', {}, t('recoveryRestoreTitle')),
+          new RecoverySection(this.ui).restore()));
   }
 
   /** The devices with their aliases, and what Apply does with the names typed there. */

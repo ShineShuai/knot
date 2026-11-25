@@ -74,12 +74,14 @@ class Ui {
     this.updateBar = h('div', { class: 'update-bar', role: 'status', hidden: true });
     this.folderBar = h('div', { class: 'update-bar', role: 'status', hidden: true });
     this.backupBar = new BackupBar(this);
+    this.restoredBar = h('div', { class: 'update-bar', role: 'status', hidden: true });
     this.root.replaceChildren(
-      this.updateBar, this.folderBar, this.backupBar.node, this.shell, this.callPanel.element,
-      this.toast, this.dialog,
+      this.updateBar, this.folderBar, this.restoredBar, this.backupBar.node, this.shell,
+      this.callPanel.element, this.toast, this.dialog,
     );
     this.opts.updates?.on('update', () => { this.#updateReady = true; this.#drawUpdateBar(); });
     this.opts.folder?.on('state', () => this.#drawFolderBar());
+    this.model.on('restored', () => this.#drawRestoredBar());
     globalThis.navigator?.serviceWorker?.addEventListener?.( // a clicked notification
       'message', (e) => e.data?.knot === 'open-room' && this.#openRoom(e.data.room),
     );
@@ -120,6 +122,7 @@ class Ui {
     this.renderStage();
     this.#drawUpdateBar();
     this.#drawFolderBar();
+    this.#drawRestoredBar();
     this.backupBar.start();
     return this;
   }
@@ -185,6 +188,26 @@ class Ui {
       class: 'primary',
       onclick: asking ? () => folder.allow() : () => this.settingsDialogs.open('data'),
     }, t(asking ? 'folderAllow' : 'settings')));
+  }
+
+  /** A device joined with the recovery code: said until the person acknowledges it, with the
+   *  way to cancel the code (any device can, the main one may be the lost one). */
+  #drawRestoredBar() {
+    const { model } = this;
+    const notices = model.restoredNotices;
+    this.restoredBar.hidden = !notices.length;
+    if (!notices.length) return;
+    const names = notices.map((d) => d.name).join(', ');
+    this.restoredBar.replaceChildren(
+      h('span', {}, t('restoredBar', { names })),
+      h('button', { onclick: () => this.settingsDialogs.devices() }, t('restoredBarOpen')),
+      h('button', { class: 'ghost', onclick: () => model.dismissRestored() }, t('restoredBarOk')),
+      h('button', { class: 'ghost', onclick: async () => {
+        if (!confirm(t('recoveryCancelConfirm'))) return;
+        for (const q of new Set(notices.map((d) => d.q))) await model.cancelRecovery(q);
+        this.notify(t('recoveryCancelled'));
+      } }, t('restoredBarCancel')),
+    );
   }
 
   #reload() {

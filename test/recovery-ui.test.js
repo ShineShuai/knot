@@ -9,6 +9,7 @@ import { MemoryKV } from '../src/store/kv.js';
 import { setLanguage } from '../src/ui/i18n.js';
 import { mountUi } from '../src/ui/view.js';
 import { newIdentity } from './helpers.js';
+import { makeChainCert, makeRecoveryCert } from '../src/crypto/delegation.js';
 import { until } from './fakes.js';
 
 const { root: rootA } = installFakeDom();
@@ -128,4 +129,50 @@ test('ui: the empty room list offers it, and it lands on the Devices page', asyn
   open[0].click();
   await until(() => dialog(p)?.textContent.includes('Restore your identity'));
   assert.ok(dialog(p).querySelector('.recovery-code'));
+});
+
+test('ui: a device that joined with the code: bar, mark in the list, "that was me"', async () => {
+  const p = await person();
+  await p.model.createRoom('Club');
+  const { identity } = p.model;
+  const { device, cert } = await (async () => {
+    const q = await newIdentity();
+    const d = await newIdentity();
+    const rc = await makeRecoveryCert(identity, q.pub);
+    return { device: d, cert: await makeChainCert(q, rc, d.pub, 'Mac') };
+  })();
+  const room = [...p.model.rooms.values()][0];
+  const bar = () => p.root.querySelectorAll('.update-bar').find(
+    (b) => /recovery code/.test(b.textContent),
+  );
+  assert.equal(bar(), undefined);
+  room.emit('sibling', { cert, pub: device.pub, member: identity.member, sibling: true });
+  await until(() => bar() && !bar().hidden);
+  assert.match(bar().textContent, /A device joined with your recovery code: Mac/);
+
+  find(bar(), 'button', 'Review devices')[0].click();
+  await until(() => dialog(p)?.textContent.includes('Identity recovery'));
+  assert.match(dialog(p).textContent, /restored with a recovery code/);
+  find(dialog(p), 'button', 'Close')[0]?.click();
+
+  find(bar(), 'button', 'That was me')[0].click();
+  await until(() => bar().hidden);
+  assert.equal(p.model.restoredNotices.length, 0);
+});
+
+test('ui: "Cancel the recovery code" in the bar works from any device', async () => {
+  const p = await person();
+  const room = await p.model.createRoom('Club');
+  const q = await newIdentity();
+  const d = await newIdentity();
+  const rc = await makeRecoveryCert(p.model.identity, q.pub);
+  const cert = await makeChainCert(q, rc, d.pub, 'Mac');
+  room.emit('sibling', { cert, pub: d.pub, member: p.model.identity.member, sibling: true });
+  const bar = () => p.root.querySelectorAll('.update-bar').find(
+    (b) => /recovery code/.test(b.textContent),
+  );
+  await until(() => bar() && !bar().hidden);
+  find(bar(), 'button', 'Cancel the recovery code')[0].click();
+  await until(() => bar().hidden);
+  assert.equal(room.isWithdrawn(cert, p.model.identity.member), true);
 });

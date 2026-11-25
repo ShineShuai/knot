@@ -43,6 +43,11 @@ A push to `main` whose unit tests and Chromium tests pass is published to GitHub
 **Production** is Cloudflare, deployed by `release.yml` from a tag `vX.Y.Z` once the commit has
 soaked on beta; see [RELEASING.md](../RELEASING.md). Both are made by `tools/assemble.sh`.
 
+The beta site is built and uploaded by the `pages` job and published by the `deploy` job. If a
+deploy ever fails with "No artifacts named github-pages were found", the GitHub API listing
+lagged behind the upload (nothing in the tests is flaky): Actions > the run > Re-run failed jobs
+repeats only the deploy and reuses the artifact (kept for a day).
+
 ## Call quality tests
 
 `test/quality-sim.js` models one sender's uplink (a bandwidth estimate that follows the capacity

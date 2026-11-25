@@ -57,10 +57,27 @@ jobs:
           PLAYWRIGHT_MODULE: ${{ runner.temp }}/pw/node_modules/playwright
           E2E_BROWSER: ${{ matrix.browser }}
 
+  # Two jobs, as GitHub documents it: deploy-pages looks the artifact up through the API, which
+  # can lag a few seconds behind an upload made in the same job ("No artifacts named
+  # github-pages were found"). A job of its own gives it time, and re-running only a failed
+  # deploy keeps the artifact instead of building the site again.
+  pages:
+    name: build the Pages artifact
+    needs: [unit, e2e] # skipped if either failed (and so is the deploy)
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble the site (only what the browser needs), stamped as beta
+        run: tools/assemble.sh _site "$GITHUB_SHA" beta
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
   deploy:
     name: deploy to GitHub Pages
-    needs: [unit, e2e] # skipped if either failed
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: pages
     runs-on: ubuntu-latest
     permissions:
       pages: write
@@ -74,13 +91,6 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Assemble the site (only what the browser needs), stamped as beta
-        run: tools/assemble.sh _site "$GITHUB_SHA" beta
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
       - id: deployment
         uses: actions/deploy-pages@v4
 

@@ -23,6 +23,17 @@ test('beta is stamped by assemble.sh, in the environment the release gate looks 
   assert.match(ci, new RegExp(`environment:\\s+name: ${BETA_ENVIRONMENT}\\b`));
 });
 
+test('the Pages artifact is built in its own job, which the deploy job only publishes', () => {
+  const build = /\n  pages:[\s\S]*?upload-pages-artifact[\s\S]*?\n  deploy:/.exec(ci);
+  assert.ok(build, 'upload-pages-artifact is in the job before deploy');
+  assert.doesNotMatch(build[0], /deploy-pages/);
+  const deploy = /\n  deploy:[\s\S]*?\n  smoke:/.exec(ci)[0];
+  assert.match(deploy, /needs: pages/);
+  assert.match(deploy, /actions\/deploy-pages@v4/);
+  assert.doesNotMatch(deploy, /upload-pages-artifact|assemble\.sh/);
+  assert.match(deploy, /id-token: write/);
+});
+
 test('prod is stamped by assemble.sh, behind the production environment and the gate', () => {
   assert.match(release, /tools\/assemble\.sh _site "\$SHA" prod/);
   assert.match(release, /environment:\s+name: production/);

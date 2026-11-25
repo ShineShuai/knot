@@ -44,6 +44,8 @@ function cleanEpochs(raw) {
 
 export class AppModel extends Emitter {
   rooms = new Map(); // room id -> Room
+  /** device key -> { name, q, ms, seen }: devices of ours that joined with a recovery code */
+  #restored = new Map();
   #removed = new Set(); // ids of rooms left in this tab (so saving does not bring them back)
   #saving = Promise.resolve();
   #paired = false; // do we have other devices to keep in step? (linked, or linked to)
@@ -70,6 +72,7 @@ export class AppModel extends Emitter {
 
   /** `progress(text)`: what is being opened now (for a page that is slow to start). */
   async load({ progress = () => {} } = {}) {
+    this.#restored = new Map(Object.entries((await this.kv.get('restored')) ?? {}));
     await this.sync.load();
     await this.#refreshPaired();
     await this.#sharePrevious();
@@ -131,10 +134,12 @@ export class AppModel extends Emitter {
     const aliases = this.sync.aliases;
     const [root, own] = [this.#rootPub, this.#ownPub];
     const rows = [{ pub: root, alias: aliases.get(root) ?? '', main: true, self: root === own }];
-    for (const pub of new Set([...aliases.keys(), own])) {
+    for (const pub of new Set([...aliases.keys(), own, ...this.#restored.keys()])) {
       if (pub === root) continue;
+      const known = this.#restored.get(pub)?.name; // a restored device may be seen before its alias
       rows.push({
-        pub, alias: aliases.get(pub) ?? this.identity.cert?.n ?? '', main: false, self: pub === own,
+        pub, alias: aliases.get(pub) ?? known ?? this.identity.cert?.n ?? '', main: false,
+        self: pub === own, restored: pub === own ? !!this.identity.cert?.up : !!known,
       });
     }
     return rows;
@@ -273,7 +278,10 @@ export class AppModel extends Emitter {
 
   /** Exchange state with a device of ours that connects in this room. */
   #wire(room) {
-    room.on('sibling', (entry) => this.#sendSnapshot(room, entry));
+    room.on('sibling', (entry) => {
+      this.#sendSnapshot(room, entry);
+      this.#noteRestored(entry).catch(() => {});
+    });
     room.on('sync', (items, entry, epochs) => {
       this.#receiveSync(items, epochs).catch((err) => console.error('sync failed', err));
     });
@@ -317,6 +325,7 @@ export class AppModel extends Emitter {
   /** Another device of ours withdrew a device: refuse it everywhere here, and forget its name. */
   async #forgetDevice(pub) {
     for (const room of this.#allRooms()) room.dropDevice(pub);
+    if (this.#restored.delete(pub)) await this.#saveRestored();
     await this.kv.put('linked', (await this.linkedDevices()).filter((x) => x.d !== pub));
     await this.#refreshPaired();
     this.emit('devices');
@@ -413,13 +422,44 @@ export class AppModel extends Emitter {
     return made.code;
   }
 
-  /** Withdraw the recovery key: devices it certified stop working, nobody can use the code. */
-  async cancelRecovery() {
+  /** Withdraw a recovery key (by default the one of the code made here): devices it certified
+   *  stop working, nobody can use the code. Any device may do it for a key it has seen a
+   *  device join with (`restoredNotices`): if a code leaked, no main device is needed. */
+  async cancelRecovery(q = null) {
     const info = await this.recoveryInfo();
-    if (!info) return;
-    await this.#withdrawKey(info.q);
-    await this.kv.delete('recovery');
+    const keys = new Set(q ? [q] : info ? [info.q] : []);
+    for (const key of keys) await this.#withdrawKey(key);
+    if (info && keys.has(info.q)) await this.kv.delete('recovery');
+    for (const [pub, v] of this.#restored) if (keys.has(v.q)) this.#restored.delete(pub);
+    if (keys.size) { await this.#saveRestored(); this.emit('restored'); this.emit('devices'); }
   }
+
+  /** Devices of ours that joined with a recovery code, newest knowledge first. */
+  restoredDevices() { return [...this.#restored].map(([pub, v]) => ({ pub, ...v })); }
+
+  /** Those nobody has acknowledged yet (the person has not said "that was me"). */
+  get restoredNotices() { return this.restoredDevices().filter((d) => !d.seen); }
+
+  /** "That was me": stop showing the notices. The devices stay marked in the device list. */
+  async dismissRestored() {
+    for (const [pub, v] of this.#restored) this.#restored.set(pub, { ...v, seen: true });
+    await this.#saveRestored();
+    this.emit('restored');
+  }
+
+  /** A device of ours connected: if its certificate came through a recovery key, say so once
+   *  (the code may have leaked: the person should know every device that uses it). */
+  async #noteRestored(entry) {
+    const cert = entry.cert;
+    if (!cert?.up || cert.d === this.#ownPub || this.#restored.has(cert.d)) return;
+    const name = this.sync.alias(cert.d) || cert.n;
+    this.#restored.set(cert.d, { name, q: cert.up.q, ms: Date.now(), seen: false });
+    await this.#saveRestored();
+    this.emit('restored');
+    this.emit('devices');
+  }
+
+  #saveRestored() { return this.kv.put('restored', Object.fromEntries(this.#restored)); }
 
   /** Like an unlink, for a key that is no device of ours: refused everywhere from now on. */
   async #withdrawKey(q) {

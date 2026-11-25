@@ -257,3 +257,79 @@ test('app: a new code withdraws the old key; cancelling withdraws the current on
   await main.cancelRecovery(); // nothing to cancel is no error
   room.stop();
 });
+
+// ---- the notice: a device that joined with the code is shown, once ---------------------------
+
+test('a room tells when a device of ours with a recovery certificate connects', async () => {
+  const { a, b } = await trio();
+  const seen = { a: [], b: [] };
+  a.on('sibling', (entry) => seen.a.push(entry));
+  b.on('sibling', (entry) => seen.b.push(entry));
+  await link(a, b); // two devices of one identity, in one room
+  await until(() => seen.a.length && seen.b.length);
+  assert.equal(!!seen.a[0].cert.up, true, 'the main sees a device that came through the code');
+  assert.equal(seen.b[0].cert, undefined, 'the restored device sees the main: no chain');
+});
+
+/** A model with a room, and the event the room raises when a restored device connects. */
+async function noticing() {
+  const kv = new MemoryKV();
+  const identity = await newIdentity();
+  const model = await modelOf(kv, identity);
+  const room = await model.createRoom('Club');
+  const { device, cert } = await chain('Mac');
+  const entry = { cert, pub: device.pub, member: identity.member, sibling: true };
+  return { kv, identity, model, room, cert, entry };
+}
+
+test('app: a restored device is noticed once and the notice survives a reload', async () => {
+  const { kv, identity, model, room, cert, entry } = await noticing();
+  let told = 0;
+  model.on('restored', () => told++);
+  room.emit('sibling', entry);
+  await until(() => model.restoredNotices.length === 1);
+  assert.equal(model.restoredNotices[0].name, 'Mac');
+  assert.equal(model.restoredNotices[0].q, cert.up.q);
+  room.emit('sibling', entry); // the same device again: no second notice
+  await wait(20);
+  assert.equal(model.restoredNotices.length, 1);
+  assert.equal(told, 1);
+
+  const ownRoom = (await newIdentity()).pub;
+  room.emit('sibling', { ...entry, cert: { ...cert, up: undefined, d: toB64u(ownRoom) } });
+  await wait(20);
+  assert.equal(model.restoredNotices.length, 1, 'a device without a recovery key is no notice');
+
+  const again = await modelOf(kv, identity); // the page is reloaded
+  assert.equal(again.restoredNotices.length, 1, 'still unacknowledged');
+  await again.dismissRestored();
+  assert.equal(again.restoredNotices.length, 0);
+  assert.equal(again.restoredDevices().length, 1, 'but still known');
+  assert.equal((await modelOf(kv, identity)).restoredNotices.length, 0, 'and it stays so');
+  room.stop();
+});
+
+test('app: any device can cancel the code a restored device joined with', async () => {
+  const { model, room, cert, entry } = await noticing();
+  room.emit('sibling', entry);
+  await until(() => model.restoredNotices.length === 1);
+  const member = model.identity.member;
+  assert.equal(room.isWithdrawn(cert, member), false);
+  await model.cancelRecovery(cert.up.q); // no main-device record is needed
+  assert.equal(room.isWithdrawn(cert, member), true);
+  assert.equal(model.restoredDevices().length, 0);
+  room.stop();
+});
+
+test('app: the notice goes away when that device is unlinked', async () => {
+  const { model, room, cert, entry } = await noticing();
+  room.emit('sibling', entry);
+  await until(() => model.restoredDevices().length === 1);
+  const row = model.deviceRows().find((r) => r.pub === cert.d);
+  assert.equal(row.restored, true, 'in the device list before its alias has arrived');
+  assert.equal(row.alias, 'Mac');
+  await model.unlinkDevice(cert.d);
+  assert.equal(model.restoredDevices().length, 0);
+  assert.equal(room.isWithdrawn(cert, model.identity.member), true);
+  room.stop();
+});

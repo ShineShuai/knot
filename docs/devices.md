@@ -152,6 +152,18 @@ A recovery code closes that gap without exporting the main key.
 - **Not possible without the main device:** making a code (the recovery certificate needs the main
   key). After a restore there is no main device, so the code that was used stays the one
   recovery path.
+- **A notice when it is used.** The first time a device whose certificate came through a recovery
+  key connects to one of our devices (in a room or in the channel), every such device shows a bar
+  "A device joined with your recovery code: <name>" with Review devices, "That was me" and
+  Cancel the recovery code; the device is marked "restored with a recovery code" in the device list
+  from then on (kept in the store as `restored`: key, name, recovery key, seen). Cancelling works
+  from any device, because the recovery key is known from the notice: a leaked code needs no main
+  device to be shut down. Unlinking that one device removes only it and its notice.
+- **Who may do what.** Only the main device links a new device (`linkDevice`: the two-code flow,
+  it signs the certificate with the main key) and makes recovery codes; a linked or restored
+  device can do neither, and a device that is already linked is refused by `startLinking` until it
+  leaves its link. After the main device is gone, new devices join by restoring with the code (each
+  restore is one more device), not by being linked.
 - **Old versions** reject chained certificates, so they drop what a restored device writes until
   their page has updated.
 

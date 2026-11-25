@@ -68,6 +68,7 @@ export class DevicesPage {
       fields.push({ row, input });
       return h('li', {}, input,
         row.self ? h('span', { class: 'muted' }, t('deviceThis')) : null,
+        row.restored ? h('span', { class: 'muted' }, t('deviceRestored')) : null,
         !row.main && !row.self ? h('button', {
           class: 'ghost',
           onclick: async () => {

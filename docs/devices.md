@@ -49,8 +49,10 @@ certificate **from the stamp of the unlink on**, including history that arrives 
 wrote before stays, even when it only arrives now. Which unlinks count depends only on the
 unlinks a room holds, not on their arrival order: an unlink written by a device that was
 already withdrawn by its stamp counts for nothing, and what a room refused or removed because
-of such an unlink counts again once it is known to be void. The device itself notices and goes
-back to its own identity. The unlinked device is told first (through our channel, if no room reaches it), then
+of such an unlink counts again once it is known to be void. After a restart (and in a room made
+later) every room and the devices' channel refuse again each device whose `d:` item is null, from
+the moment of the restart on: the channel keeps nothing, so nothing else remembers. The device
+itself notices and goes back to its own identity. The unlinked device is told first (through our channel, if no room reaches it), then
 dropped from the channel. A linked device can also *separate* itself (Settings > Devices):
 it withdraws itself the same way.
 

@@ -184,6 +184,9 @@ export class AppModel extends Emitter {
   /** Do we have other devices to keep in step? Alone, nothing about rooms is recorded. */
   get paired() { return this.#paired; }
 
+  /** The room where our devices meet when they share no chat room, or null (tests, diagnostics). */
+  get deviceChannel() { return this.#deviceRoom; }
+
   async #refreshPaired() {
     this.#paired = this.isLinked || this.deviceRows().length > 1
       || (await this.linkedDevices()).length > 0;
@@ -278,6 +281,7 @@ export class AppModel extends Emitter {
 
   /** Exchange state with a device of ours that connects in this room. */
   #wire(room) {
+    this.#refuseWithdrawn(room); // what was withdrawn before this start is refused again
     room.on('sibling', (entry) => {
       this.#sendSnapshot(room, entry);
       this.#noteRestored(entry).catch(() => {});
@@ -319,6 +323,16 @@ export class AppModel extends Emitter {
     const all = Object.entries(this.sync.items);
     for (let i = 0; i < all.length; i += 40) {
       room.sendToSibling(entry, this.#frame(Object.fromEntries(all.slice(i, i + 40))));
+    }
+  }
+
+  /** Every device of ours that was withdrawn (its `d:` item is null) is refused in `room`. The
+   *  channel room keeps nothing and a chat room may have missed the unlink, so after a restart
+   *  this is the only place that remembers. */
+  #refuseWithdrawn(room) {
+    for (const [key, item] of Object.entries(this.sync.items)) {
+      if (!key.startsWith('d:') || item.v !== null || key.slice(2) === this.#ownPub) continue;
+      room.dropDevice(key.slice(2));
     }
   }
 

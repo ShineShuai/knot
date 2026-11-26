@@ -20,7 +20,7 @@
 //         'unread'() (the unread count changed), 'read'(stamp) (we read further: see ReadMarks),
 //         'sibling'(peer) (a device of ours is connected), 'sync'(items, peer, epochs)
 import { Emitter } from '../util/emitter.js';
-import { HLC } from '../util/hlc.js';
+import { HLC, compareStamps } from '../util/hlc.js';
 import { RateLimiter } from '../util/rate.js';
 import { concat, fromB64u, fromUtf8, sha256, toB64u, utf8 } from '../util/bytes.js';
 import { deriveRoomKeys } from '../crypto/room-keys.js';
@@ -84,7 +84,11 @@ export class Room extends Emitter {
   dropped = {};
   #epoch = { n: 0, secret: null }; // key rotations: the channel keys depend on it
   #fileHub; #marks; #desk; #pairing; // what the room delegates, see the constructor
-  #unlinked = new Set();     // "<member id>|<device key>" of every withdrawn certificate
+  #unlinked = new Map();     // "<member id>|<key>" of every withdrawn certificate -> stamp it counts from
+  #unlinks = new Map();      // unlink id -> { at, signers, target }: every unlink envelope we hold
+  #learned = new Map();      // keys withdrawn elsewhere (dropDevice) -> when we heard of it
+  #withheld = new Map();     // refused for a withdrawal that may turn out void: id -> envelope
+  #retryingWithheld = false;
   #multi = new Set();        // members seen with a certificate: they use more than one device
 
   static async open(opts) {
@@ -233,7 +237,8 @@ export class Room extends Emitter {
     if (Array.isArray(held)) this.roster.load(held);
     this.#waitingSaved = this.roster ? this.#waitingKey() : '';
     this.removed = !!this.roster?.revoked.has(this.identity.member);
-    for (const e of this.log.where((x) => x.kind === 'unlink')) this.#noteUnlink(e);
+    for (const e of this.log.where((x) => x.kind === 'unlink')) this.#noteUnlink(e, false);
+    this.#settleUnlinks();
     await this.#marks.load();
     const saved = await this.#kv.get(`epoch:${this.id}`);
     if (saved?.n) {
@@ -833,7 +838,10 @@ export class Room extends Emitter {
       maxFileBytes: this.settings.maxFileBytes,
     };
     if (!(await verifyEnvelope(env, this.id, limits))) return this.#drop('invalid or forged', env);
-    if (this.#isUnlinked(env.cert, authorIdOf(env))) return this.#drop('device was unlinked', env);
+    if (this.#writtenAfterUnlink(env)) {
+      this.#withhold(env);
+      return this.#drop('device was unlinked', env);
+    }
     if (!this.#permits(env)) return this.#refuse(env);
     return this.#accept(env, source, gossip);
   }
@@ -965,8 +973,83 @@ export class Room extends Emitter {
     return devicePub === root;
   }
 
-  #noteUnlink(env) {
-    if (!this.#isRootKey(env.body.d, env)) this.#unlinked.add(`${authorIdOf(env)}|${env.body.d}`);
+  /** Was `env` written by a device that had been withdrawn by then? A withdrawal counts from
+   *  its stamp on: what the device wrote before it stays valid, even when it only arrives now. */
+  #writtenAfterUnlink(env) {
+    if (!env.cert) return false;
+    const member = authorIdOf(env);
+    return [env.cert.d, env.cert.up?.q].some((key) => {
+      const from = key && this.#unlinked.get(`${member}|${key}`);
+      return !!from && compareStamps(from, env) <= 0;
+    });
+  }
+
+  /** The keys that vouch for `env`'s device (the main device's own key cannot be withdrawn). */
+  #signerKeys(env) {
+    if (!env.cert) return [];
+    const member = authorIdOf(env);
+    return [env.cert.d, env.cert.up?.q].filter(Boolean).map((key) => `${member}|${key}`);
+  }
+
+  /** Remember an unlink envelope and work out which withdrawals count. */
+  #noteUnlink(env, settle = true) {
+    if (this.#isRootKey(env.body.d, env)) return;
+    this.#unlinks.set(env.id, {
+      id: env.id, at: { ms: env.ms, c: env.c }, signers: this.#signerKeys(env),
+      target: `${authorIdOf(env)}|${env.body.d}`,
+    });
+    if (settle) this.#settleUnlinks();
+  }
+
+  /** Which withdrawals count depends only on the unlinks we hold, never on the order they came
+   *  in: oldest first, an unlink counts unless its signer was already withdrawn by its stamp. */
+  #settleUnlinks() {
+    const rows = [...this.#unlinks.values()]
+      .sort((x, y) => compareStamps(x.at, y.at) || (x.id < y.id ? -1 : 1));
+    const next = new Map(this.#learned);
+    for (const row of rows) {
+      const gone = row.signers.some((key) => {
+        const from = next.get(key);
+        return !!from && compareStamps(from, row.at) <= 0;
+      });
+      const had = next.get(row.target);
+      if (!gone && (!had || compareStamps(row.at, had) < 0)) next.set(row.target, row.at);
+    }
+    this.#unlinked = next;
+  }
+
+  /** Keep (in memory, a few) what a withdrawal refused: if the unlink that withdrew the device
+   *  turns out void (its own device was withdrawn earlier), it counts after all. */
+  #withhold(env) {
+    if (this.#withheld.size >= 200) this.#withheld.delete(this.#withheld.keys().next().value);
+    this.#withheld.set(env.id, env);
+  }
+
+  /** The withdrawals changed: what was refused for them may count again. */
+  async #retryWithheld() {
+    if (this.#retryingWithheld) return;
+    this.#retryingWithheld = true;
+    try {
+      for (const [id, env] of [...this.#withheld]) {
+        if (this.#writtenAfterUnlink(env)) continue;
+        this.#withheld.delete(id);
+        await this.#ingest(env, null).catch(() => {});
+      }
+    } finally { this.#retryingWithheld = false; }
+  }
+
+  /** A withdrawal arrived after what it cuts off: what a withdrawn device wrote from its stamp
+   *  on no longer counts (an unlink it wrote then included). Member changes and rules already
+   *  applied stay. */
+  async #purgeWithdrawn() {
+    const bad = this.log.where((e) => e.cert && !ADMIN_KINDS.includes(e.kind) && e.kind !== POLICY
+      && this.#writtenAfterUnlink(e));
+    if (!bad.length) return;
+    this.log.drop(bad);
+    for (const e of bad) { this.#unlinks.delete(e.id); this.#withhold(e); }
+    await this.#store.remove(bad).catch(() => {});
+    for (const e of bad) await this.#forget(e);
+    this.emit('message', null);
   }
 
   /** Any device of ours: withdraw the certificate of a linked device (its public key,
@@ -981,7 +1064,9 @@ export class Room extends Emitter {
    *  withdrawn: refuse it here too and close its links. */
   dropDevice(devicePub) {
     if (this.#isRootKey(devicePub)) return;
-    this.#unlinked.add(`${this.identity.member}|${devicePub}`);
+    this.#learned.set(`${this.identity.member}|${devicePub}`, { ms: Date.now(), c: 0 });
+    this.#settleUnlinks();
+    this.#purgeWithdrawn().catch(() => {});
     for (const entry of this.peers.values()) {
       const ours = (entry.member ?? entry.id) === this.identity.member;
       if (ours && this.#isKey(entry, devicePub)) entry.link.close();
@@ -994,7 +1079,7 @@ export class Room extends Emitter {
   }
 
   /** A certificate was withdrawn: close that device's links; if it was ours, say so. */
-  #onUnlink(env) {
+  async #onUnlink(env) {
     if (this.#isRootKey(env.body.d, env)) return;
     this.#noteUnlink(env);
     for (const entry of this.peers.values()) {
@@ -1004,6 +1089,8 @@ export class Room extends Emitter {
       timer.unref?.();
     }
     if (this.#isUnlinked(this.identity.cert, this.identity.member)) this.emit('unlinked');
+    await this.#purgeWithdrawn();
+    await this.#retryWithheld();
   }
 
   /** A linked device introduces itself on a new link: the certificate must be for exactly
@@ -1123,7 +1210,7 @@ export class Room extends Emitter {
     if (doomed) await this.#forget(doomed);
     if (ADMIN_KINDS.includes(env.kind)) await this.#onAdmin(env);
     if (env.kind === POLICY) await this.#onPolicy();
-    if (env.kind === 'unlink') this.#onUnlink(env);
+    if (env.kind === 'unlink') await this.#onUnlink(env);
     const fresh = this.#marks.isUnread(env); // decided before a viewer can mark it read
     // Membership changes are shown in the conversation too ("Bob joined"): redraw for them.
     if (env.kind !== 'recovery' && !removed.includes(env)) this.emit('message', env);

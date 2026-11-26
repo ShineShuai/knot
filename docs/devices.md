@@ -44,9 +44,13 @@ Rooms joined later reach the other devices by themselves (see *Shared state* bel
 
 *Unlink* (any device, for any linked device but itself; the main device cannot be unlinked;
 Settings > Devices) is a signed `unlink` envelope in every room, kept forever like
-membership changes: peers drop that device's links and refuse everything it writes with that
-certificate, including history that arrives later; the device itself notices and goes back to its
-own identity. The unlinked device is told first (through our channel, if no room reaches it), then
+membership changes: peers drop that device's links and refuse what it writes with that
+certificate **from the stamp of the unlink on**, including history that arrives later; what it
+wrote before stays, even when it only arrives now. Which unlinks count depends only on the
+unlinks a room holds, not on their arrival order: an unlink written by a device that was
+already withdrawn by its stamp counts for nothing, and what a room refused or removed because
+of such an unlink counts again once it is known to be void. The device itself notices and goes
+back to its own identity. The unlinked device is told first (through our channel, if no room reaches it), then
 dropped from the channel. A linked device can also *separate* itself (Settings > Devices):
 it withdraws itself the same way.
 

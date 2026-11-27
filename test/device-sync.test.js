@@ -97,7 +97,7 @@ test('suggested and unique aliases', () => {
   assert.ok(uniqueAlias('x'.repeat(40), ['x'.repeat(16)]).length <= 16);
 });
 
-// ---- two real app models: a main device and a linked phone ------------------------------------
+// ---- two real app models: an original device and a linked phone ------------------------------------
 
 const models = [];
 test.afterEach(() => models.splice(0).forEach((m) => m.stop()));
@@ -135,11 +135,11 @@ test('linking hands the settings and the phone\'s alias over', async () => {
   assert.equal(phone.settings.name, 'Ada');
   assert.equal(main.deviceRows().find((r) => r.pub === phonePub).alias, 'Pixel');
   assert.equal(phone.deviceRows().find((r) => r.pub === phonePub).alias, 'Pixel');
-  assert.equal(phone.deviceRows().find((r) => r.main).alias, '');
+  assert.equal(phone.deviceRows().find((r) => r.original).alias, '');
   assert.equal(phone.identity.alias, undefined, 'its own name is the default one');
 });
 
-test('at the first link a device takes the main device\'s settings, over newer ones', async () => {
+test('at the first link a device takes the original device\'s settings, over newer ones', async () => {
   const main = await open(await newIdentity(), new MemoryKV(), 'Ada');
   await main.updateSettings({ name: 'Ada main', language: 'de' });
   const [phoneId, phoneKv] = [await newIdentity(), new MemoryKV()];
@@ -190,7 +190,7 @@ test('an alias chosen on any device shows on messages, connections and in the li
   await until(() => ra.log.get(env.id));
   assert.equal(ra.deviceOf(main.identity.member, deviceNameOf(ra.log.get(env.id))), 'tablet');
   await until(() => ra.peerList.some((p) => p.device === 'tablet'));
-  // the phone renames the main device, and a taken name gets a number
+  // the phone renames the original device, and a taken name gets a number
   const mainPub = toB64u(main.identity.pub);
   assert.equal(await phone.setDeviceAlias(mainPub, 'Tablet'), 'Tablet 2');
   await until(() => main.identity.alias === 'Tablet 2');
@@ -340,13 +340,13 @@ async function linkPhone(main, alias, broker) {
   return { phone, pub: toB64u(id.pub), id, kv };
 }
 
-test('a new device that links to a main device with no rooms stays in step with it', async () => {
+test('a new device that links to an original device with no rooms stays in step with it', async () => {
   const broker = new FakeBroker();
   const main = await open(await newIdentity(), new MemoryKV(), 'Ada', net, broker.ws());
   await main.updateSettings({ name: 'Ada main' });
   const { phone } = await linkPhone(main, 'Pixel', broker);
   assert.equal(main.rooms.size + phone.rooms.size, 0, 'no room anywhere');
-  assert.equal(phone.settings.name, 'Ada main', 'its first state is the main device\'s');
+  assert.equal(phone.settings.name, 'Ada main', 'its first state is the original device\'s');
   await main.updateSettings({ name: 'Ada 2', imagePreviews: 'off' });
   const arrived = () => phone.settings.name === 'Ada 2' && phone.settings.imagePreviews === 'off';
   await until(arrived, 8000);
@@ -361,7 +361,7 @@ test('a new device that links to a main device with no rooms stays in step with 
   await until(async () => (await main.kv.get('rooms'))?.length === 2, 8000);
 });
 
-test('any device unlinks another linked device; the main device stays', async () => {
+test('any device unlinks another linked device; the original device stays', async () => {
   const broker = new FakeBroker();
   const main = await open(await newIdentity(), new MemoryKV(), 'Ada', net, broker.ws());
   const [one, two] = [await linkPhone(main, 'One', broker), await linkPhone(main, 'Two', broker)];
@@ -373,7 +373,7 @@ test('any device unlinks another linked device; the main device stays', async ()
   assert.equal(one.phone.deviceRows().length, 2);
   await until(() => main.deviceRows().length === 2, 8000);
   assert.equal(main.deviceRows().some((r) => r.pub === two.pub), false);
-  await main.unlinkDevice(one.pub); // and the main device the first
+  await main.unlinkDevice(one.pub); // and the original device the first
   assert.equal(main.deviceRows().length, 1);
   assert.equal(main.paired, false, 'alone again');
 });
@@ -442,7 +442,7 @@ test('a reload before the answer is applied: the device asks again, one entry', 
   assert.equal(a.name, b.name, 'with the same alias');
 });
 
-test('a main device that stopped while linking still knows its devices after', async () => {
+test('an original device that stopped while linking still knows its devices after', async () => {
   const [mainId, mainKv] = [await newIdentity(), new MemoryKV()];
   const main = await open(mainId, mainKv, 'Ada');
   const put = mainKv.put.bind(mainKv);
@@ -478,7 +478,7 @@ test('a withdrawn device starts over as a device of its own, which can link othe
   assert.ok((await (await restarted.startLinking('x')).code), 'and can be linked');
 });
 
-test('a linked device can leave the main device on its own', async () => {
+test('a linked device can leave the original device on its own', async () => {
   const broker = new FakeBroker();
   const main = await open(await newIdentity(), new MemoryKV(), 'Ada', net, broker.ws());
   const one = await linkPhone(main, 'One', broker);
@@ -542,6 +542,6 @@ test('a person\'s devices are one entry in the bar even before their links are u
     return bob.peerList.length === 2;
   });
   assert.equal(entries().length, 1, 'one person');
-  assert.match(entries()[0].text, /^Ada @ (main|Pixel) \(\S+\) \| (main|Pixel) \(\S+\)$/);
+  assert.match(entries()[0].text, /^Ada @ (original|Pixel) \(\S+\) \| (original|Pixel) \(\S+\)$/);
   senders.forEach(([c]) => c.stop());
 });

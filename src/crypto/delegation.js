@@ -1,7 +1,7 @@
-// Linked devices. The main device keeps the identity key and signs a certificate for another
+// Linked devices. The original device keeps the identity key and signs a certificate for another
 // device's own key. That device then writes "as" the main identity: its messages carry the
 // certificate, so everyone can check that the main identity allowed this very key. The
-// device's key never leaves it, and the main key never leaves the main device.
+// device's key never leaves it, and the main key never leaves the original device.
 // Nothing here needs a server.
 //
 // One more link in the chain keeps the identity alive when the main key is lost: while the main
@@ -72,7 +72,7 @@ export async function verifyCert(c) {
   return member;
 }
 
-/** On a linked device: speak as the main identity. Does nothing on a main device, or if the
+/** On a linked device: speak as the main identity. Does nothing on an original device, or if the
  *  stored certificate is not for this device's key. */
 export async function applyDelegation(identity, kv) {
   const record = await kv.get('delegate');

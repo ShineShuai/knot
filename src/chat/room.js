@@ -66,7 +66,7 @@ const LANE_WIDTH = 1024; // counters one device can mint in one millisecond befo
 const LANES = 4095;
 
 /** Where a device's counters start in each millisecond. The device without a certificate (the
- *  main device) starts at 0. Every other device of the identity starts in a lane of its own,
+ *  original device) starts at 0. Every other device of the identity starts in a lane of its own,
  *  taken from its key (already uniform, so 16 bits of it are as good as a hash): two devices
  *  that write as one identity then mint different ids in the same millisecond, except when
  *  they share a lane (1 in 4095 for a pair), which `#ingest` counts as an "id clash". */
@@ -132,7 +132,7 @@ export class Room extends Emitter {
     this.#chan = { id: keys.id, aes: keys.aes }; // where we meet on the brokers: can rotate
     this.#kv = kv;
     // A linked device writes as the main identity: its counters start in a lane of its own, so
-    // its ids do not collide with the main device's or (mostly) another linked device's.
+    // its ids do not collide with the original device's or (mostly) another linked device's.
     this.hlc = new HLC(Date.now, counterBase(identity));
     if (identity.cert || identity.alias) this.#multi.add(identity.member);
     this.log = new MessageLog(settings.logCap);
@@ -280,7 +280,7 @@ export class Room extends Emitter {
 
   /** Which device of `authorId` is meant, for a name tag like "Ada · phone": null while only
    *  one device of that member is known; else `device` (its alias, or the name in its
-   *  certificate), or '' for the main device, which has neither. */
+   *  certificate), or '' for the original device, which has neither. */
   deviceOf(authorId, device = null) {
     return this.#multi.has(authorId) ? (device ?? '') : null;
   }
@@ -493,7 +493,7 @@ export class Room extends Emitter {
   #knock = null; #declined = false;
 
   /** This device holds the room but its own identity is not on the member list: typically it
-   *  started over with a new identity (a device that left its main device keeps its rooms), or
+   *  started over with a new identity (a device that left its original device keeps its rooms), or
    *  its admission was lost. Others refuse everything it writes, and nothing says so. Ask the
    *  owner, as a join link would: they see a request and decide (a new identity is never let in
    *  without them). Only while the owner is online, and not again once they declined. */
@@ -980,7 +980,7 @@ export class Room extends Emitter {
   /** Was this device certificate withdrawn (by an `unlink`) in this room? */
   isWithdrawn(cert, memberId) { return this.#isUnlinked(cert, memberId); }
 
-  /** The main device's key: the one the identity is named after. It cannot be withdrawn. */
+  /** The original device's key: the one the identity is named after. It cannot be withdrawn. */
   #isRootKey(devicePub, env = null) {
     const root = env ? env.cert?.r ?? env.pub : this.identity.cert?.r ?? toB64u(this.identity.pub);
     return devicePub === root;
@@ -997,7 +997,7 @@ export class Room extends Emitter {
     });
   }
 
-  /** The keys that vouch for `env`'s device (the main device's own key cannot be withdrawn). */
+  /** The keys that vouch for `env`'s device (the original device's own key cannot be withdrawn). */
   #signerKeys(env) {
     if (!env.cert) return [];
     const member = authorIdOf(env);
@@ -1067,9 +1067,9 @@ export class Room extends Emitter {
 
   /** Any device of ours: withdraw the certificate of a linked device (its public key,
    *  base64url) in this room. Everyone drops its links and refuses what it writes from then
-   *  on. The main device cannot be withdrawn. */
+   *  on. The original device cannot be withdrawn. */
   async unlinkDevice(devicePub) {
-    if (this.#isRootKey(devicePub)) throw new Error('The main device cannot be unlinked');
+    if (this.#isRootKey(devicePub)) throw new Error('The original device cannot be unlinked');
     return this.#publish('unlink', unlinkBody(devicePub));
   }
 
@@ -1373,6 +1373,10 @@ export class Room extends Emitter {
       if (this.#isSibling(entry)) this.emit('sync', m.items, entry, m.epochs);
       return;
     }
+    if (m?.t === 'seen') { // when our devices were last online, as another device of ours knows
+      if (this.#isSibling(entry)) this.emit('seen', m.seen, entry);
+      return;
+    }
     if (this.roster && m?.t === 'epoch') { await this.#onEpoch(m, entry); return; }
     if (m?.t === 'call') { this.call.onFrame(entry.id, m); return; }
     if (m?.t === 'ack') { this.#onAck(entry.member ?? entry.id, m.ids); return; }
@@ -1427,7 +1431,7 @@ export class Room extends Emitter {
   // ---- our other devices (same identity) -------------------------------------------------------
 
   /** Is this connection another device of ours? (A linked device proves it with its
-   *  certificate; the main device's own id is the identity.) */
+   *  certificate; the original device's own id is the identity.) */
   #isSibling(entry) {
     return entry.id !== this.identity.id && (entry.member ?? entry.id) === this.identity.member;
   }

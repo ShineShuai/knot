@@ -164,14 +164,14 @@ test('a joiner who restarts keeps the admission that waits for the rest of the l
   assert.equal(room(again).roster.gap, 1, 'not lost with the page');
 });
 
-test('a member\'s other device accepts what the main device writes, whatever the list says',
+test('a member\'s other device accepts what the original device writes, whatever the list says',
   async () => {
     const { broker, bob } = await lateJoiner((grant) => ({ ...grant, chain: [] }));
     const phone = await linkPhone(broker, bob, 'phone');
     await wait(1200);
-    await room(bob).sendText('from my main device');
+    await room(bob).sendText('from my original device');
     await room(phone).sendText('from my phone');
-    await until(() => texts(room(phone)).includes('from my main device'), 8000);
+    await until(() => texts(room(phone)).includes('from my original device'), 8000);
     await until(() => texts(room(bob)).includes('from my phone'), 8000);
     assert.equal(room(phone).pendingCount, 0);
   });
@@ -204,7 +204,7 @@ test('a room the owner made says nothing about admissions or the owner being awa
   assert.equal(home.ownerOnline, true);
 });
 
-/** A device that started over with a new identity (a device that leaves its main device does
+/** A device that started over with a new identity (a device that leaves its original device does
  *  that, see AppModel.forgetLinking) and kept its rooms: it is a stranger in every owned room. */
 async function startOver(broker, who) {
   goOffline(who);

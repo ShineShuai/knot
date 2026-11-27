@@ -67,7 +67,7 @@ on the banner of waiting messages when the owner is offline (the list comes from
 from a member who has it). Diagnostics adds, per room, the owner (online or not), our own id, the
 members, the author of the last refused message and which direct links are not synced.
 
-A device can be in a room without being on its list: one that left its main device (or was
+A device can be in a room without being on its list: one that left its original device (or was
 withdrawn) starts over with a new identity (`AppModel.forgetLinking`) and keeps its rooms, so in
 every room with an owner it is a stranger, and what it writes is refused without a word (rooms
 without an owner do not care, which hides it). When our own member is not on our list, and the
@@ -81,7 +81,7 @@ The owner can also let in a sender who does not ask (an app from before the requ
 that was declined): the Members page of the room settings lists "Wrote, but not on the list", each with the short id the messages
 are signed with and how many wait. *Let in* admits that key under the name it signs (after a
 confirmation: anyone with the room's secret can sign any name); *Ignore* drops what waits and holds
-nothing more from them until the page restarts. A device that separates from its main device
+nothing more from them until the page restarts. A device that separates from its original device
 (`leaveLink`) or is withdrawn keeps its rooms but gets a new identity: rooms its main identity owns
 stay with that identity, and in other owned rooms the owner has to let it in again.
 

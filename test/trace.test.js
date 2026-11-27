@@ -106,7 +106,9 @@ test('the diagnostics report shows the address and the trace lines', async () =>
     navigator: { userAgent: 'Chrome/150' },
     location: { origin: 'https://shineshuai.github.io', pathname: '/knot/', hash: '#r=secret' },
   };
-  const text = await diagnosticsReport({ kv, rooms: new Map(), settings: { brokers: [] } }, env);
+  const text = await diagnosticsReport({
+    kv, rooms: new Map(), settings: { brokers: [] }, identity: { member: 'AAAAAAAAAAA' }, deviceRows: () => [],
+  }, env);
   assert.match(text, /^address: https:\/\/shineshuai\.github\.io\/knot\/$/m);
   assert.match(text, /^identity created: .* UTC \(2 h ago\)$/m);
   assert.doesNotMatch(text, /secret/);

@@ -1,5 +1,5 @@
 // The recovery code: a recovery key that the main key authorized signs certificates for new
-// devices, so an identity outlives the main device's key. Forgery, the code, rooms and the app.
+// devices, so an identity outlives the original device's key. Forgery, the code, rooms and the app.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AppModel } from '../src/app.js';
@@ -123,7 +123,7 @@ test('envelopes of a restored device are valid and written as the main identity'
   assert.equal(await verifyEnvelope({ ...env, cert: broken }, room), false);
 });
 
-/** Ada's main device `a`, her restored device `b` (certified through a recovery key), Bob. */
+/** Ada's original device `a`, her restored device `b` (certified through a recovery key), Bob. */
 async function trio() {
   const secret = newRoomSecret();
   const { main, device, rc, cert } = await chain();
@@ -150,8 +150,8 @@ test('in a room: a restored device is accepted until its recovery key is withdra
   [...bob.peers.values()][0].link.peer.emit('chat', JSON.stringify({ t: 'msg', e: late }));
   await wait(60);
   assert.equal(texts(bob).includes('late'), false, 'refused wherever the withdrawal is known');
-  await a.sendText('the main device is untouched');
-  await until(() => texts(bob).includes('the main device is untouched'));
+  await a.sendText('the original device is untouched');
+  await until(() => texts(bob).includes('the original device is untouched'));
 });
 
 test('in a room: the device itself can be withdrawn too, as any linked device', async () => {
@@ -178,7 +178,7 @@ const modelOf = async (kv = new MemoryKV(), identity) => {
   return m;
 };
 
-test('app: a code made on the main device lets a wiped device restore the identity', async () => {
+test('app: a code made on the original device lets a wiped device restore the identity', async () => {
   const main = await modelOf();
   const room = await main.createRoom('Club');
   const code = await main.makeRecoveryCode(PASS, FAST);
@@ -231,7 +231,7 @@ test('app: restore refuses a linked device and one that owns rooms or has links'
   await applyDelegation(own, kv);
   const linked = await modelOf(kv, own);
   await assert.rejects(linked.restoreIdentity(code, PASS), /already linked/);
-  await assert.rejects(linked.makeRecoveryCode(PASS, FAST), /Only the main device/);
+  await assert.rejects(linked.makeRecoveryCode(PASS, FAST), /Only the original device/);
 });
 
 test('app: a new code withdraws the old key; cancelling withdraws the current one', async () => {

@@ -23,7 +23,7 @@ export const ALIAS_MAX = 16;
 export const isAlias = (s) => typeof s === 'string' && s.length <= ALIAS_MAX
   && !/[\u0000-\u001f\u007f]/.test(s);
 /** The device name an envelope shows: the author's chosen alias, else the one in the
- *  certificate; undefined for the main device with its default. */
+ *  certificate; undefined for the original device with its default. */
 export const deviceNameOf = (env) => env.al?.n ?? env.cert?.n;
 
 /** Metadata for a shared file. Key order matters for the signature; build it only here.
@@ -47,7 +47,7 @@ export const replyBody = (text, { id, name, text: snippet }) => (
  *  the room enforces who, see Room). */
 export const delBody = (id) => ({ id });
 /** Body of an unlink: the identity withdraws the certificate of device key `d` (any of its
- *  devices may; the main device itself cannot be withdrawn). Signed
+ *  devices may; the original device itself cannot be withdrawn). Signed
  *  by the main key itself, never by a linked device. Never trimmed from the log. */
 export const unlinkBody = (d) => ({ d });
 /** Body of an edit: the new text of message `id`. Only its author may edit it; the latest edit

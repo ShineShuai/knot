@@ -1,4 +1,4 @@
-// The devices page of the settings: link a second device (main device: answer its code; new
+// The devices page of the settings: link a second device (original device: answer its code; new
 // device: make a code) and the list of linked devices, with their names and "Unlink".
 import { suggestAlias } from '../chat/device-sync.js';
 import { ALIAS_MAX } from '../chat/envelope.js';
@@ -6,6 +6,28 @@ import { h } from './dom.js';
 import { t } from './i18n.js';
 import { RecoverySection } from './settings-recovery.js';
 import { applyBar } from './settings-shell.js';
+
+const STALE_MS = 60 * 24 * 3600_000; // a device not seen for this long is probably lost
+
+/** `2026-11-26 14:03` in local time. */
+const when = (ms) => {
+  const [d, p] = [new Date(ms), (n) => String(n).padStart(2, '0')];
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+
+/** Online now or last seen, when it last synced, and a warning for a device gone for long. */
+export function deviceTimes(row, now = Date.now()) {
+  if (row.self) return [];
+  const seen = row.online ? t('deviceOnline')
+    : row.seen ? t(row.reported ? 'deviceSeenReported' : 'deviceSeen', { when: when(row.seen) })
+      : t('deviceNeverSeen');
+  const out = [h('span', { class: 'muted' }, seen)];
+  if (row.synced) out.push(h('span', { class: 'muted' }, t('deviceSynced', { when: when(row.synced) })));
+  if (!row.online && row.seen && now - row.seen > STALE_MS) {
+    out.push(h('span', { class: 'muted warn' }, t('deviceStale')));
+  }
+  return out;
+}
 
 export class DevicesPage {
   constructor(ui) { this.ui = ui; }
@@ -55,7 +77,7 @@ export class DevicesPage {
     return { nodes: [h('p', { class: 'muted' }, t('deviceAliasHelp')), list.node], save };
   }
 
-  /** All devices of this identity, each with an alias to edit and, except the main device
+  /** All devices of this identity, each with an alias to edit and, except the original device
    *  and this one, an Unlink: any device may do either to any other. */
   #deviceList(draw) {
     const { model } = this.ui;
@@ -63,13 +85,14 @@ export class DevicesPage {
     const node = h('ul', { class: 'devices-list' }, ...model.deviceRows().map((row) => {
       const input = h('input', {
         type: 'text', class: 'device-alias', maxLength: ALIAS_MAX, value: row.alias,
-        placeholder: row.main ? t('deviceMain') : '', 'aria-label': t('deviceAlias'),
+        placeholder: row.original ? t('deviceMain') : '', 'aria-label': t('deviceAlias'),
       });
       fields.push({ row, input });
-      return h('li', {}, input,
+      return h('li', {}, input, h('code', { class: 'muted device-key' }, row.pub.slice(0, 6)),
         row.self ? h('span', { class: 'muted' }, t('deviceThis')) : null,
         row.restored ? h('span', { class: 'muted' }, t('deviceRestored')) : null,
-        !row.main && !row.self ? h('button', {
+        ...deviceTimes(row),
+        !row.original && !row.self ? h('button', {
           class: 'ghost',
           onclick: async () => {
             if (!confirm(t('devicesUnlinkConfirm', { name: row.alias }))) return;
@@ -86,7 +109,7 @@ export class DevicesPage {
     return { node, save };
   }
 
-  /** A linked device leaves the main device and becomes a device of its own. */
+  /** A linked device leaves the original device and becomes a device of its own. */
   #separate() {
     return h('p', {}, h('button', {
       class: 'ghost',
@@ -97,7 +120,7 @@ export class DevicesPage {
     }, t('leaveLink')));
   }
 
-  /** Main device: paste or scan the new device's code, show the answer. */
+  /** Original device: paste or scan the new device's code, show the answer. */
   #linkNewDevice(onLinked) {
     const result = h('div', { class: 'link-result' });
     const input = this.ui.kit.codeInput(t('linkRequestPlaceholder'), async (text) => {
@@ -116,7 +139,7 @@ export class DevicesPage {
       h('button', { class: 'primary', onclick: input.submit }, t('linkMake')), result);
   }
 
-  /** New device: show our code, take the main device's answer, confirm, apply. */
+  /** New device: show our code, take the original device's answer, confirm, apply. */
   #linkThisDevice() {
     const area = h('div', { class: 'link-result' });
     const name = h('input', {

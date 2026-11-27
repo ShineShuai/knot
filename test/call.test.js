@@ -398,7 +398,10 @@ test('the diagnostics list every connection: what is sent, measured and asked fo
   assert.match(line, /send 500k 640x360@29 loss 2% rtt 80 ms limit none estimate 2000k/);
   assert.match(line, /recv 320x180@24 freezes 1$/);
 
-  const model = { kv: new MemoryKV(), rooms: new Map([[a.room.id, a.room]]), settings: {} };
+  const model = {
+    kv: new MemoryKV(), rooms: new Map([[a.room.id, a.room]]), settings: {},
+    identity: { member: 'AAAAAAAAAAA' }, deviceRows: () => [],
+  };
   const report = await diagnosticsReport(model, { navigator: { userAgent: 'test' } });
   assert.ok(report.includes(line), 'the report carries the call lines');
   a.room.call.leave();

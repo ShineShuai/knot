@@ -1,5 +1,5 @@
-// The whole link flow through AppModel: new device asks, main device answers, rooms arrive,
-// the new device restarts as a linked device, the main device unlinks it again.
+// The whole link flow through AppModel: new device asks, original device answers, rooms arrive,
+// the new device restarts as a linked device, the original device unlinks it again.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AppModel } from '../src/app.js';
@@ -17,7 +17,7 @@ const open = async (identity, kv = new MemoryKV(), name = '') => {
 };
 const labels = (model) => [...model.rooms.values()].map((r) => r.label).sort();
 
-test('link a phone to the main device, then unlink it', async () => {
+test('link a phone to the original device, then unlink it', async () => {
   const main = await open(await newIdentity(), new MemoryKV(), 'Ada');
   const owned = await main.createRoom('Owned');
   await main.addRoom(newRoomSecret(), 'Open');
@@ -53,7 +53,7 @@ test('link a phone to the main device, then unlink it', async () => {
   assert.equal(mine.ownerId, main.identity.id);
   assert.equal(mine.isOwner, true);
   await assert.rejects(again.startLinking(), /already linked/);
-  await assert.rejects(again.linkDevice(code), /Only the main device/);
+  await assert.rejects(again.linkDevice(code), /Only the original device/);
 
   await main.unlinkDevice(linked[0].d);
   assert.deepEqual(await main.linkedDevices(), []);

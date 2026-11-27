@@ -13,7 +13,7 @@ const HISTORY = 120; // far more than the 20 frames a link may receive in its fi
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const olds = (room) => room.log.list().filter((e) => e.body?.startsWith?.('old')).length;
 
-test('catching up from the main device reaches all; live messages survive', async () => {
+test('catching up from the original device reaches all; live messages survive', async () => {
   const secret = newRoomSecret();
   const [main, phone] = [await newIdentity(), await newIdentity()];
   await linkIdentity(main, phone);

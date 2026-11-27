@@ -22,30 +22,30 @@ answers join requests (grants and denials carry the certificate, and the owner l
 by the identity, so all its devices answer) and makes membership changes and `unlink`s, which
 rooms check against the identity (the owner). A join request or an owner's pairing code answered by a linked device admits the main identity (the
 request carries the certificate; the answer goes to the device key). Only a `recover` is signed by a key of its own, and
-only the main device can link a new device (it holds the key that signs certificates). Its
+only the original device can link a new device (it holds the key that signs certificates). Its
 counters start in a lane of its own (1024 counters wide, one of 4095, taken from its key; the
-main device uses lane 0), so it cannot make the same envelope id as the main device in one
+original device uses lane 0), so it cannot make the same envelope id as the original device in one
 millisecond, and only rarely the same as another linked device (1 in 4095 for a pair). If two
 envelopes still arrive with one id and different signatures, the room keeps the first and counts
 the other as an "id clash" in the diagnostics.
 
 Linking is two codes (QR or pasted text), no server: the new device shows a *request* (its key, a
-one-time sealing key, a name, signed with its key); the main device answers with a *grant* (the
+one-time sealing key, a name, signed with its key); the original device answers with a *grant* (the
 certificate and every room's secret, owner id and key epoch, sealed to that one-time key, signed
 by the main key). Both screens show six digits derived from all keys; if they differ, a code was
 swapped. The one-time key of a request lives in memory only: after a reload the new device asks
-again and the main device keeps one entry for it. The grant is stored with the certificate in one
+again and the original device keeps one entry for it. The grant is stored with the certificate in one
 write and finished at every start until done, so a reload in the middle leaves either no link or a
 complete one.
 
-A device is never linked to itself (another tab of the same browser profile): the main device
+A device is never linked to itself (another tab of the same browser profile): the original device
 refuses a code made by itself, a device refuses a grant from itself, and a certificate of a key
-for itself (an old mistake that left the main device unable to link anything) is dropped at start.
+for itself (an old mistake that left the original device unable to link anything) is dropped at start.
 Rooms joined later reach the other devices by themselves (see *Shared state* below).
 
 ### Unlink and separate
 
-*Unlink* (any device, for any linked device but itself; the main device cannot be unlinked;
+*Unlink* (any device, for any linked device but itself; the original device cannot be unlinked;
 Settings > Devices) is a signed `unlink` envelope in every room, kept forever like
 membership changes: peers drop that device's links and refuse what it writes with that
 certificate **from the stamp of the unlink on**, including history that arrives later; what it
@@ -60,11 +60,11 @@ dropped from the channel. A linked device can also *separate* itself (Settings >
 it withdraws itself the same way.
 
 A withdrawn or separated device restarts with a **new key** (the old one stays withdrawn in the
-rooms that saw the unlink, so it could never be linked to the same main device again) and keeps
+rooms that saw the unlink, so it could never be linked to the same original device again) and keeps
 the history of its rooms; it is a device of its own again and can link others.
 
 **Limits.** A stolen linked device can read and write as you, and unlink your other linked
-devices, until the main device unlinks it; unlinking does not change room keys (an owner removing
+devices, until the original device unlinks it; unlinking does not change room keys (an owner removing
 a member does, see [Security](security.md#owner-and-membership)); each device keeps its own call
 connections.
 
@@ -95,10 +95,28 @@ The hold-V details line reads the same way
 a line for this device with the brokers it reaches).
 
 The tag is the device's *alias*: it starts as the name given when linking (suggested from the
-device kind: iPhone, iPad, Android, Mac, Windows, Linux; numbered if taken; the main device is
+device kind: iPhone, iPad, Android, Mac, Windows, Linux; numbered if taken; the original device is
 "main") and can be changed in Settings > Devices on any device, for any device. A message
 carries it as `al` `{ n, sig }`, signed with the writing device's key over the message id (so it
 cannot be moved to another message); old versions ignore the field.
+
+### The device list
+
+Settings > Devices lists every device of the identity with its name, the first six characters of
+its key, and: **online now** (connected to us in any room or in the channel), otherwise **last
+seen** (date and time, local) or **not seen yet**; **synced** (when we last took state from it);
+and a warning once a device has not been seen for 60 days. A time that another device reported,
+not one we saw ourselves, says "reported by another device".
+
+The times are not shared items (an item would rewrite the shared state and reach every room's
+devices every few minutes). Each device keeps them locally (`device-seen`, written about 20
+seconds after a change and when the page stops), notes a device as seen when it connects and
+every minute while it is connected, and tells the devices it is connected to what it knows: a
+`seen` frame over direct links only, on connect and every 30 minutes, with its own entry
+(`ms` and its protocol level `pv`) on top. Receivers accept times only for devices in their own
+list and never later than 10 minutes from now. The protocol level is what a later step uses to
+refuse an action while one of our devices still runs an older version. Diagnostics start with
+`account <id> | device <name> <key> | original or linked | <n> devices`.
 
 ### Shared state
 
@@ -110,8 +128,8 @@ every room, relayed on, and each device sends all it has when a link to one of i
 up, so changes made while apart arrive when two devices meet in any room. The newest change wins
 everywhere. Received items are checked (known keys, value types and sizes) before use.
 
-At the first link the new device *adopts* the main device's state (the grant carries it) instead
-of merging it with its own, so the main device's settings and name win even over newer ones the
+At the first link the new device *adopts* the original device's state (the grant carries it) instead
+of merging it with its own, so the original device's settings and name win even over newer ones the
 new device made before.
 
 Rooms: `r:<room id>` holds the secret, label and owner id, or null once the room was left (a
@@ -134,12 +152,12 @@ before the links close.
 
 ## Identity recovery
 
-The main key lives only on the main device and cannot be read out of it. If that device loses its
+The main key lives only on the original device and cannot be read out of it. If that device loses its
 data (the browser wiped it, the disk died), the identity would be gone and only the linked devices,
 whose certificates stay valid, would still speak for it; none of them can link a new device.
 A recovery code closes that gap without exporting the main key.
 
-- **Making it (main device, Settings > Devices > Identity recovery).** The device makes a recovery
+- **Making it (original device, Settings > Devices > Identity recovery).** The device makes a recovery
   key from a random seed and signs a *recovery certificate* for it (`knot/recovery`: "this key
   may certify devices for me"). The code holds the seed, that certificate and the secret of the
   devices' channel (below), encrypted with a passphrase (AES-GCM under PBKDF2, 600 000 rounds, the
@@ -158,8 +176,8 @@ A recovery code closes that gap without exporting the main key.
   the same. Withdrawing a recovery key (an `unlink` of its key, like a device's) makes every room
   refuse each certificate whose chain contains it, so devices created with it stop working
   too, and so does anybody who stole the code. It can be done from any device.
-- **Not possible without the main device:** making a code (the recovery certificate needs the main
-  key). After a restore there is no main device, so the code that was used stays the one
+- **Not possible without the original device:** making a code (the recovery certificate needs the main
+  key). After a restore there is no original device, so the code that was used stays the one
   recovery path.
 - **A notice when it is used.** The first time a device whose certificate came through a recovery
   key connects to one of our devices (in a room or in the channel), every such device shows a bar
@@ -168,20 +186,20 @@ A recovery code closes that gap without exporting the main key.
   from then on (kept in the store as `restored`: key, name, recovery key, seen). Cancelling works
   from any device, because the recovery key is known from the notice: a leaked code needs no main
   device to be shut down. Unlinking that one device removes only it and its notice.
-- **Who may do what.** Only the main device links a new device (`linkDevice`: the two-code flow,
+- **Who may do what.** Only the original device links a new device (`linkDevice`: the two-code flow,
   it signs the certificate with the main key) and makes recovery codes; a linked or restored
   device can do neither, and a device that is already linked is refused by `startLinking` until it
-  leaves its link. After the main device is gone, new devices join by restoring with the code (each
+  leaves its link. After the original device is gone, new devices join by restoring with the code (each
   restore is one more device), not by being linked.
 - **Old versions** reject chained certificates, so they drop what a restored device writes until
   their page has updated.
 
 ## Our devices' channel
 
-Devices that share no room (a new device, a main device without rooms) still find each other:
+Devices that share no room (a new device, an original device without rooms) still find each other:
 `c:devices` holds the secret of a room that only they know. It is opened like any room (brokers,
 WebRTC) but is not in the room list and keeps nothing on disk, and only our own devices (the main
-id, or a valid certificate for it) count there. The main device makes the secret when it first has
+id, or a valid certificate for it) count there. The original device makes the secret when it first has
 another device; it reaches the others in the grant and later in the shared state. It does not
 change when a device is unlinked: the unlinked device is refused (a `d:` record, see above)
 wherever that is known, which a device that was offline then learns from the other devices when it

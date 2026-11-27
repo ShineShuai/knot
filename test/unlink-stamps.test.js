@@ -57,7 +57,7 @@ async function story({ main, thief, good }, roomId) {
     who, clock(k), roomId, 'unlink', unlinkBody(toB64u(target.pub)), 'Ada');
   return {
     before: await text(thief, 500, 'written before the unlink'),
-    cut: await unlink(main, 1000, thief), // Ada's main device withdraws the thief's device
+    cut: await unlink(main, 1000, thief), // Ada's original device withdraws the thief's device
     after: await text(thief, 1500, 'written after the unlink'),
     revenge: await unlink(thief, 2000, good), // the withdrawn device tries to withdraw the good one
     fine: await text(good, 3000, 'from the good device'),

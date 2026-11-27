@@ -59,7 +59,7 @@ brokers, reconnection is automatic).
 * No forward secrecy for broker-relayed text (static room key, rotated when a member is removed).
   MLS is the upgrade path. Rooms made before owners existed are open to anyone with the link.
 * Brokers see metadata (topic id, message sizes and timing), not content.
-* A device that left its main device starts over with a new identity: in every owned room the
+* A device that left its original device starts over with a new identity: in every owned room the
   owner has to let it in again (it asks by itself; the owner approves). Rooms it owned under the
   old identity stay with that identity: the recovery code is the way back.
 * The member list of an owned room, and the history over the brokers, come from other members that

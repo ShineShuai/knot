@@ -1,6 +1,6 @@
-// The recovery code: how an identity comes back after the main device lost its key.
+// The recovery code: how an identity comes back after the original device lost its key.
 //
-// While the main device works, it makes a recovery key from a random seed and signs a recovery
+// While the original device works, it makes a recovery key from a random seed and signs a recovery
 // certificate for it (crypto/delegation.js). The seed, that certificate and, if there is one,
 // the secret of the room where the person's devices find each other (the "channel") go into a
 // code, encrypted with a passphrase (AES-GCM under a PBKDF2 key, as the backup file is).
@@ -33,7 +33,7 @@ export class RecoveryError extends Error {
   }
 }
 
-/** Main device: a code for `main` (an Identity). `channel`: the secret of the devices' channel
+/** Original device: a code for `main` (an Identity). `channel`: the secret of the devices' channel
  *  (base64url) or null. Resolves to { code, q: the recovery public key, ms }. */
 export async function makeRecoveryCode(
   main, passphrase, { channel = null, iterations = ITERATIONS, now = Date.now() } = {},

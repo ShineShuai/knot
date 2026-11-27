@@ -1,8 +1,8 @@
 // Linking a device by two codes, with no server in between.
 //
-//   new device  -> main device   request: its own public key, a one-time sealing key and a name,
+//   new device  -> original device   request: its own public key, a one-time sealing key and a name,
 //                                signed with its own key
-//   main device -> new device    grant: a certificate for that key plus the rooms, sealed to
+//   original device -> new device    grant: a certificate for that key plus the rooms, sealed to
 //                                the one-time key and signed with the main key
 //
 // Both codes can be shown as QR codes or pasted as text, so a code that passes through a chat
@@ -61,7 +61,7 @@ export async function linkCode(devicePub, mainPub, boxPub) {
 }
 
 /**
- * The main device answers a request: `rooms` is a list of { secret, label, founder, epoch }
+ * The original device answers a request: `rooms` is a list of { secret, label, founder, epoch }
  * (see Room.exportState); `sync`: what the devices share (see device-sync.js). Returns the code
  * and the six digits to compare.
  */

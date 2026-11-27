@@ -14,7 +14,7 @@ test.afterEach(stopRooms);
 
 const withKey = (a, b, cert = {}) => ({ cert, pub: Uint8Array.of(a, b, ...new Array(30).fill(0)) });
 
-test('the main device starts at 0, every other device in a lane taken from its key', () => {
+test('the original device starts at 0, every other device in a lane taken from its key', () => {
   assert.equal(counterBase({ cert: undefined, pub: Uint8Array.of(7, 7) }), 0);
   assert.equal(counterBase(withKey(0, 0)), 1024, 'the first lane');
   assert.equal(counterBase(withKey(0, 1)), 2048);
@@ -32,7 +32,7 @@ test('a room starts its clock in the lane of its device', async () => {
   await linkIdentity(main, phone, 'Pixel');
   const secret = newRoomSecret();
   const [a, b] = [await makeRoom({ secret, identity: main }), await makeRoom({ secret, identity: phone })];
-  assert.ok(a.hlc.tick().c < 1024, 'the main device');
+  assert.ok(a.hlc.tick().c < 1024, 'the original device');
   const c = b.hlc.tick().c;
   assert.equal(c, counterBase(phone), 'the phone, at the start of its lane');
 });

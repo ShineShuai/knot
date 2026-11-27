@@ -16,7 +16,7 @@ import { link, linkIdentity, makeRoom, stopRooms } from './room-kit.js';
 installFakeDom();
 test.afterEach(() => { stopRooms(); setLanguage('en'); });
 
-/** Ada's main device `a`, her linked phone `b` ("Pixel"), and Bob, in one open room. */
+/** Ada's original device `a`, her linked phone `b` ("Pixel"), and Bob, in one open room. */
 async function trio() {
   const secret = newRoomSecret();
   const [main, phone] = [await newIdentity(), await newIdentity()];
@@ -36,10 +36,10 @@ const header = (room, env) => new Messages({ images: { forget() {} }, composer: 
 
 test('withDevice: plain name for one device, "main" for the one without a certificate', () => {
   assert.equal(withDevice('Ada', null), 'Ada');
-  assert.equal(withDevice('Ada', ''), 'Ada @ main');
+  assert.equal(withDevice('Ada', ''), 'Ada @ original');
   assert.equal(withDevice('Ada', 'phone'), 'Ada @ phone');
   setLanguage('de');
-  assert.equal(withDevice('Ada', ''), 'Ada @ Haupt');
+  assert.equal(withDevice('Ada', ''), 'Ada @ Ursprung');
 });
 
 test('a person with one device has no tag; the first certificate seen adds tags', async () => {
@@ -50,7 +50,7 @@ test('a person with one device has no tag; the first certificate seen adds tags'
   assert.equal(watcher.deviceOf(main.id, b.identity.cert.n), 'Pixel');
   assert.equal(b.peerDevice(b.identity.id), 'Pixel');
   assert.equal(watcher.deviceOf(watcher.identity.member), null);
-  assert.equal(a.deviceOf(main.id), null, 'the main device has not met the phone yet');
+  assert.equal(a.deviceOf(main.id), null, 'the original device has not met the phone yet');
   await b.sendText('from my phone');
   await until(() => a.deviceOf(main.id) === '');
   assert.equal(a.peerDevice(a.identity.id), '');
@@ -60,7 +60,7 @@ test('the connection list tells the devices apart', async () => {
   const { bob } = await trio();
   await until(() => bob.peerList.filter((p) => p.device !== null).length === 2);
   const tags = bob.peerList.map((p) => peerLabel(bob, p.id)).sort();
-  assert.deepEqual(tags, ['Ada @ Pixel', 'Ada @ main']);
+  assert.deepEqual(tags, ['Ada @ Pixel', 'Ada @ original']);
 });
 
 test('every device of Ada shows her messages as its own, tagged with the device', async () => {
@@ -68,10 +68,10 @@ test('every device of Ada shows her messages as its own, tagged with the device'
   const [mine, fromPhone] = [await a.sendText('from main'), await b.sendText('from phone')];
   await until(() => [a, b, bob].every((r) => r.log.get(mine.id) && r.log.get(fromPhone.id)));
   for (const room of [a, b]) {
-    assert.equal(header(room, mine).startsWith('You @ main'), true, 'main message');
+    assert.equal(header(room, mine).startsWith('You @ original'), true, 'main message');
     assert.equal(header(room, fromPhone).startsWith('You @ Pixel'), true, 'phone message');
   }
-  assert.equal(header(bob, mine).startsWith('Ada @ main'), true);
+  assert.equal(header(bob, mine).startsWith('Ada @ original'), true);
   assert.equal(header(bob, fromPhone).startsWith('Ada @ Pixel'), true);
   const text = exportText(b);
   assert.ok(text.includes('Ada @ Pixel: from phone'), text);
@@ -85,14 +85,14 @@ test('the connection bar has one entry per person, with their devices and connec
     row('A', 'Ada', 'mac', 'p2p', '555 666'), row('C', 'Cy', null, 'seen'),
   ]);
   assert.deepEqual(entries.map((e) => e.text), [
-    'Ada @ main (relay) | mac (direct)', 'Bob (direct)', 'Cy (seen)',
+    'Ada @ original (relay) | mac (direct)', 'Bob (direct)', 'Cy (seen)',
   ]);
   assert.deepEqual(entries.map((e) => e.state), ['p2p', 'p2p', 'seen'], 'the best connection');
   assert.deepEqual(entries[0].parts, [
-    { text: 'main (relay)', state: 'relay' }, { text: 'mac (direct)', state: 'p2p' },
+    { text: 'original (relay)', state: 'relay' }, { text: 'mac (direct)', state: 'p2p' },
   ], 'each device in the colour of its own connection');
-  assert.ok(entries[0].title.includes('main: ') && entries[0].title.includes('555 666'));
-  assert.ok(entries[1].title.includes('333 444') && !entries[1].title.includes('main'));
+  assert.ok(entries[0].title.includes('original: ') && entries[0].title.includes('555 666'));
+  assert.ok(entries[1].title.includes('333 444') && !entries[1].title.includes('original'));
   assert.equal(entries[2].title, '');
   assert.deepEqual(peerEntries([row('A', 'Ada', 'mac', 'p2p')]).map((e) => e.text), [
     'Ada @ mac (direct)',
@@ -112,12 +112,12 @@ test('we are "You" in the bar, always, with or without other devices', () => {
   assert.deepEqual(alone.map((e) => e.mine), [true, false]);
   const linked = peerEntries([peer('mac', 'p2p'), peer('pixel', 'relay', 'Ada B')], me(''));
   assert.deepEqual(linked.map((e) => e.text), [
-    'You @ main (this device, relay) | mac (direct) | pixel (relay)',
+    'You @ original (this device, relay) | mac (direct) | pixel (relay)',
   ], 'always "You", whatever the devices call us');
   assert.deepEqual(linked[0].parts.map((p) => p.state), ['relay', 'p2p', 'relay']);
   assert.equal(peerEntries([], me(null, 'relay'))[0].text, 'You (relay)');
   assert.equal(peerEntries([], me(null, 'offline'))[0].text, 'You (offline)');
-  assert.equal(peerEntries([], me('', 'offline'))[0].text, 'You @ main (this device, offline)');
+  assert.equal(peerEntries([], me('', 'offline'))[0].text, 'You @ original (this device, offline)');
   // only our other devices are known (no row of our own): still "You"
   assert.equal(peerEntries([peer('mac', 'p2p')]).map((e) => e.text)[0], 'You @ mac (direct)');
 });
@@ -140,8 +140,8 @@ test('our own row for the bar names the device once we have several', async () =
   assert.equal(bob.selfRow.device, null, 'Bob has one device');
   await b.sendText('from my phone');
   await until(() => a.selfRow.device === '');
-  assert.equal(a.selfRow.device, '', 'the main device');
+  assert.equal(a.selfRow.device, '', 'the original device');
   assert.equal(b.selfRow.device, 'Pixel');
   const mine = peerEntries(a.peerList, a.selfRow).find((e) => e.mine);
-  assert.match(mine.text, /^You @ main \(this device, \w+\)/);
+  assert.match(mine.text, /^You @ original \(this device, \w+\)/);
 });

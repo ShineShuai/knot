@@ -38,7 +38,7 @@ async function linkPhone(main, alias, broker) {
   return { phone: await open(await applyDelegation(id, kv), kv, '', broker), pub: toB64u(id.pub) };
 }
 
-/** Ada's main device and two phones, no chat room anywhere: they meet in the channel only. */
+/** Ada's original device and two phones, no chat room anywhere: they meet in the channel only. */
 async function three() {
   const broker = new FakeBroker();
   const mainId = await newIdentity();

@@ -44,7 +44,7 @@ export class SettingsDialogs {
     ].filter(Boolean), page);
   }
 
-  /** The devices page: also where "use this device with your main device" leads. */
+  /** The devices page: also where "use this device with your original device" leads. */
   devices() { this.open('devices'); }
 
   /** Apply one change at once; says why if it is refused. */

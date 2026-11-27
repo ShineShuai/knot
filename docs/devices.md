@@ -23,8 +23,11 @@ by the identity, so all its devices answer) and makes membership changes and `un
 rooms check against the identity (the owner). A join request or an owner's pairing code answered by a linked device admits the main identity (the
 request carries the certificate; the answer goes to the device key). Only a `recover` is signed by a key of its own, and
 only the main device can link a new device (it holds the key that signs certificates). Its
-counters start at 500000, so it cannot make the same envelope id as the main device in one
-millisecond.
+counters start in a lane of its own (1024 counters wide, one of 4095, taken from its key; the
+main device uses lane 0), so it cannot make the same envelope id as the main device in one
+millisecond, and only rarely the same as another linked device (1 in 4095 for a pair). If two
+envelopes still arrive with one id and different signatures, the room keeps the first and counts
+the other as an "id clash" in the diagnostics.
 
 Linking is two codes (QR or pasted text), no server: the new device shows a *request* (its key, a
 one-time sealing key, a name, signed with its key); the main device answers with a *grant* (the

@@ -62,7 +62,18 @@ const ANSWER_QUIET_MS = 1500; // a relayed answer was heard: do not repeat it
 const RELAY_HAVE_IDS = 40; // ids in a `have` over the brokers (they carry less than a link does)
 const RELAY_GIVE_MAX = 100;
 const RELAY_SYNC_MS = 60_000;
-const LINKED_COUNTER_BASE = 500_000;
+const LANE_WIDTH = 1024; // counters one device can mint in one millisecond before it leaves its lane
+const LANES = 4095;
+
+/** Where a device's counters start in each millisecond. The device without a certificate (the
+ *  main device) starts at 0. Every other device of the identity starts in a lane of its own,
+ *  taken from its key (already uniform, so 16 bits of it are as good as a hash): two devices
+ *  that write as one identity then mint different ids in the same millisecond, except when
+ *  they share a lane (1 in 4095 for a pair), which `#ingest` counts as an "id clash". */
+export function counterBase(identity) {
+  if (!identity.cert) return 0;
+  return (1 + (((identity.pub[0] << 8) | identity.pub[1]) % LANES)) * LANE_WIDTH;
+}
 
 export class Room extends Emitter {
   /** peerId -> { id, pub, name, link, via:'broker'|'manual', state:'connecting'|'p2p', sas } */
@@ -120,9 +131,9 @@ export class Room extends Emitter {
     this.id = keys.id; // the room's identity: signatures, storage; never changes
     this.#chan = { id: keys.id, aes: keys.aes }; // where we meet on the brokers: can rotate
     this.#kv = kv;
-    // A linked device writes as the main identity: its counters start high, so their ids
-    // cannot collide with the main device's.
-    this.hlc = new HLC(Date.now, identity.cert ? LINKED_COUNTER_BASE : 0);
+    // A linked device writes as the main identity: its counters start in a lane of its own, so
+    // its ids do not collide with the main device's or (mostly) another linked device's.
+    this.hlc = new HLC(Date.now, counterBase(identity));
     if (identity.cert || identity.alias) this.#multi.add(identity.member);
     this.log = new MessageLog(settings.logCap);
     this.previews = new PreviewCache(kv, this.id, settings.previewCacheBytes);
@@ -830,6 +841,8 @@ export class Room extends Emitter {
     if (!env?.id) return false;
     if (this.log.has(env.id)) {
       const held = this.log.get(env.id);
+      // the same id with another signature: two devices of one identity minted it together
+      if (held && held.sig !== env.sig) return this.#drop('id clash', env);
       if (held && Date.now() - held.ms < ACK_DUP_MS) this.#confirm(held);
       return false;
     }

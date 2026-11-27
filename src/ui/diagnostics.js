@@ -148,12 +148,22 @@ export function appLines(room) {
   return [`  apps seen: ${seen.map((m) => `${m.app ?? '?'} p${m.pv}${gap(m.pv)}`).join(', ')}`];
 }
 
+/** Who this report is from: the account, this device and its role, how many devices there are. */
+export function accountLine(model) {
+  const rows = model.deviceRows();
+  const self = rows.find((r) => r.self);
+  return `account ${model.identity.member.slice(0, 6)} | device ${self?.alias || 'unnamed'} `
+    + `${(self?.pub ?? '').slice(0, 6)} | ${self?.original ? 'original' : 'linked'} | `
+    + `${rows.length} device${rows.length === 1 ? '' : 's'}`;
+}
+
 /** The whole report. */
 export async function diagnosticsReport(model, env = globalThis) {
   const build = buildInfo(env.document ?? null);
   const lines = [`knot ${versionDetail(VERSION, build)}`,
     env.navigator?.userAgent ?? 'unknown browser',
-    `address: ${env.location ? env.location.origin + env.location.pathname : 'unknown'}`, '',
+    `address: ${env.location ? env.location.origin + env.location.pathname : 'unknown'}`,
+    accountLine(model), '',
     ...(await featureLines(env, model.kv)), ...(await traceLines(model.kv)), ''];
   for (const room of model.rooms.values()) {
     const peers = room.peerList.map(

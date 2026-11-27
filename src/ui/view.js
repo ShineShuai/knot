@@ -141,7 +141,7 @@ class Ui {
     if (this.#current && this.#viewing()) this.#current.markRead();
   }
 
-  /** The main device withdrew this device. */
+  /** The original device withdrew this device. */
   async #onUnlinked() {
     if (this.model.isLinked) await this.model.forgetLinking();
   }
@@ -230,7 +230,7 @@ class Ui {
           this.notify(t('joinRequestFrom', { name: plain(last.name), greeting: last.greeting }));
         }
       });
-      room.on('roster', () => { // the main device offers it: two owner devices would each make one
+      room.on('roster', () => { // the original device offers it: two owner devices would each make one
         if (room.isOwner && !room.identity.cert) this.roomDialogs.ensureRecovery(room);
       });
       room.call.on('change', () => this.callPanel.sync(room));

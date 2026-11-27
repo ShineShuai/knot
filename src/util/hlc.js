@@ -12,7 +12,7 @@ export class HLC {
   #base;
 
   /** `counterBase`: where the counter starts in each new millisecond. A linked device uses a
-   *  high one, so it cannot make the same id as the main device in the same millisecond (both
+   *  high one, so it cannot make the same id as the original device in the same millisecond (both
    *  write as one identity). */
   constructor(now = Date.now, counterBase = 0) {
     this.#now = now;

@@ -6,7 +6,7 @@ import { t } from './i18n.js';
  *  user@host. The one place for it: messages, calls, exports and the bar all use it. */
 export const AT = ' @ ';
 
-/** `device`: null (one device: the plain name), '' (the main device) or a device's name. */
+/** `device`: null (one device: the plain name), '' (the original device) or a device's name. */
 export const withDevice = (name, device) => (
   device === null || device === undefined ? plain(name)
     : `${plain(name)}${AT}${plain(device) || t('deviceMain')}`

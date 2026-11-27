@@ -1,4 +1,4 @@
-// Settings > Devices > Identity recovery (see crypto/identity-recovery.js): the main device
+// Settings > Devices > Identity recovery (see crypto/identity-recovery.js): the original device
 // makes a recovery code, and a new or wiped device takes an identity back with one.
 import { MIN_PASSPHRASE } from '../store/backup.js';
 import { RecoveryError } from '../crypto/identity-recovery.js';
@@ -20,7 +20,7 @@ export class RecoverySection {
       ? t(`recoveryErr_${err.code}`, { n: MIN_PASSPHRASE }) : String(err?.message ?? err);
   }
 
-  /** Main device: when the code was made, make a new one, cancel it. */
+  /** Original device: when the code was made, make a new one, cancel it. */
   make() {
     const { model, ui } = this;
     const status = h('p', { class: 'recovery-status' });

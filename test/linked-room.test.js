@@ -18,7 +18,7 @@ test.afterEach(stopRooms);
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Ada's main device `a`, her linked phone `b`, and Bob, all in one open room. */
+/** Ada's original device `a`, her linked phone `b`, and Bob, all in one open room. */
 async function trio() {
   const secret = newRoomSecret();
   const [main, phone] = [await newIdentity(), await newIdentity()];
@@ -44,19 +44,19 @@ test('a linked device writes as the main identity; both devices see it as their 
   assert.equal(a.isMine(authorIdOf(env)), true);
   assert.equal(b.isMine(authorIdOf(env)), true);
   assert.equal(bob.isMine(authorIdOf(env)), false);
-  assert.equal(a.unread, 0, 'not news to the main device');
+  assert.equal(a.unread, 0, 'not news to the original device');
   assert.equal(bob.unread, 1);
 
-  await a.editMessage(env.id, 'edited on the main device'); // same person
-  await until(() => bob.log.textOf(bob.log.get(env.id)) === 'edited on the main device');
+  await a.editMessage(env.id, 'edited on the original device'); // same person
+  await until(() => bob.log.textOf(bob.log.get(env.id)) === 'edited on the original device');
   await a.deleteMessage(env.id);
   await until(() => bob.log.isGone(env.id));
 });
 
-test('unlinking cuts a device off everywhere; the main device cannot be unlinked', async () => {
+test('unlinking cuts a device off everywhere; the original device cannot be unlinked', async () => {
   const { a, b, bob, phone, cert } = await trio();
-  await assert.rejects(b.unlinkDevice(toB64u(a.identity.pub)), /main device cannot/);
-  await assert.rejects(a.unlinkDevice(toB64u(a.identity.pub)), /main device cannot/);
+  await assert.rejects(b.unlinkDevice(toB64u(a.identity.pub)), /original device cannot/);
+  await assert.rejects(a.unlinkDevice(toB64u(a.identity.pub)), /original device cannot/);
   let told = 0;
   b.on('unlinked', () => told++);
   await a.unlinkDevice(cert.d);
@@ -154,7 +154,7 @@ test('a linked device answers the join requests of a room its identity owns', as
   assert.equal(copy.roster.isMember(bob.id), true);
 });
 
-test('any linked device can unlink another one; the main device cannot be unlinked', async () => {
+test('any linked device can unlink another one; the original device cannot be unlinked', async () => {
   const [main, one, two] = [await newIdentity(), await newIdentity(), await newIdentity()];
   await linkIdentity(main, one, 'One');
   await linkIdentity(main, two, 'Two');
@@ -168,7 +168,7 @@ test('any linked device can unlink another one; the main device cannot be unlink
   await Promise.all([a, b1, b2].map((room) => link(room, bob)));
   let told = 0;
   b1.on('unlinked', () => told++);
-  await assert.rejects(b2.unlinkDevice(toB64u(main.pub)), /main device cannot/);
+  await assert.rejects(b2.unlinkDevice(toB64u(main.pub)), /original device cannot/);
   await b2.unlinkDevice(toB64u(one.pub)); // the second phone unlinks the first
   await until(() => told === 1);
   await assert.rejects(b1.sendText('still here?'), /unlinked/);

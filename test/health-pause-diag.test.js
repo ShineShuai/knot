@@ -175,7 +175,10 @@ test('diagnostics: what the browser supports, and the last errors, without secre
 
   record('preview', new Error('no preview'));
   const [a] = await pairRooms();
-  const model = { kv: new MemoryKV(), rooms: new Map([[a.id, a]]), settings: { brokers: [] } };
+  const model = {
+    kv: new MemoryKV(), rooms: new Map([[a.id, a]]), settings: { brokers: [] },
+    identity: { member: 'AAAAAAAAAAA' }, deviceRows: () => [],
+  };
   const text = await diagnosticsReport(model, env);
   assert.match(text, /^knot \d/);
   assert.match(text, /Safari\/17/);

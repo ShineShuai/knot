@@ -41,7 +41,7 @@ test('a device uses its stored certificate only if it is for its own key', async
   const [main, phone, other] = [await newIdentity(), await newIdentity(), await newIdentity()];
   const kv = new MemoryKV();
   const plain = await applyDelegation(phone, kv);
-  assert.equal(plain.member, phone.id, 'nothing stored: a main device');
+  assert.equal(plain.member, phone.id, 'nothing stored: an original device');
   await kv.put('delegate', { cert: await makeCert(main, other.pub, 'Other') });
   assert.equal((await applyDelegation(phone, kv)).cert, null, 'a certificate for another key');
   await kv.put('delegate', { cert: await makeCert(main, phone.pub, 'Pixel') });
@@ -132,7 +132,7 @@ test('with a certificate an envelope is written as the main identity', async () 
   const clock = new HLC(Date.now, 500_000);
   const env = await createEnvelope(phone, clock, 'room1', 'text', 'from my phone', 'Ada');
   assert.equal(authorIdOf(env), main.id);
-  assert.ok(env.c >= 500_000, 'its counters cannot collide with the main device');
+  assert.ok(env.c >= 500_000, 'its counters cannot collide with the original device');
   assert.equal(await verifyEnvelope(env, 'room1'), true);
   const bad = async (change) => verifyEnvelope({ ...env, ...change }, 'room1');
   const foreign = await makeCert(main, other.pub, 'Other');

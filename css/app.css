@@ -322,7 +322,8 @@ button.icon { padding: .35rem .55rem; line-height: 1; }
 .tile.speaking { outline: 3px solid #58c4ad; outline-offset: -3px; }
 .instance-open { max-width: 32rem; margin: 4rem auto; padding: 0 1.25rem; }
 .devices-list { list-style: none; padding: 0; display: grid; gap: .4rem; }
-.devices-list li { display: flex; align-items: center; gap: .5rem; }
+.devices-list li { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .5rem; }
+.device-key { font-size: .8rem; }
 .device-alias { flex: 1 1 8rem; min-width: 0; }
 
 /* shown by src/boot-guard.js when the app does not start */

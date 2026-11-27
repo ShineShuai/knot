@@ -3,6 +3,8 @@
 // (keys: another device of ours changed them), 'unlinked' (this device left or was withdrawn:
 // it must restart to be a device of its own).
 import { Emitter } from './util/emitter.js';
+import { MAX_FUTURE_MS } from './util/hlc.js';
+import { PROTOCOL } from './version.js';
 import { fromB64u, toB64u } from './util/bytes.js';
 import { saveSettings } from './config.js';
 import { newBoxKey } from './crypto/box.js';
@@ -20,6 +22,9 @@ import { verifyHandshake } from './net/handshake.js';
 import { Room } from './chat/room.js';
 import { MemoryKV } from './store/kv.js';
 import { MessageStore } from './chat/message-store.js';
+
+/** The device key of a connection to one of our devices, or null. */
+const keyOf = (entry) => (entry?.pub ? toB64u(entry.pub) : null);
 
 /** "Room 1", "Room 2", ...: the first one not taken, so two rooms never get the same name. */
 export function nextRoomName(labels, base) {
@@ -52,6 +57,11 @@ export class AppModel extends Emitter {
   #deviceRoom = null; // where our devices meet when they share no room (see #syncChannel)
   #deviceSecret = '';
   #forgotten = false; // forgetLinking ran: this page is on its way out
+  #seen = new Map(); // device key -> { ms, pv, direct }: when it was last online, its protocol level
+  #synced = new Map(); // device key -> ms we last took state from it
+  #seenTimer = null;
+  #seenSave = null;
+  #ticks = 0;
   /** Rooms that could not be opened at start: [{ label, message }] (the others open as usual). */
   loadErrors = [];
 
@@ -74,6 +84,7 @@ export class AppModel extends Emitter {
   async load({ progress = () => {} } = {}) {
     this.#restored = new Map(Object.entries((await this.kv.get('restored')) ?? {}));
     await this.sync.load();
+    await this.#loadSeen();
     await this.#refreshPaired();
     await this.#sharePrevious();
     this.#applyOwnAlias();
@@ -89,6 +100,8 @@ export class AppModel extends Emitter {
     await this.#shareRooms();
     await this.#syncChannel();
     if (this.rooms.size) await this.#persist(); // writes back what an older version dropped
+    this.#seenTimer ??= setInterval(() => this.#tickSeen(), 60_000);
+    this.#seenTimer.unref?.();
     this.emit('rooms');
   }
 
@@ -123,24 +136,33 @@ export class AppModel extends Emitter {
    *  histories. */
   wake() { for (const room of this.#allRooms()) room.wake(); }
 
-  /** Our public key, and the main device's: the keys of the device list. */
+  /** Our public key, and the original device's: the keys of the device list. */
   get #ownPub() { return toB64u(this.identity.pub); }
 
   get #rootPub() { return this.identity.cert?.r ?? this.#ownPub; }
 
-  /** Every device of this identity: { pub, alias, main, self }; alias '' = the main device's
+  /** Every device of this identity: { pub, alias, main, self }; alias '' = the original device's
    *  default. */
   deviceRows() {
     const aliases = this.sync.aliases;
     const [root, own] = [this.#rootPub, this.#ownPub];
-    const rows = [{ pub: root, alias: aliases.get(root) ?? '', main: true, self: root === own }];
+    const [online, now] = [this.#onlinePubs(), Date.now()];
+    const rows = [{ pub: root, alias: aliases.get(root) ?? '', original: true, self: root === own }];
     for (const pub of new Set([...aliases.keys(), own, ...this.#restored.keys()])) {
       if (pub === root) continue;
       const known = this.#restored.get(pub)?.name; // a restored device may be seen before its alias
       rows.push({
-        pub, alias: aliases.get(pub) ?? known ?? this.identity.cert?.n ?? '', main: false,
+        pub, alias: aliases.get(pub) ?? known ?? this.identity.cert?.n ?? '', original: false,
         self: pub === own, restored: pub === own ? !!this.identity.cert?.up : !!known,
       });
+    }
+    for (const row of rows) { // when it was online, and what it runs
+      const seen = this.#seen.get(row.pub);
+      row.online = row.self || online.has(row.pub);
+      row.seen = row.online ? now : (seen?.ms ?? null);
+      row.reported = !row.online && !!seen && !seen.direct;
+      row.synced = this.#synced.get(row.pub) ?? null;
+      row.pv = row.self ? PROTOCOL : (seen?.pv ?? null);
     }
     return rows;
   }
@@ -151,7 +173,7 @@ export class AppModel extends Emitter {
     const wanted = String(text ?? '').trim();
     const rows = this.deviceRows();
     const row = rows.find((r) => r.pub === pub);
-    if (!row || !isAlias(wanted) || (!wanted && !row.main)) throw new Error('Not a valid alias');
+    if (!row || !isAlias(wanted) || (!wanted && !row.original)) throw new Error('Not a valid alias');
     const taken = rows.filter((r) => r.pub !== pub).map((r) => r.alias || 'main');
     const alias = wanted && uniqueAlias(wanted, taken);
     this.#broadcastSync(await this.sync.set({ [deviceKey(pub)]: alias }));
@@ -161,7 +183,7 @@ export class AppModel extends Emitter {
   }
 
   /** What other people see after our name: set only if it differs from the default (the
-   *  certificate's name, or none for the main device). */
+   *  certificate's name, or none for the original device). */
   #applyOwnAlias() {
     const item = this.sync.alias(this.#ownPub);
     const next = item && item !== (this.identity.cert?.n ?? '') ? item : undefined;
@@ -170,7 +192,7 @@ export class AppModel extends Emitter {
     for (const room of this.#allRooms()) room.announceAlias();
   }
 
-  /** Main device that linked devices before they shared anything: share what is there. */
+  /** Original device that linked devices before they shared anything: share what is there. */
   async #sharePrevious() {
     if (this.isLinked) return;
     const linked = await this.linkedDevices();
@@ -285,15 +307,107 @@ export class AppModel extends Emitter {
     room.on('sibling', (entry) => {
       this.#sendSnapshot(room, entry);
       this.#noteRestored(entry).catch(() => {});
+      this.#noteSeen(keyOf(entry), Date.now(), undefined, true);
+      room.sendToSibling(entry, this.#seenFrame());
     });
     room.on('sync', (items, entry, epochs) => {
+      this.#noteSynced(entry);
       this.#receiveSync(items, epochs).catch((err) => console.error('sync failed', err));
     });
+    room.on('seen', (seen, entry) => this.#receiveSeen(seen, entry));
+  }
+
+  // ---- when our devices were online ---------------------------------------------------------
+  // Kept here, not in the shared items: an item would rewrite the whole shared state and reach
+  // every room's devices every few minutes. The times travel over direct links only.
+
+  async #loadSeen() {
+    const saved = (await this.kv.get('device-seen')) ?? {};
+    for (const [pub, v] of Object.entries(saved.seen ?? {}).slice(0, 64)) {
+      if (v && Number.isFinite(v.ms)) this.#seen.set(pub, { ms: v.ms, pv: v.pv ?? null, direct: !!v.direct });
+    }
+    for (const [pub, ms] of Object.entries(saved.synced ?? {}).slice(0, 64)) {
+      if (Number.isFinite(ms)) this.#synced.set(pub, ms);
+    }
+  }
+
+  #flushSeen() {
+    clearTimeout(this.#seenSave);
+    this.#seenSave = null;
+    return this.kv.put('device-seen', {
+      seen: Object.fromEntries(this.#seen), synced: Object.fromEntries(this.#synced),
+    });
+  }
+
+  #saveSoon() {
+    if (this.#seenSave) return;
+    this.#seenSave = setTimeout(() => this.#flushSeen().catch(() => {}), 20_000);
+    this.#seenSave.unref?.();
+  }
+
+  /** Remember that device `pub` was online at `ms` (clamped: a device cannot post-date itself). */
+  #noteSeen(pub, ms, pv, direct = false) {
+    if (!pub || pub === this.#ownPub || !Number.isFinite(ms)) return;
+    const at = Math.min(ms, Date.now() + MAX_FUTURE_MS);
+    const had = this.#seen.get(pub);
+    if (had && had.ms >= at && !(direct && !had.direct)) {
+      if (pv && had.pv !== pv) { had.pv = pv; this.#saveSoon(); }
+      return;
+    }
+    this.#seen.set(pub, { ms: Math.max(at, had?.ms ?? 0), pv: pv ?? had?.pv ?? null, direct: direct || !!had?.direct });
+    this.#saveSoon();
+  }
+
+  #noteSynced(entry) {
+    const pub = keyOf(entry);
+    if (!pub || pub === this.#ownPub) return;
+    this.#synced.set(pub, Date.now());
+    this.#saveSoon();
+  }
+
+  /** The keys of our devices connected to us now, in any room or in our channel. */
+  #onlinePubs() {
+    const online = new Set();
+    for (const room of this.#allRooms()) {
+      for (const entry of room.peers.values()) {
+        if (entry.sibling && entry.state === 'p2p' && entry.pub) online.add(toB64u(entry.pub));
+      }
+    }
+    return online;
+  }
+
+  /** What we know, with this device's own entry on top. Sent over direct links, never relayed. */
+  #seenFrame() {
+    const seen = { [this.#ownPub]: { ms: Date.now(), pv: PROTOCOL } };
+    for (const [pub, v] of this.#seen) seen[pub] = { ms: v.ms, ...(v.pv ? { pv: v.pv } : {}) };
+    return { t: 'seen', seen };
+  }
+
+  /** Times from another device of ours. Its own entry is first-hand; the rest is its word. */
+  #receiveSeen(seen, entry) {
+    if (!seen || typeof seen !== 'object') return;
+    const [from, known] = [keyOf(entry), new Set(this.deviceRows().map((r) => r.pub))];
+    for (const [pub, v] of Object.entries(seen).slice(0, 64)) {
+      if (!known.has(pub) || !v || typeof v.ms !== 'number') continue;
+      this.#noteSeen(pub, v.ms, Number.isInteger(v.pv) ? v.pv : undefined, pub === from);
+    }
+  }
+
+  /** Every minute: those online now were seen now. Every half hour: tell the others. */
+  #tickSeen() {
+    const now = Date.now();
+    for (const pub of this.#onlinePubs()) this.#noteSeen(pub, now, undefined, true);
+    if (++this.#ticks % 30) return;
+    for (const room of this.#allRooms()) {
+      for (const entry of room.peers.values()) {
+        if (entry.sibling && entry.state === 'p2p') room.sendToSibling(entry, this.#seenFrame());
+      }
+    }
   }
 
   /** Our devices find each other in a room that only they know (it is not in the room list and
    *  keeps nothing), so they stay in step even when they share no chat room, and a new device
-   *  gets everything from the main device. The main device makes the secret; it travels in
+   *  gets everything from the original device. The original device makes the secret; it travels in
    *  the shared state. */
   async #syncChannel() {
     let secret = this.#paired ? this.sync.value(CHANNEL) : null;
@@ -315,6 +429,9 @@ export class AppModel extends Emitter {
 
   /** Stop everything (the page is going away; tests). */
   stop() {
+    clearInterval(this.#seenTimer);
+    this.#seenTimer = null;
+    this.#flushSeen().catch(() => {});
     for (const room of this.#allRooms()) room.stop();
   }
 
@@ -366,13 +483,13 @@ export class AppModel extends Emitter {
   /** Is this device linked to another one, writing as that device's identity? */
   get isLinked() { return !!this.identity.cert; }
 
-  /** Main device: the devices linked so far, as { d: device key, n: name, ms }. */
+  /** Original device: the devices linked so far, as { d: device key, n: name, ms }. */
   async linkedDevices() { return (await this.kv.get('linked')) ?? []; }
 
-  /** Main device: answer a code from a new device. Resolves to { code, sas, name }: show the code
+  /** Original device: answer a code from a new device. Resolves to { code, sas, name }: show the code
    *  (it holds our rooms, sealed to that device) and the six digits to compare. */
   async linkDevice(requestText) {
-    if (this.isLinked) throw new Error('Only the main device can link a device');
+    if (this.isLinked) throw new Error('Only the original device can link a device');
     const request = await readLinkRequest(requestText);
     if (!request) throw new Error('That is not a valid device code (or it has expired)');
     // Same browser profile (another tab of this app): that "device" is this one. Linking it
@@ -404,10 +521,10 @@ export class AppModel extends Emitter {
     return { code: grant.code, sas: grant.sas, name: alias };
   }
 
-  /** Withdraw a linked device (not the main device, not this one) in every room. */
+  /** Withdraw a linked device (not the original device, not this one) in every room. */
   async unlinkDevice(devicePub) {
     const row = this.deviceRows().find((r) => r.pub === devicePub);
-    if (!row || row.main || row.self) throw new Error('That device cannot be unlinked here');
+    if (!row || row.original || row.self) throw new Error('That device cannot be unlinked here');
     // Tell everyone, the device itself first among them if it is around: it goes back to being
     // a device of its own. Then close its links and write the unlink where rooms keep it.
     this.#broadcastSync(await this.sync.set({ [deviceKey(devicePub)]: null }));
@@ -424,10 +541,10 @@ export class AppModel extends Emitter {
    *  devices' channel }. Public facts only; the code itself is never kept. */
   async recoveryInfo() { return (await this.kv.get('recovery')) ?? null; }
 
-  /** Main device: make a recovery code (resolves to its text). Only one is active: a new one
+  /** Original device: make a recovery code (resolves to its text). Only one is active: a new one
    *  withdraws the key of the old one. */
   async makeRecoveryCode(passphrase, { iterations } = {}) {
-    if (this.isLinked) throw new Error('Only the main device can make a recovery code');
+    if (this.isLinked) throw new Error('Only the original device can make a recovery code');
     const previous = await this.recoveryInfo();
     const channel = this.#deviceSecret || null;
     const made = await makeRecoveryCode(this.identity, passphrase, { channel, iterations });
@@ -438,7 +555,7 @@ export class AppModel extends Emitter {
 
   /** Withdraw a recovery key (by default the one of the code made here): devices it certified
    *  stop working, nobody can use the code. Any device may do it for a key it has seen a
-   *  device join with (`restoredNotices`): if a code leaked, no main device is needed. */
+   *  device join with (`restoredNotices`): if a code leaked, no original device is needed. */
   async cancelRecovery(q = null) {
     const info = await this.recoveryInfo();
     const keys = new Set(q ? [q] : info ? [info.q] : []);
@@ -498,7 +615,7 @@ export class AppModel extends Emitter {
     return { member: found.member };
   }
 
-  /** New device: make a code for the main device. `read(text)` then reads the code it answers
+  /** New device: make a code for the original device. `read(text)` then reads the code it answers
    *  with: null if invalid, else { name, mainId, sas, rooms, apply() }; `apply()` stores the
    *  link and the rooms (reload the app after it). */
   async startLinking(deviceName) {
@@ -527,12 +644,12 @@ export class AppModel extends Emitter {
     await this.#finishGrant();
   }
 
-  /** The rest of a grant: the main device's settings and rooms, taken as ours. Safe to repeat. */
+  /** The rest of a grant: the original device's settings and rooms, taken as ours. Safe to repeat. */
   async #finishGrant() {
     const record = await this.kv.get('delegate');
     if (!record?.grant) return;
     const { name, rooms, sync } = record.grant;
-    if (sync) await this.sync.adopt(sync); // the main device's settings, not ours
+    if (sync) await this.sync.adopt(sync); // the original device's settings, not ours
     if (name) {
       this.settings.name = name;
       await saveSettings(this.kv, this.settings);
@@ -556,21 +673,21 @@ export class AppModel extends Emitter {
     this.#applyOwnAlias();
   }
 
-  /** The main device withdrew this device: go back to being a device of our own. */
+  /** The original device withdrew this device: go back to being a device of our own. */
   async forgetLinking() {
     if (this.#forgotten) return;
     this.#forgotten = true;
     await this.kv.delete('delegate');
     await this.kv.delete('sync');
     // A new key: the old one stays withdrawn in the rooms that saw the unlink, so with it this
-    // device could never be linked to the same main device again.
+    // device could never be linked to the same original device again.
     await this.kv.delete('identity');
     this.#paired = false;
     await this.#syncChannel();
     this.emit('unlinked');
   }
 
-  /** A linked device leaves the main device: it withdraws itself, then starts over as a device
+  /** A linked device leaves the original device: it withdraws itself, then starts over as a device
    *  of its own (a new identity; it keeps its rooms' history). */
   async leaveLink() {
     if (!this.isLinked) throw new Error('This device is not linked');

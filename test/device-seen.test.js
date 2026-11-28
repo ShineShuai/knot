@@ -111,7 +111,7 @@ test('what was seen survives a restart', async () => {
 
 test('the report names the account, the device, its role and the count', async () => {
   const { main, one } = await three();
-  assert.match(accountLine(main), /^account \S{6} \| device unnamed \S{6} \| original \| 3 devices$/);
+  assert.match(accountLine(main), /^account \S{6} \| device device \S{6} \| original \| 3 devices$/);
   assert.match(accountLine(one.phone), /^account \S{6} \| device One \S{6} \| linked \| 3 devices$/);
 });
 
@@ -128,3 +128,22 @@ test('a row says online, last seen (reported or first-hand), not seen yet, and w
   assert.match(text({ online: false, seen: now - 61 * 864e5 }, now), /not seen for over 60 days/);
   assert.doesNotMatch(text({ online: false, seen: now - 59 * 864e5 }, now), /60 days/);
 });
+
+test('the first link gives the original device a name, and the name reaches the other device', async () => {
+  const { main, one, two } = await three();
+  const original = (m) => m.deviceRows().find((r) => r.original);
+  assert.equal(original(main).alias, 'device', 'suggested from what it is (a plain default here)');
+  assert.deepEqual([one, two].map((p) => row(main, p.pub).alias), ['One', 'Two'], 'asked for');
+  await until(() => original(one.phone).alias === 'device' && original(two.phone).alias === 'device');
+});
+
+test('an original device that linked devices before it had a name gets one when it starts', async () => {
+  const { broker, main, mainId, mainKv } = await three();
+  await main.setDeviceAlias(main.deviceRows().find((r) => r.original).pub, ''); // nameless again
+  assert.equal(main.deviceRows().find((r) => r.original).alias, '');
+  main.stop();
+  await wait(50);
+  const again = await open(mainId, mainKv, 'Ada', broker);
+  assert.equal(again.deviceRows().find((r) => r.original).alias, 'device');
+});
+

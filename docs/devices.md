@@ -74,11 +74,11 @@ Every device of one identity shows that identity's messages as its own ("You", e
 a certificate or alias of someone has been seen (in a message or on a link), their name carries a
 device tag in messages, calls, exports and the connection bar, always written `name @ device` (a
 person at a device, as in user@host; `AT` in `ui/alias.js` is the one place for it): `Ada @ phone`
-or `Ada @ main`. Someone with one device has no tag. Presence carries the certificate and alias
+or `Ada @ mac`. Someone with one device has no tag. Presence carries the certificate and alias
 too, so devices that are only seen on a broker are grouped and tagged as well.
 
 The connection bar has one entry per person, each device with its connection type in brackets and
-in the colour of that type: `Bob (direct)`, `Ada @ main (direct) | mac (relay)`. The types, as
+in the colour of that type: `Bob (direct)`, `Ada @ mac (direct) | phone (relay)`. The types, as
 seen from this device (the `?` in the bar explains them to the user): **direct**, a direct link
 between the two devices, no server in between; **relay**, no direct link, messages go on through
 the brokers; **seen**, in the room but not linked yet; **connecting**, a link is being set up;
@@ -88,15 +88,19 @@ We are in the bar too, first, always as **You** and in a colour of our own (purp
 connection type is the best way this device reaches the room: direct if it has at least one direct
 link, relay if it only reaches a broker, offline if neither: `You (direct)`, `You (relay)`,
 `You (offline)`, and with linked devices
-`You @ main (this device, direct) | mac (direct) | pixel (relay)`.
+`You @ mac (this device, direct) | phone (direct) | pixel (relay)`.
 
 The hold-V details line reads the same way
 (`Bob (direct, through NAT): host ↔ srflx, UDP, 23 ms, paired by code`, `Ada @ phone (...)`, first
 a line for this device with the brokers it reaches).
 
 The tag is the device's *alias*: it starts as the name given when linking (suggested from the
-device kind: iPhone, iPad, Android, Mac, Windows, Linux; numbered if taken; the original device is
-"main") and can be changed in Settings > Devices on any device, for any device. A message
+device kind: iPhone, iPad, Android, Mac, Windows, Linux; numbered if taken) and can be changed in
+Settings > Devices on any device, for any device. The original device gets a name too, suggested
+the same way, when the first device is linked (or when an original device that linked devices
+before this starts), so that no device is known by its role; until then it shows as "original".
+The device list marks it *can link devices* (only it holds the key that signs certificates, and
+it cannot be unlinked), a function and not a rank; the mark goes when the role does. A message
 carries it as `al` `{ n, sig }`, signed with the writing device's key over the message id (so it
 cannot be moved to another message); old versions ignore the field.
 

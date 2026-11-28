@@ -135,7 +135,7 @@ test('linking hands the settings and the phone\'s alias over', async () => {
   assert.equal(phone.settings.name, 'Ada');
   assert.equal(main.deviceRows().find((r) => r.pub === phonePub).alias, 'Pixel');
   assert.equal(phone.deviceRows().find((r) => r.pub === phonePub).alias, 'Pixel');
-  assert.equal(phone.deviceRows().find((r) => r.original).alias, '');
+  assert.equal(phone.deviceRows().find((r) => r.original).alias, 'device', 'named at the first link');
   assert.equal(phone.identity.alias, undefined, 'its own name is the default one');
 });
 

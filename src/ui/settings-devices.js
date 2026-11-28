@@ -89,6 +89,7 @@ export class DevicesPage {
       });
       fields.push({ row, input });
       return h('li', {}, input, h('code', { class: 'muted device-key' }, row.pub.slice(0, 6)),
+        row.original ? h('span', { class: 'muted' }, t('deviceCanLink')) : null,
         row.self ? h('span', { class: 'muted' }, t('deviceThis')) : null,
         row.restored ? h('span', { class: 'muted' }, t('deviceRestored')) : null,
         ...deviceTimes(row),

@@ -86,6 +86,7 @@ export class AppModel extends Emitter {
     await this.sync.load();
     await this.#loadSeen();
     await this.#refreshPaired();
+    if (this.#paired) await this.#nameOriginal();
     await this.#sharePrevious();
     this.#applyOwnAlias();
     const saved = (await this.kv.get('rooms')) ?? [];
@@ -174,12 +175,21 @@ export class AppModel extends Emitter {
     const rows = this.deviceRows();
     const row = rows.find((r) => r.pub === pub);
     if (!row || !isAlias(wanted) || (!wanted && !row.original)) throw new Error('Not a valid alias');
-    const taken = rows.filter((r) => r.pub !== pub).map((r) => r.alias || 'main');
+    const taken = rows.filter((r) => r.pub !== pub).map((r) => r.alias || 'original');
     const alias = wanted && uniqueAlias(wanted, taken);
     this.#broadcastSync(await this.sync.set({ [deviceKey(pub)]: alias }));
     this.#applyOwnAlias();
     this.emit('devices');
     return alias;
+  }
+
+  /** The first time a device is linked, the original device gets a name too (suggested from what
+   *  it is, and editable), so that no device is known by its role: "Ada @ Mac | Pixel". Also for
+   *  an original device that linked devices before this existed. */
+  async #nameOriginal() {
+    const row = this.deviceRows().find((r) => r.original);
+    if (!row || row.alias || this.isLinked) return;
+    await this.setDeviceAlias(row.pub, suggestAlias() || 'device');
   }
 
   /** What other people see after our name: set only if it differs from the default (the
@@ -470,11 +480,12 @@ export class AppModel extends Emitter {
     // would make this device a linked device of itself, which nothing can undo.
     if (request.id === this.identity.id) throw new Error('That code was made by this device');
     const rooms = [...this.rooms.values()].map((room) => room.exportState());
+    await this.#nameOriginal(); // before the new device asks for a name of its own
     // The new device's alias: what it asked for, numbered if another device has it already.
     const devicePub = toB64u(request.pub);
     const rows = this.deviceRows();
     const known = rows.find((r) => r.pub === devicePub); // the same device asking again
-    const taken = rows.filter((r) => r !== known).map((r) => r.alias || 'main');
+    const taken = rows.filter((r) => r !== known).map((r) => r.alias || 'original');
     const want = request.name.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, ALIAS_MAX);
     const alias = known?.alias || uniqueAlias(want || 'device', taken);
     await this.sync.seed();

@@ -72,6 +72,7 @@ test('ui: link a phone with two codes, check the digits, then unlink it', async 
   assert.equal(phone.model.settings.name, 'Ada');
 
   await openDevices(main); // the original device lists it, and can unlink it
+  assert.match(dialog(main).textContent, /can link devices/, 'the role, not a rank, is shown');
   const aliases = dialog(main).querySelectorAll('.device-alias').map((i) => i.value);
   assert.match(aliases.join(), /device-/, 'the phone has an alias of its own');
   button(main, 'Unlink').click();

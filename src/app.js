@@ -3,8 +3,8 @@
 // (keys: another device of ours changed them), 'unlinked' (this device left or was withdrawn:
 // it must restart to be a device of its own).
 import { Emitter } from './util/emitter.js';
-import { MAX_FUTURE_MS } from './util/hlc.js';
 import { PROTOCOL } from './version.js';
+import { DeviceSeen } from './chat/device-seen.js';
 import { fromB64u, toB64u } from './util/bytes.js';
 import { saveSettings } from './config.js';
 import { newBoxKey } from './crypto/box.js';
@@ -57,8 +57,7 @@ export class AppModel extends Emitter {
   #deviceRoom = null; // where our devices meet when they share no room (see #syncChannel)
   #deviceSecret = '';
   #forgotten = false; // forgetLinking ran: this page is on its way out
-  #seen = new Map(); // device key -> { ms, pv, direct }: when it was last online, its protocol level
-  #synced = new Map(); // device key -> ms we last took state from it
+  #times = null; // DeviceSeen: when our devices were online and synced
   #seenTimer = null;
   #seenSave = null;
   #ticks = 0;
@@ -72,6 +71,7 @@ export class AppModel extends Emitter {
     Object.assign(this, { kv, identity, settings, WS, linkFactory, callEnv, brokerHealth });
     this.iceServers = iceServers;
     this.sync = new DeviceSync({ kv, settings, deviceId: identity.id });
+    this.#times = new DeviceSeen(toB64u(identity.pub));
     this.sync.on('change', (keys, local) => {
       if (local) return;
       this.#applyOwnAlias();
@@ -157,11 +157,11 @@ export class AppModel extends Emitter {
       });
     }
     for (const row of rows) { // when it was online, and what it runs
-      const seen = this.#seen.get(row.pub);
+      const seen = this.#times.get(row.pub);
       row.online = row.self || online.has(row.pub);
       row.seen = row.online ? now : (seen?.ms ?? null);
       row.reported = !row.online && !!seen && !seen.direct;
-      row.synced = this.#synced.get(row.pub) ?? null;
+      row.synced = this.#times.syncedAt(row.pub);
       row.pv = row.self ? PROTOCOL : (seen?.pv ?? null);
     }
     return rows;
@@ -307,7 +307,7 @@ export class AppModel extends Emitter {
     room.on('sibling', (entry) => {
       this.#sendSnapshot(room, entry);
       this.#noteRestored(entry).catch(() => {});
-      this.#noteSeen(keyOf(entry), Date.now(), undefined, true);
+      this.#noteSeen(keyOf(entry), Date.now(), { direct: true });
       room.sendToSibling(entry, this.#seenFrame());
     });
     room.on('sync', (items, entry, epochs) => {
@@ -322,21 +322,13 @@ export class AppModel extends Emitter {
   // every room's devices every few minutes. The times travel over direct links only.
 
   async #loadSeen() {
-    const saved = (await this.kv.get('device-seen')) ?? {};
-    for (const [pub, v] of Object.entries(saved.seen ?? {}).slice(0, 64)) {
-      if (v && Number.isFinite(v.ms)) this.#seen.set(pub, { ms: v.ms, pv: v.pv ?? null, direct: !!v.direct });
-    }
-    for (const [pub, ms] of Object.entries(saved.synced ?? {}).slice(0, 64)) {
-      if (Number.isFinite(ms)) this.#synced.set(pub, ms);
-    }
+    this.#times.load(await this.kv.get('device-seen'));
   }
 
   #flushSeen() {
     clearTimeout(this.#seenSave);
     this.#seenSave = null;
-    return this.kv.put('device-seen', {
-      seen: Object.fromEntries(this.#seen), synced: Object.fromEntries(this.#synced),
-    });
+    return this.kv.put('device-seen', this.#times.toJSON());
   }
 
   #saveSoon() {
@@ -345,24 +337,12 @@ export class AppModel extends Emitter {
     this.#seenSave.unref?.();
   }
 
-  /** Remember that device `pub` was online at `ms` (clamped: a device cannot post-date itself). */
-  #noteSeen(pub, ms, pv, direct = false) {
-    if (!pub || pub === this.#ownPub || !Number.isFinite(ms)) return;
-    const at = Math.min(ms, Date.now() + MAX_FUTURE_MS);
-    const had = this.#seen.get(pub);
-    if (had && had.ms >= at && !(direct && !had.direct)) {
-      if (pv && had.pv !== pv) { had.pv = pv; this.#saveSoon(); }
-      return;
-    }
-    this.#seen.set(pub, { ms: Math.max(at, had?.ms ?? 0), pv: pv ?? had?.pv ?? null, direct: direct || !!had?.direct });
-    this.#saveSoon();
+  #noteSeen(pub, ms, opts) {
+    if (this.#times.note(pub, ms, opts)) this.#saveSoon();
   }
 
   #noteSynced(entry) {
-    const pub = keyOf(entry);
-    if (!pub || pub === this.#ownPub) return;
-    this.#synced.set(pub, Date.now());
-    this.#saveSoon();
+    if (this.#times.noteSynced(keyOf(entry))) this.#saveSoon();
   }
 
   /** The keys of our devices connected to us now, in any room or in our channel. */
@@ -378,25 +358,19 @@ export class AppModel extends Emitter {
 
   /** What we know, with this device's own entry on top. Sent over direct links, never relayed. */
   #seenFrame() {
-    const seen = { [this.#ownPub]: { ms: Date.now(), pv: PROTOCOL } };
-    for (const [pub, v] of this.#seen) seen[pub] = { ms: v.ms, ...(v.pv ? { pv: v.pv } : {}) };
-    return { t: 'seen', seen };
+    return { t: 'seen', seen: this.#times.frame(PROTOCOL) };
   }
 
   /** Times from another device of ours. Its own entry is first-hand; the rest is its word. */
   #receiveSeen(seen, entry) {
-    if (!seen || typeof seen !== 'object') return;
-    const [from, known] = [keyOf(entry), new Set(this.deviceRows().map((r) => r.pub))];
-    for (const [pub, v] of Object.entries(seen).slice(0, 64)) {
-      if (!known.has(pub) || !v || typeof v.ms !== 'number') continue;
-      this.#noteSeen(pub, v.ms, Number.isInteger(v.pv) ? v.pv : undefined, pub === from);
-    }
+    const known = new Set(this.deviceRows().map((r) => r.pub));
+    if (this.#times.receive(seen, keyOf(entry), known)) this.#saveSoon();
   }
 
   /** Every minute: those online now were seen now. Every half hour: tell the others. */
   #tickSeen() {
     const now = Date.now();
-    for (const pub of this.#onlinePubs()) this.#noteSeen(pub, now, undefined, true);
+    for (const pub of this.#onlinePubs()) this.#noteSeen(pub, now, { direct: true });
     if (++this.#ticks % 30) return;
     for (const room of this.#allRooms()) {
       for (const entry of room.peers.values()) {

@@ -92,8 +92,8 @@ test('in every arrival order the same envelopes count', async () => {
     const { room, put } = await receiver({ secret });
     put(e.before);
     for (const name of order) { put(e[name]); await wait(25); }
-    await until(() => room.log.get(e.fine.id) && room.log.get(e.cut.id), 3000);
-    await until(() => !room.log.get(e.after.id) && !room.log.get(e.revenge.id), 3000);
+    await until(() => room.log.get(e.fine.id) && room.log.get(e.cut.id));
+    await until(() => !room.log.get(e.after.id) && !room.log.get(e.revenge.id));
     const ids = room.log.list().map((x) => x.id).sort();
     assert.deepEqual(ids, [e.before.id, e.cut.id, e.fine.id].sort(), order.join(' > '));
     assert.equal(room.isWithdrawn(who.thief.cert, who.main.id), true);

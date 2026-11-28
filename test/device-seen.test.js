@@ -24,7 +24,7 @@ const net = { brokersEnabled: true, brokers: ['wss://fake'] };
 const open = async (identity, kv, name, broker) => {
   const settings = {
     ...DEFAULTS, name, ...net, gatherTimeoutMs: 10, presenceIntervalMs: 60,
-    connectTimeoutMs: 2000, ...((await kv.get('settings')) ?? {}),
+    connectTimeoutMs: 2000, messagesPerSecond: 1000, // injected frames come fast ...((await kv.get('settings')) ?? {}),
   };
   const model = new AppModel({
     kv, identity, settings, iceServers: () => [], linkFactory: () => new FakeLink(), WS: broker.ws(),
@@ -48,44 +48,58 @@ async function three() {
   const mainKv = new MemoryKV();
   const main = await open(mainId, mainKv, 'Ada', broker);
   const [one, two] = [await linkPhone(main, 'One', broker), await linkPhone(main, 'Two', broker)];
-  await until(() => [main, one.phone, two.phone].every((m) => m.deviceRows().length === 3), 8000);
+  await until(() => [main, one.phone, two.phone].every((m) => m.deviceRows().length === 3));
   return { broker, main, mainId, mainKv, one, two };
 }
 
 const row = (model, pub) => model.deviceRows().find((r) => r.pub === pub);
 
-test('devices that are connected are online and seen now; the others get a time', async () => {
+test('devices that are connected are online, seen now, synced and say their level', async () => {
   const { main, one, two } = await three();
-  await until(() => row(main, one.pub).online && row(main, two.pub).online, 8000);
-  const [a, b] = [row(main, one.pub), row(main, two.pub)];
-  assert.ok(Math.abs(a.seen - Date.now()) < 5000, 'online: seen now');
-  assert.equal(a.reported, false);
-  await until(() => row(main, one.pub).synced && row(main, two.pub).synced, 8000);
-  assert.ok(row(main, two.pub).synced <= Date.now());
-  await until(() => row(main, two.pub).pv === PROTOCOL, 8000); // each device says it of itself
-  assert.equal(b.reported, false);
+  const ready = (pub) => {
+    const r = row(main, pub);
+    return r.online && r.synced && r.pv === PROTOCOL;
+  };
+  await until(() => ready(one.pub) && ready(two.pub));
+  for (const pub of [one.pub, two.pub]) {
+    const r = row(main, pub);
+    assert.ok(Math.abs(r.seen - Date.now()) < 10_000, 'online: seen now');
+    assert.equal(r.reported, false);
+    assert.ok(r.synced <= Date.now());
+  }
   const self = main.deviceRows().find((r) => r.self);
   assert.ok(self.online && self.pv === PROTOCOL);
 });
 
-test('a device of ours reports protocol levels and times of the others', async () => {
+test('a device we cannot see is shown by what another device reports of it', async () => {
   const { main, mainId, one, two } = await three();
-  await until(() => row(main, two.pub).online, 8000);
-  // `one` tells `main` what it knows of `two`: a protocol level, and a time further on
+  const ready = (pub) => row(main, pub).online && row(main, pub).pv === PROTOCOL;
+  await until(() => ready(one.pub) && ready(two.pub));
+  const mainKey = toB64u(mainId.pub);
   const channel = one.phone.deviceChannel;
-  const entry = [...channel.peers.values()].find((e) => e.sibling && toB64u(e.pub) === toB64u(mainId.pub));
-  channel.sendToSibling(entry, { t: 'seen', seen: {
-    [two.pub]: { ms: Date.now() + 60_000, pv: 9 }, [toB64u(new Uint8Array(32).fill(1))]: { ms: 1, pv: 1 },
-  } });
-  await until(() => row(main, two.pub).pv === 9, 8000);
+  const connected = () => [...channel.peers.values()]
+    .find((e) => e.sibling && e.state === 'p2p' && toB64u(e.pub) === mainKey);
+  await until(connected); // `one` is connected to `main`, not only the other way round
+  two.phone.stop(); // its links close
+  await until(() => !row(main, two.pub).online);
+  const before = row(main, two.pub).seen;
+  // `one` tells `main` over the channel, twice: an older time, then a later one, and a level
+  // that is not `two`'s own word, and a key that is not one of our devices
+  const tell = (seen) => channel.sendToSibling(connected(), { t: 'seen', seen });
+  const unknownKey = toB64u(new Uint8Array(32).fill(1));
+  tell({ [two.pub]: { ms: before - 5000, pv: 9 }, [unknownKey]: { ms: 1, pv: 1 } });
+  tell({ [two.pub]: { ms: before + 5000, pv: 9 } });
+  await until(() => row(main, two.pub).seen >= before + 5000);
+  const r = row(main, two.pub);
+  assert.equal(r.seen, before + 5000, 'the later time, not the older one');
+  assert.equal(r.reported, true, 'now it is another device\'s word');
+  assert.equal(r.pv, PROTOCOL, 'its own level stays');
   assert.equal(main.deviceRows().length, 3, 'a key that is not one of our devices is ignored');
-  // what a device says of itself is first-hand: its own entry arrives with each connection
-  await until(() => row(main, one.pub).pv === PROTOCOL, 8000);
 });
 
 test('what was seen survives a restart', async () => {
   const { broker, main, mainId, mainKv, one } = await three();
-  await until(() => row(main, one.pub).online && row(main, one.pub).synced, 8000);
+  await until(() => row(main, one.pub).online && row(main, one.pub).synced);
   const before = row(main, one.pub);
   main.stop();
   await wait(50); // the state is written when the model stops

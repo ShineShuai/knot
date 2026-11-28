@@ -44,7 +44,7 @@ async function three() {
   const mainId = await newIdentity();
   const main = await open(mainId, new MemoryKV(), 'Ada', broker);
   const [one, two] = [await linkPhone(main, 'One', broker), await linkPhone(main, 'Two', broker)];
-  await until(() => [main, one.phone, two.phone].every((m) => m.deviceRows().length === 3), 8000);
+  await until(() => [main, one.phone, two.phone].every((m) => m.deviceRows().length === 3));
   return { broker, main, mainId, one, two };
 }
 
@@ -54,7 +54,7 @@ test('after a removal the devices that are left still meet in the channel', asyn
   await main.unlinkDevice(two.pub);
   assert.equal(main.sync.value(CHANNEL), secret, 'the secret stays: a device that was away finds us');
   await main.updateSettings({ name: 'Ada 2' }); // no chat room: only the channel carries it
-  await until(() => one.phone.settings.name === 'Ada 2', 8000);
+  await until(() => one.phone.settings.name === 'Ada 2');
 });
 
 test('after a restart the withdrawn device is refused in the channel again', async () => {

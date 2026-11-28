@@ -114,7 +114,9 @@ seconds after a change and when the page stops), notes a device as seen when it 
 every minute while it is connected, and tells the devices it is connected to what it knows: a
 `seen` frame over direct links only, on connect and every 30 minutes, with its own entry
 (`ms` and its protocol level `pv`) on top. Receivers accept times only for devices in their own
-list and never later than 10 minutes from now. The protocol level is what a later step uses to
+list and never later than 10 minutes from now; a time never moves back. A device's own entry is
+first-hand (including its protocol level, whose own word wins over what others report); the rest
+is hearsay and is marked as such. The rules live in `src/chat/device-seen.js` (`DeviceSeen`). The protocol level is what a later step uses to
 refuse an action while one of our devices still runs an older version. Diagnostics start with
 `account <id> | device <name> <key> | original or linked | <n> devices`.
 
